@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { X, CheckCircle2, ArrowRight, ArrowLeft, ShieldCheck, FileCheck } from 'lucide-react';
 import { ExamItem } from '../data/portalData';
+import { apiRequest } from '../api';
 
 interface ExamApplyModalProps {
   exam: ExamItem | null;
@@ -15,26 +16,56 @@ interface ExamApplyModalProps {
 
 export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, onApplicationComplete }) => {
   const [step, setStep] = useState(1);
-  const [candidateName, setCandidateName] = useState('Aarav Sharma');
-  const [email, setEmail] = useState('aarav.sharma@example.edu');
-  const [phone, setPhone] = useState('+91-9876543210');
+  const [candidateName, setCandidateName] = useState('');
+  const [fatherName, setFatherName] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [gender, setGender] = useState('');
+  const [category, setCategory] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [prefCity1, setPrefCity1] = useState('New Delhi');
   const [prefCity2, setPrefCity2] = useState('Noida / Greater Noida');
   const [languageMedium, setLanguageMedium] = useState('English');
   const [generatedAppNo, setGeneratedAppNo] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   if (!exam) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (step === 1) {
       setStep(2);
     } else if (step === 2) {
-      const randomDigits = Math.floor(10000 + Math.random() * 90000);
-      const appNo = `NEA-2026-${randomDigits}`;
-      setGeneratedAppNo(appNo);
-      setStep(3);
-      onApplicationComplete(appNo);
+      setIsSubmitting(true);
+      setSubmitError(null);
+      try {
+        const { application } = await apiRequest<{
+          application: { applicationNumber: string };
+        }>('/api/applications', {
+          method: 'POST',
+          body: JSON.stringify({
+            examCode: exam.code,
+            candidateName: candidateName.trim(),
+            fatherName: fatherName.trim(),
+            dateOfBirth,
+            gender,
+            category,
+            email: email.trim(),
+            phone: phone.trim(),
+            firstCityPreference: prefCity1,
+            secondCityPreference: prefCity2,
+            languageMedium,
+          }),
+        });
+        setGeneratedAppNo(application.applicationNumber);
+        setStep(3);
+        onApplicationComplete(application.applicationNumber);
+      } catch (error) {
+        setSubmitError(error instanceof Error ? error.message : 'Could not submit the application.');
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -131,6 +162,73 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                 />
               </div>
 
+              <div>
+                <label htmlFor="exam-apply-dob" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Date of Birth
+                </label>
+                <input
+                  id="exam-apply-dob"
+                  type="date"
+                  value={dateOfBirth}
+                  onChange={(e) => setDateOfBirth(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  required
+                />
+              </div>
+
+              <div>
+                <label htmlFor="exam-apply-father" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Father / Guardian Name
+                </label>
+                <input
+                  id="exam-apply-father"
+                  type="text"
+                  value={fatherName}
+                  onChange={(e) => setFatherName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="exam-apply-gender" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Gender
+                  </label>
+                  <select
+                    id="exam-apply-gender"
+                    value={gender}
+                    onChange={(e) => setGender(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    required
+                  >
+                    <option value="">Select</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="exam-apply-category" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Category
+                  </label>
+                  <select
+                    id="exam-apply-category"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    required
+                  >
+                    <option value="">Select</option>
+                    <option value="General">General</option>
+                    <option value="OBC-NCL">OBC-NCL</option>
+                    <option value="SC">SC</option>
+                    <option value="ST">ST</option>
+                    <option value="Gen-EWS">Gen-EWS</option>
+                  </select>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="exam-apply-email" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
@@ -174,6 +272,11 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
 
           {step === 2 && (
             <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+              {submitError && (
+                <div role="alert" className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800">
+                  {submitError}
+                </div>
+              )}
               <div>
                 <label htmlFor="exam-apply-pref-1" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
                   1st Choice Examination City
@@ -236,9 +339,10 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-1.5 transition-colors shadow-sm"
+                  disabled={isSubmitting}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold rounded-xl flex items-center gap-1.5 transition-colors shadow-sm"
                 >
-                  <span>Submit Application</span>
+                  <span>{isSubmitting ? 'Submitting…' : 'Submit Application'}</span>
                   <CheckCircle2 className="w-4 h-4" />
                 </button>
               </div>
@@ -273,7 +377,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                 <div className="flex justify-between">
                   <span className="text-slate-500">Status:</span>
                   <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded">
-                    Verified (Fee Paid)
+                    Submitted (payment not configured)
                   </span>
                 </div>
               </div>

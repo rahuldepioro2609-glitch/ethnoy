@@ -19,6 +19,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { MOCK_QUESTIONS } from '../data/portalData';
+import { apiRequest } from '../api';
 import {
   MockQuestion,
   QuestionResponseState,
@@ -41,6 +42,8 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
   const [showCalculator, setShowCalculator] = useState(false);
   const [calcInput, setCalcInput] = useState('');
   const [calcResult, setCalcResult] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Sections list
   const sections = ['Physics', 'Chemistry', 'Mathematics', 'General Aptitude'];
@@ -161,10 +164,26 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
     }));
   };
 
-  const handleSubmitExam = () => {
-    const res = calculateExamScore(MOCK_QUESTIONS, responses);
-    setScoreResult(res);
-    setIsExamSubmitted(true);
+  const handleSubmitExam = async () => {
+    if (isSubmitting || isExamSubmitted) return;
+    setIsSubmitting(true);
+    setSubmitError(null);
+    const localScore = calculateExamScore(MOCK_QUESTIONS, responses);
+    try {
+      const { score } = await apiRequest<{ score: ExamScoreResult }>('/api/mock-exams/submit', {
+        method: 'POST',
+        body: JSON.stringify({ responses }),
+      });
+      setScoreResult(score);
+    } catch (error) {
+      setScoreResult(localScore);
+      setSubmitError(error instanceof Error
+        ? `Result shown locally; the attempt was not saved: ${error.message}`
+        : 'Result shown locally; the attempt was not saved.');
+    } finally {
+      setIsSubmitting(false);
+      setIsExamSubmitted(true);
+    }
   };
 
   const handleResetExam = () => {
@@ -174,6 +193,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
     setSelectedSection('Physics');
     setIsExamSubmitted(false);
     setScoreResult(null);
+    setSubmitError(null);
   };
 
   // Status helper for question palette
@@ -457,10 +477,11 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
               <div className="mt-auto pt-4 border-t border-slate-200">
                 <button
                   onClick={handleSubmitExam}
-                  className="w-full py-3 bg-blue-900 hover:bg-blue-800 active:bg-blue-950 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2 transition-colors uppercase tracking-wider"
+                  disabled={isSubmitting}
+                  className="w-full py-3 bg-blue-900 hover:bg-blue-800 active:bg-blue-950 disabled:opacity-60 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2 transition-colors uppercase tracking-wider"
                 >
                   <Send className="w-4 h-4" />
-                  <span>Submit CBT Examination</span>
+                  <span>{isSubmitting ? 'Saving attempt…' : 'Submit CBT Examination'}</span>
                 </button>
               </div>
             </div>
@@ -469,6 +490,11 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
           /* Submission Results & Score Analysis */
           scoreResult && (
             <div className="p-6 overflow-y-auto flex-1 space-y-6">
+              {submitError && (
+                <div role="alert" className="max-w-2xl mx-auto p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+                  {submitError}
+                </div>
+              )}
               <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center max-w-2xl mx-auto space-y-3">
                 <div className="w-14 h-14 bg-emerald-600 text-white rounded-full flex items-center justify-center mx-auto shadow-md">
                   <Award className="w-8 h-8" />

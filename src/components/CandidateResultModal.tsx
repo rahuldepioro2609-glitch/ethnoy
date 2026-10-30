@@ -21,12 +21,11 @@ import {
   Sparkles,
 } from 'lucide-react';
 import {
-  lookupScorecard,
   formatRankDisplay,
   getCutoffComparison,
   CandidateScorecard,
-  PRESET_SCORECARDS,
 } from '../utils/resultLogic';
+import { apiRequest } from '../api';
 
 interface CandidateResultModalProps {
   isOpen: boolean;
@@ -37,25 +36,44 @@ interface CandidateResultModalProps {
 export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
   isOpen,
   onClose,
-  defaultRollNumber = 'ENT-2025-9981',
+  defaultRollNumber = '',
 }) => {
   const [rollInput, setRollInput] = useState(defaultRollNumber);
-  const [dobInput, setDobInput] = useState('2004-06-14');
+  const [dobInput, setDobInput] = useState('');
   const [selectedExam, setSelectedExam] = useState('ENT-2025');
-  const [activeScorecard, setActiveScorecard] = useState<CandidateScorecard | null>(() =>
-    lookupScorecard(defaultRollNumber)
-  );
-  const [hasSearched, setHasSearched] = useState(true);
+  const [activeScorecard, setActiveScorecard] = useState<CandidateScorecard | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handleSearch = (e?: React.FormEvent) => {
+  const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!rollInput.trim()) return;
-    const result = lookupScorecard(rollInput, selectedExam);
-    setActiveScorecard(result);
+    if (!rollInput.trim() || !dobInput) {
+      setLookupError('Enter your roll/application number and date of birth.');
+      return;
+    }
+    setLookupError(null);
+    setIsSearching(true);
+    setActiveScorecard(null);
     setHasSearched(true);
+    try {
+      const { scorecard } = await apiRequest<{ scorecard: CandidateScorecard }>('/api/results/lookup', {
+        method: 'POST',
+        body: JSON.stringify({
+          identifier: rollInput.trim(),
+          dateOfBirth: dobInput,
+          examCode: selectedExam,
+        }),
+      });
+      setActiveScorecard(scorecard);
+    } catch (error) {
+      setLookupError(error instanceof Error ? error.message : 'Could not load the result.');
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   const handlePrint = () => {
@@ -149,35 +167,21 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
             <div className="sm:col-span-2">
               <button
                 type="submit"
-                className="w-full py-2 px-3 bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-xs"
+                disabled={isSearching}
+                className="w-full py-2 px-3 bg-[#16A34A] hover:bg-[#15803D] disabled:opacity-60 text-white text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-xs"
               >
                 <Search className="w-3.5 h-3.5" />
-                <span>Search</span>
+                <span>{isSearching ? 'Searching…' : 'Search'}</span>
               </button>
             </div>
           </form>
 
-          {/* Quick preset buttons for instant inspection */}
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-slate-500 font-medium">Demo Candidates:</span>
-            {PRESET_SCORECARDS.map((preset) => (
-              <button
-                key={preset.rollNumber}
-                type="button"
-                onClick={() => {
-                  setRollInput(preset.rollNumber);
-                  setSelectedExam(preset.examCode);
-                  setActiveScorecard(preset);
-                }}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-all ${
-                  activeScorecard?.rollNumber === preset.rollNumber
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300 shadow-2xs'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {preset.candidateName} ({preset.rollNumber})
-              </button>
-            ))}
+          <div className="mt-3 text-xs">
+            {lookupError ? (
+              <p role="alert" className="text-rose-700">{lookupError}</p>
+            ) : (
+              <p className="text-slate-500">Scorecards are shown here after an official publishes them.</p>
+            )}
           </div>
         </div>
 
@@ -388,7 +392,7 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
                     {activeScorecard.counselingStream}
                   </p>
                   <p className="text-[11px] text-slate-600">
-                    Registration for Phase-1 Central Choice Filling begins 10 July 2025 on the ELTNOY Counseling Portal.
+                    Follow official ELTNOY notices for counseling dates and next steps.
                   </p>
                 </div>
               </div>
@@ -404,7 +408,7 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
         <div className="bg-slate-50 border-t border-slate-200 px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
           <div className="text-[11px] text-slate-500 flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-[#16A34A]" />
-            <span>Digital Scorecard cryptographically signed by ELTNOY Board of Examinations.</span>
+            <span>Result information is provided by portal officials. Verify it with the issuing authority.</span>
           </div>
           <div className="flex items-center gap-3">
             <button

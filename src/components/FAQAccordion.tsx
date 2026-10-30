@@ -347,7 +347,7 @@ export function FAQAccordion({
             <div>
               <h3 className="text-base sm:text-lg font-bold">Have a specific examination query or technical issue?</h3>
               <p className="text-xs sm:text-sm text-slate-200 mt-0.5">
-                Our examination support desk operates 24/7 during active test windows.
+                Use the helpdesk form to send a question or report a technical issue.
               </p>
             </div>
           </div>
@@ -359,12 +359,12 @@ export function FAQAccordion({
               <MessageSquare className="w-4 h-4 text-slate-900" />
               <span>Report Issue / Give Feedback</span>
             </button>
-            <a
-              href="tel:+911800100200"
+            <button
+              onClick={onOpenFeedback}
               className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-medium text-xs rounded-lg border border-white/20 transition-colors"
             >
-              <span>Call Helpline</span>
-            </a>
+              <span>Contact Helpdesk</span>
+            </button>
           </div>
         </div>
       </div>

@@ -17,7 +17,6 @@ import {
   Zap,
   HelpCircle,
   Star,
-  Paperclip,
   Clock,
   Search,
   Filter,
@@ -31,12 +30,10 @@ import {
   FeedbackEntry,
   FeedbackType,
   FeedbackPriority,
-  getStoredFeedbackEntries,
-  saveFeedbackEntries,
   validateFeedback,
-  createFeedbackTicket,
   filterFeedbackEntries,
 } from '../utils/feedbackLogic';
+import { apiRequest } from '../api';
 
 interface FeedbackSlideOutProps {
   isOpen: boolean;
@@ -65,10 +62,10 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
   const [candidateName, setCandidateName] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [applicationNumber, setApplicationNumber] = useState<string>('');
-  const [attachmentName, setAttachmentName] = useState<string>('');
 
   // UI state
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [submittedTicket, setSubmittedTicket] = useState<FeedbackEntry | null>(null);
   const [copiedId, setCopiedId] = useState<boolean>(false);
@@ -78,11 +75,20 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
   const [historyFilterType, setHistoryFilterType] = useState<string>('all');
   const [historyFilterStatus, setHistoryFilterStatus] = useState<string>('all');
 
-  // Load stored entries on mount
+  const isOfficial = loggedInUser?.role === 'Assessment Official';
+
   useEffect(() => {
-    const loaded = getStoredFeedbackEntries();
-    setEntries(loaded);
-  }, []);
+    if (!isOfficial) {
+      setEntries([]);
+      setActiveTab('submit');
+      return;
+    }
+    apiRequest<{ entries: FeedbackEntry[] }>('/api/admin/feedback')
+      .then(({ entries: storedEntries }) => setEntries(storedEntries))
+      .catch((loadError: unknown) => {
+        setApiError(loadError instanceof Error ? loadError.message : 'Could not load feedback tickets.');
+      });
+  }, [isOfficial]);
 
   // Autofill if logged in
   useEffect(() => {
@@ -105,7 +111,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const validation = validateFeedback({
@@ -121,52 +127,38 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
     }
 
     setErrors({});
+    setApiError(null);
     setIsSubmitting(true);
-
-    // Simulate network delay for realistic feedback submission
-    setTimeout(() => {
-      const newTicket = createFeedbackTicket({
-        type,
-        title: title.trim(),
-        description: description.trim(),
-        module,
-        candidateName: candidateName.trim() || (loggedInUser?.name || 'Aspirant Student'),
-        email: email.trim() || undefined,
-        applicationNumber: applicationNumber.trim() || undefined,
-        priority,
-        rating,
-        attachmentName: attachmentName || undefined,
+    try {
+      const { entry } = await apiRequest<{ entry: FeedbackEntry }>('/api/feedback', {
+        method: 'POST',
+        body: JSON.stringify({
+          type,
+          title: title.trim(),
+          description: description.trim(),
+          module,
+          candidateName: candidateName.trim() || loggedInUser?.name || undefined,
+          email: email.trim() || undefined,
+          applicationNumber: applicationNumber.trim() || undefined,
+          priority,
+          rating,
+        }),
       });
-
-      const updatedEntries = [newTicket, ...entries];
-      setEntries(updatedEntries);
-      saveFeedbackEntries(updatedEntries);
-
-      setIsSubmitting(false);
-      setSubmittedTicket(newTicket);
-
-      // Reset form
+      setEntries((previous) => [entry, ...previous]);
+      setSubmittedTicket(entry);
       setTitle('');
       setDescription('');
-      setAttachmentName('');
-    }, 450);
+    } catch (submitError) {
+      setApiError(submitError instanceof Error ? submitError.message : 'Could not submit feedback.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleCopyTicketId = (id: string) => {
     navigator.clipboard.writeText(id);
     setCopiedId(true);
     setTimeout(() => setCopiedId(false), 2000);
-  };
-
-  const handleMockFileUpload = () => {
-    const sampleFiles = [
-      'cbt_calculator_error.png',
-      'admit_card_preview_glitch.pdf',
-      'portal_latency_log.txt',
-      'suggestion_mockup.jpeg',
-    ];
-    const picked = sampleFiles[Math.floor(Math.random() * sampleFiles.length)];
-    setAttachmentName(picked);
   };
 
   const filteredHistory = filterFeedbackEntries(entries, {
@@ -280,22 +272,29 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
               <span>Submit Feedback</span>
             </button>
 
-            <button
-              onClick={() => setActiveTab('history')}
-              className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                activeTab === 'history'
-                  ? 'bg-[#16A34A] text-white shadow-xs'
-                  : 'bg-white/10 text-slate-200 hover:bg-white/20'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5" />
-              <span>Recent Submissions ({entries.length})</span>
-            </button>
+            {isOfficial && (
+              <button
+                onClick={() => setActiveTab('history')}
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  activeTab === 'history'
+                    ? 'bg-[#16A34A] text-white shadow-xs'
+                    : 'bg-white/10 text-slate-200 hover:bg-white/20'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>All Tickets ({entries.length})</span>
+              </button>
+            )}
           </div>
         </div>
 
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-5 bg-slate-50/60">
+          {apiError && (
+            <div role="alert" className="mb-4 p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs">
+              {apiError}
+            </div>
+          )}
           {activeTab === 'submit' ? (
             submittedTicket ? (
               /* Success State */
@@ -308,7 +307,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                     Feedback Ticket Generated!
                   </h3>
                   <p className="text-xs text-slate-600 mt-1 max-w-sm mx-auto">
-                    Thank you for helping us make the ELTNOY portal more secure and reliable. Your report has been dispatched to our technical assessment directorate.
+                    Thank you for your report. Save the reference number below so you can share it with portal support.
                   </p>
                 </div>
 
@@ -349,7 +348,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                     Priority: <strong>{submittedTicket.priority.toUpperCase()}</strong> · Module: {submittedTicket.module}
                   </p>
                   <p className="text-[11px] leading-relaxed text-sky-700">
-                    Average resolution time for candidates: <strong>2 - 6 hours</strong>.
+                    An official can review and update this ticket from the administration API.
                   </p>
                 </div>
 
@@ -568,37 +567,9 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                   </div>
                 </div>
 
-                {/* Mock Screenshot / File Attachment */}
-                <div className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Paperclip className="w-4 h-4 text-slate-400 shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold text-slate-700 truncate">
-                        {attachmentName ? attachmentName : 'Attach Screenshot or Error Log'}
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        PNG, JPG, PDF up to 5MB
-                      </div>
-                    </div>
-                  </div>
-                  {attachmentName ? (
-                    <button
-                      type="button"
-                      onClick={() => setAttachmentName('')}
-                      className="text-[11px] text-rose-600 hover:underline font-semibold"
-                    >
-                      Remove
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleMockFileUpload}
-                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-md border border-slate-200 transition-colors shrink-0"
-                    >
-                      Attach File
-                    </button>
-                  )}
-                </div>
+                <p className="text-[11px] text-slate-500">
+                  File attachments are not enabled yet. Please include relevant details in the description.
+                </p>
 
                 {/* Submit Action */}
                 <button
@@ -742,8 +713,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
         {/* Drawer Footer */}
         <div className="p-3 bg-white border-t border-slate-200 text-center shrink-0">
           <p className="text-[11px] text-slate-500">
-            For urgent exam day inquiries, call toll-free <strong>+91-XXXXXXXXXX</strong> or email{' '}
-            <strong className="text-[#0B254E]">support@eltnoy.com</strong>.
+            For urgent exam-day assistance, use the support contact details on your official admit card.
           </p>
         </div>
       </div>

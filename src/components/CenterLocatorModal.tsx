@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { X, MapPin, Building, Phone, CheckCircle, Search, Accessibility, ShieldCheck } from 'lucide-react';
+import { X, MapPin, Search, Accessibility, ShieldCheck } from 'lucide-react';
 import { TEST_CENTERS, TestCenter } from '../data/portalData';
 
 interface CenterLocatorModalProps {
@@ -45,10 +45,10 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
             </div>
             <div>
               <h2 className="text-base font-bold leading-none">
-                Accredited CBT Examination Center Locator
+                Examination Center Directory
               </h2>
               <span className="text-xs text-slate-400">
-                1,248 Verified Infrastructure Centers Nationwide
+                Sample center directory · Confirm your assigned venue on your admit card
               </span>
             </div>
           </div>
@@ -95,9 +95,9 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
         {/* Centers List */}
         <div className="p-6 overflow-y-auto max-h-[60vh] space-y-4">
           <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-            <span>Verified Testing Venues ({filteredCenters.length})</span>
+            <span>Sample center entries ({filteredCenters.length})</span>
             <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5" /> All Centers CCTV Monitored
+              <ShieldCheck className="w-3.5 h-3.5" /> Venue details must be confirmed on the admit card
             </span>
           </div>
 
@@ -129,13 +129,13 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
 
                 <div className="pt-3 border-t border-slate-100 text-[11px] space-y-1.5">
                   <div className="flex items-center justify-between text-slate-700">
-                    <span>Terminal Capacity:</span>
-                    <strong className="font-mono text-slate-900">{center.capacity} Nodes</strong>
+                    <span>Listed capacity (sample):</span>
+                    <strong className="font-mono text-slate-900">{center.capacity} seats</strong>
                   </div>
                   <div className="flex items-center justify-between text-slate-700">
                     <span>Biometric Gates:</span>
-                    <span className="text-emerald-700 font-semibold">
-                      {center.biometricStations} Stations Active
+                    <span className="text-slate-600 font-semibold">
+                    {center.biometricStations} (sample listing)
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -143,14 +143,7 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
                       <Accessibility className="w-3.5 h-3.5 text-blue-600" />
                       <span>Wheelchair Ramp:</span>
                     </span>
-                    <span className="text-emerald-700 font-bold">Equipped &amp; Accessible</span>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-600 pt-1">
-                    <span className="flex items-center gap-1">
-                      <Phone className="w-3 h-3 text-slate-400" />
-                      <span>Control Desk:</span>
-                    </span>
-                    <strong className="text-slate-800">{center.contactNumber}</strong>
+                    <span className="font-bold text-slate-700">{center.hasWheelchairAccess ? 'Listed' : 'Not listed'} (confirm with venue)</span>
                   </div>
                 </div>
               </div>

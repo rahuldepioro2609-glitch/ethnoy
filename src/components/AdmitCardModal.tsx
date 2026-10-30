@@ -7,9 +7,9 @@ import React, { useState } from 'react';
 import { X, Printer, Download, CheckCircle2, AlertTriangle, ShieldCheck, QrCode, FileText } from 'lucide-react';
 import {
   validateAdmitCardLookup,
-  generateCandidateAdmitCard,
   CandidateAdmitCardData,
 } from '../utils/examLogic';
+import { apiRequest } from '../api';
 
 interface AdmitCardModalProps {
   isOpen: boolean;
@@ -17,16 +17,17 @@ interface AdmitCardModalProps {
   defaultExamCode?: string;
 }
 
-export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose, defaultExamCode = 'NEE-2026' }) => {
-  const [appNumber, setAppNumber] = useState('NEA-2026-88419');
-  const [dob, setDob] = useState('2008-04-14');
+export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose, defaultExamCode = 'ENT-2025' }) => {
+  const [appNumber, setAppNumber] = useState('');
+  const [dob, setDob] = useState('');
   const [examCode, setExamCode] = useState(defaultExamCode);
   const [admitCard, setAdmitCard] = useState<CandidateAdmitCardData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleLookup = (e: React.FormEvent) => {
+  const handleLookup = async (e: React.FormEvent) => {
     e.preventDefault();
     const val = validateAdmitCardLookup(appNumber, dob);
     if (!val.isValid) {
@@ -34,8 +35,22 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
       return;
     }
     setError(null);
-    const card = generateCandidateAdmitCard(appNumber, examCode);
-    setAdmitCard(card);
+    setIsLoading(true);
+    try {
+      const { admitCard: card } = await apiRequest<{ admitCard: CandidateAdmitCardData }>('/api/admit-cards/lookup', {
+        method: 'POST',
+        body: JSON.stringify({
+          applicationNumber: appNumber.trim(),
+          dateOfBirth: dob,
+          examCode,
+        }),
+      });
+      setAdmitCard(card);
+    } catch (lookupError) {
+      setError(lookupError instanceof Error ? lookupError.message : 'Could not load the admit card.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handlePrint = () => {
@@ -82,7 +97,7 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
               <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-4 text-xs text-blue-900 flex items-start gap-3">
                 <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold">Security Instructions:</span> Enter your Registered Application Number and Date of Birth as printed on your confirmation slip. Demo registration credentials are pre-filled for instant testing.
+                  <span className="font-bold">Security Instructions:</span>                   Enter your application number and date of birth. Admit cards are available after an official has published the center allocation.
                 </div>
               </div>
 
@@ -97,9 +112,10 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                     onChange={(e) => setExamCode(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                   >
-                    <option value="NEE-2026">NEE-2026: National Engineering Entrance (Phase-1)</option>
-                    <option value="CMET-2026">CMET-2026: Central Medical Eligibility Test</option>
-                    <option value="GAA-2026">GAA-2026: Graduate Aptitude Assessment</option>
+                    <option value="ENT-2025">ENT-2025: ELTNOY National Test</option>
+                    <option value="EST-2025">EST-2025: Scholarship Test</option>
+                    <option value="ETET-2025">ETET-2025: Teacher Eligibility Test</option>
+                    <option value="ESAT-2025">ESAT-2025: ELTNOY Assessment Test</option>
                   </select>
                 </div>
 
@@ -116,9 +132,6 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono font-bold tracking-wide focus:ring-2 focus:ring-emerald-500 focus:outline-hidden uppercase"
                     required
                   />
-                  <span className="text-[11px] text-slate-500 mt-1 block">
-                    Default demo number: NEA-2026-88419
-                  </span>
                 </div>
 
                 <div>
@@ -145,20 +158,11 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                 <div className="pt-2 flex items-center gap-3">
                   <button
                     type="submit"
+                    disabled={isLoading}
                     className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
                   >
                     <FileText className="w-4 h-4" />
-                    <span>View &amp; Verify Admit Card</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAppNumber('NEA-2026-88419');
-                      setDob('2008-04-14');
-                    }}
-                    className="py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors"
-                  >
-                    Quick Fill Demo
+                    <span>{isLoading ? 'Checking…' : 'View &amp; Verify Admit Card'}</span>
                   </button>
                 </div>
               </form>

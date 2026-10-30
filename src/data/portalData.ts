@@ -49,7 +49,6 @@ export interface TestCenter {
   capacity: number;
   hasWheelchairAccess: boolean;
   biometricStations: number;
-  contactNumber: string;
 }
 
 export const TEST_CENTERS: TestCenter[] = [
@@ -63,7 +62,6 @@ export const TEST_CENTERS: TestCenter[] = [
     capacity: 750,
     hasWheelchairAccess: true,
     biometricStations: 8,
-    contactNumber: '+91-XXXXXXXXXX',
   },
   {
     id: 'c-02',
@@ -75,7 +73,6 @@ export const TEST_CENTERS: TestCenter[] = [
     capacity: 600,
     hasWheelchairAccess: true,
     biometricStations: 6,
-    contactNumber: '+91-XXXXXXXXXX',
   },
   {
     id: 'c-03',
@@ -87,7 +84,6 @@ export const TEST_CENTERS: TestCenter[] = [
     capacity: 850,
     hasWheelchairAccess: true,
     biometricStations: 10,
-    contactNumber: '+91-XXXXXXXXXX',
   },
 ];
 

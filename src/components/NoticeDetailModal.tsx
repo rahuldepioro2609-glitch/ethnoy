@@ -16,16 +16,17 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
   if (!notice) return null;
 
   const handleDownload = () => {
-    // Generate simulated PDF text blob download
     const element = document.createElement('a');
     const file = new Blob([`${notice.title}\nRef: ${notice.refNo}\nDate: ${notice.date}\n\n${notice.fullContent}`], {
       type: 'text/plain',
     });
-    element.href = URL.createObjectURL(file);
+    const downloadUrl = URL.createObjectURL(file);
+    element.href = downloadUrl;
     element.download = `${notice.refNo.replace(/[^a-zA-Z0-9]/g, '_')}_Circular.txt`;
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
+    window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
   };
 
   return (
@@ -39,7 +40,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
             </div>
             <div>
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-sky-400">
-                Official Gazette Notification
+                Portal Notice
               </span>
               <h2 className="text-sm font-bold truncate max-w-md">
                 {notice.refNo}
@@ -84,7 +85,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
 
           <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-900 text-xs flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Authenticated document digitally stamped by Central Assessment Directorate.</span>
+            <span>This notice is displayed from the portal's current notice data.</span>
           </div>
         </div>
 
@@ -103,7 +104,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
             className="px-4 py-2 bg-blue-900 hover:bg-blue-800 text-white rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-2xs"
           >
             <Download className="w-4 h-4" />
-            <span>Download Official Bulletin</span>
+            <span>Download Notice as Text</span>
           </button>
         </div>
       </div>

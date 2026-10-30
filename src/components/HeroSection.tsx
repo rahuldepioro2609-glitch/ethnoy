@@ -19,22 +19,26 @@ import { HERO_ACTION_RAIL } from '../data/portalData';
 
 interface HeroSectionProps {
   onOpenApply: () => void;
+  hasOpenExams: boolean;
   onOpenMockExam: () => void;
   onOpenAdmitCard: () => void;
   onOpenResults: () => void;
   onOpenAnswerKey?: () => void;
   onOpenInstituteDashboard?: () => void;
   onOpenLogin: () => void;
+  isAuthenticated: boolean;
 }
 
 export const HeroSection: React.FC<HeroSectionProps> = ({
   onOpenApply,
+  hasOpenExams,
   onOpenMockExam,
   onOpenAdmitCard,
   onOpenResults,
   onOpenAnswerKey,
   onOpenInstituteDashboard,
   onOpenLogin,
+  isAuthenticated,
 }) => {
   const handleActionRailClick = (actionId: string) => {
     switch (actionId) {
@@ -98,7 +102,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             {/* Tagline */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/80 border border-sky-200 shadow-2xs text-[#0284c7] text-xs font-semibold">
               <Sparkles className="w-3.5 h-3.5 text-sky-500" />
-              <span>AI Powered Examination Ecosystem</span>
+              <span>Online Examination Services</span>
             </div>
 
             {/* Giant Heading matching ELTNOY layout */}
@@ -113,7 +117,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
 
             {/* Subtitle description */}
             <p className="text-sm sm:text-base text-slate-600 leading-relaxed max-w-lg font-normal">
-              A secure, transparent and technology-driven platform for conducting online examinations.
+              Apply for examinations, use practice tools, and look up admit cards or published results.
             </p>
 
             {/* 4 Key Checkmarks: 2x2 inline grid */}
@@ -129,31 +133,31 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 <div className="w-5 h-5 rounded-full bg-[#0284C7] text-white flex items-center justify-center shrink-0 shadow-2xs">
                   <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
                 </div>
-                <span>Secure &amp; Fair Examination</span>
+                <span>Role-based Account Access</span>
               </div>
 
               <div className="flex items-center gap-2">
                 <div className="w-5 h-5 rounded-full bg-[#0284C7] text-white flex items-center justify-center shrink-0 shadow-2xs">
                   <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
                 </div>
-                <span>Real-time Monitoring</span>
+                <span>Practice Test Tools</span>
               </div>
 
               <div className="flex items-center gap-2">
                 <div className="w-5 h-5 rounded-full bg-[#0284C7] text-white flex items-center justify-center shrink-0 shadow-2xs">
                   <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
                 </div>
-                <span>Instant Results</span>
+                <span>Official Result Lookup</span>
               </div>
             </div>
 
-            {/* Action Buttons: Apply for Examination & Student Login */}
+            {/* Action Buttons: Apply for Examination & account access */}
             <div className="flex flex-wrap items-center gap-3 pt-3">
               <button
                 onClick={onOpenApply}
                 className="px-5 py-2.5 sm:px-6 sm:py-3 bg-[#16A34A] hover:bg-[#15803D] active:bg-[#166534] text-white font-bold text-xs sm:text-sm rounded-lg shadow-sm flex items-center gap-2 transition-all transform hover:-translate-y-0.5"
               >
-                <span>Apply for Examination</span>
+                <span>{hasOpenExams ? 'Apply for Examination' : 'View Exam Forms'}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
 
@@ -162,7 +166,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 className="px-5 py-2.5 sm:px-6 sm:py-3 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-xs sm:text-sm rounded-lg border border-slate-300 flex items-center gap-2 transition-all shadow-2xs"
               >
                 <User className="w-4 h-4 text-blue-600" />
-                <span>Student Login</span>
+                <span>{isAuthenticated ? 'My Dashboard' : 'Student Login'}</span>
               </button>
             </div>
           </div>

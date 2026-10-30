@@ -8,8 +8,6 @@ export type Language = 'English' | 'Hindi' | 'Regional';
 export interface TopUtilityBarTranslations {
   welcome: string;
   helpdesk: string;
-  phoneLabel: string;
-  emailLabel: string;
   langLabel: string;
   badge: string;
 }
@@ -26,24 +24,18 @@ export const TOP_BAR_TRANSLATIONS: Record<Language, TopUtilityBarTranslations> =
   English: {
     welcome: 'Welcome to ELTNOY Examination Portal',
     helpdesk: 'Helpdesk',
-    phoneLabel: '+91-XXXXXXXXXX',
-    emailLabel: 'support@eltnoy.com',
     langLabel: 'English',
     badge: 'Official Exam Portal',
   },
   Hindi: {
     welcome: 'ELTNOY परीक्षा पोर्टल में आपका स्वागत है',
     helpdesk: 'सहायता केंद्र',
-    phoneLabel: '+91-XXXXXXXXXX',
-    emailLabel: 'support@eltnoy.com',
     langLabel: 'हिन्दी (Hindi)',
     badge: 'आधिकारिक परीक्षा पोर्टल',
   },
   Regional: {
     welcome: 'ELTNOY ಪರೀಕ್ಷಾ ಪೋರ್ಟಲ್‌ಗೆ ಸುಸ್ವಾಗತ (Regional)',
     helpdesk: 'ಸಹಾಯವಾಣಿ (Helpdesk)',
-    phoneLabel: '+91-XXXXXXXXXX',
-    emailLabel: 'support@eltnoy.com',
     langLabel: 'Regional (ಕನ್ನಡ/বাংলা)',
     badge: 'ಅಧಿಕೃತ ಪೋರ್ಟಲ್',
   },

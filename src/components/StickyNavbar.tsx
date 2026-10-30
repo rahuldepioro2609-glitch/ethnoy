@@ -16,10 +16,12 @@ import {
   Phone,
   Award,
 } from 'lucide-react';
+import { ExamItem } from '../data/portalData';
 
 interface StickyNavbarProps {
   onOpenSearch: () => void;
   onOpenLogin: () => void;
+  isAuthenticated: boolean;
   onOpenAdmitCard: () => void;
   onOpenMockExam: () => void;
   onOpenCenterLocator: () => void;
@@ -29,6 +31,7 @@ interface StickyNavbarProps {
   onOpenAnswerKeyPortal: () => void;
   onOpenInstituteDashboard: () => void;
   onOpenAiProctoring: () => void;
+  examinations: ExamItem[];
   activeNavTab: string;
   setActiveNavTab: (tab: string) => void;
 }
@@ -36,6 +39,7 @@ interface StickyNavbarProps {
 export const StickyNavbar: React.FC<StickyNavbarProps> = ({
   onOpenSearch,
   onOpenLogin,
+  isAuthenticated,
   onOpenAdmitCard,
   onOpenMockExam,
   onOpenCenterLocator,
@@ -45,6 +49,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
   onOpenAnswerKeyPortal,
   onOpenInstituteDashboard,
   onOpenAiProctoring,
+  examinations,
   activeNavTab,
   setActiveNavTab,
 }) => {
@@ -100,7 +105,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
             </button>
           </div>
 
-          {/* Center Navigation Links: Home, About Us, Examinations, Student Zone, Institute Zone, Results, Contact Us */}
+          {/* Center Navigation Links: Home, Examinations, Student Zone, Institute Zone, Results, Contact Us, About Us */}
           <nav
             ref={dropdownRef}
             aria-label="Primary Navigation"
@@ -127,28 +132,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               )}
             </div>
 
-            {/* 2. About Us */}
-            <div className="relative py-2">
-              <button
-                onClick={() => {
-                  setActiveNavTab('About Us');
-                  const el = document.getElementById('why-choose-section');
-                  if (el) el.scrollIntoView({ behavior: 'smooth' });
-                }}
-                className={`transition-colors pb-1 ${
-                  activeNavTab === 'About Us'
-                    ? 'text-slate-900 font-bold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                About Us
-              </button>
-              {activeNavTab === 'About Us' && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#16A34A] rounded-full" />
-              )}
-            </div>
-
-            {/* 3. Examinations Dropdown */}
+            {/* 2. Examinations Dropdown */}
             <div className="relative py-2">
               <button
                 onClick={() => toggleDropdown('exams')}
@@ -166,43 +150,26 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               {activeDropdown === 'exams' && (
                 <div className="absolute left-0 mt-2 w-72 bg-white rounded-xl shadow-xl border border-slate-200 py-2 animate-in fade-in zoom-in-95 duration-150 z-50">
                   <div className="px-3 py-1.5 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                    ELTNOY Exams 2025
+                    Published exam forms
                   </div>
-                  <button
-                    onClick={() => {
-                      onSelectExamFilter('eltnoy-national-test');
-                      setActiveDropdown(null);
-                    }}
-                    className="w-full text-left px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 hover:text-[#16A34A] flex flex-col"
-                  >
-                    <span className="font-semibold text-slate-900">ELTNOY National Test 2025</span>
-                    <span className="text-[11px] text-slate-500">Under Graduate Entrance Exam</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      onSelectExamFilter('eltnoy-scholarship-test');
-                      setActiveDropdown(null);
-                    }}
-                    className="w-full text-left px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 hover:text-[#16A34A] flex flex-col"
-                  >
-                    <span className="font-semibold text-slate-900">ELTNOY Scholarship Test 2025</span>
-                    <span className="text-[11px] text-slate-500">For Class 10th - 12th Students</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      onSelectExamFilter('eltnoy-tet');
-                      setActiveDropdown(null);
-                    }}
-                    className="w-full text-left px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 hover:text-[#16A34A] flex flex-col"
-                  >
-                    <span className="font-semibold text-slate-900">ELTNOY Teacher Eligibility Test</span>
-                    <span className="text-[11px] text-slate-500">For Teaching Aspirants</span>
-                  </button>
+                  {examinations.length ? examinations.map((exam) => (
+                    <button
+                      key={exam.id}
+                      onClick={() => {
+                        onSelectExamFilter(exam.id);
+                        setActiveDropdown(null);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 hover:text-[#16A34A] flex flex-col"
+                    >
+                      <span className="font-semibold text-slate-900">{exam.name}</span>
+                      <span className="text-[11px] text-slate-500">{exam.code} · Apply until {exam.regEnd}</span>
+                    </button>
+                  )) : <p className="px-3 py-2 text-xs text-slate-500">No exams published yet.</p>}
                 </div>
               )}
             </div>
 
-            {/* 4. Student Zone Dropdown */}
+            {/* 3. Student Zone Dropdown */}
             <div className="relative py-2">
               <button
                 onClick={() => toggleDropdown('student')}
@@ -263,7 +230,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               )}
             </div>
 
-            {/* 5. Institute Zone Dropdown */}
+            {/* 4. Institute Zone Dropdown */}
             <div className="relative py-2">
               <button
                 onClick={() => toggleDropdown('institute')}
@@ -302,15 +269,15 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                   >
                     <div className="font-semibold flex items-center gap-2">
                       <Award className="w-4 h-4 text-rose-600" />
-                      <span>AI Proctoring Command Room</span>
+                      <span>Official Administration Dashboard</span>
                     </div>
-                    <div className="text-[11px] text-slate-500 pl-6">Live video feeds &amp; anomaly flags</div>
+                    <div className="text-[11px] text-slate-500 pl-6">Applications, support tickets and results</div>
                   </button>
                 </div>
               )}
             </div>
 
-            {/* 6. Results */}
+            {/* 5. Results */}
             <div className="relative py-2">
               <button
                 onClick={() => {
@@ -330,7 +297,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               )}
             </div>
 
-            {/* 7. Contact Us */}
+            {/* 6. Contact Us */}
             <div className="relative py-2">
               <button
                 onClick={() => {
@@ -350,9 +317,30 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#16A34A] rounded-full" />
               )}
             </div>
+
+            {/* About Us */}
+            <div className="relative py-2">
+              <button
+                onClick={() => {
+                  setActiveNavTab('About Us');
+                  const el = document.getElementById('why-choose-section');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className={`transition-colors pb-1 ${
+                  activeNavTab === 'About Us'
+                    ? 'text-slate-900 font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                About Us
+              </button>
+              {activeNavTab === 'About Us' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#16A34A] rounded-full" />
+              )}
+            </div>
           </nav>
 
-          {/* Right Section: Search Trigger & Green Login Button */}
+          {/* Right Section: Search Trigger & Account Button */}
           <div className="flex items-center gap-3 shrink-0">
             {/* Search Icon Button */}
             <button
@@ -364,14 +352,13 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               <Search className="w-5 h-5 text-slate-600" />
             </button>
 
-            {/* Green Login Button: Exactly as in mockup */}
             <button
               onClick={onOpenLogin}
               className="flex items-center gap-1.5 px-4 sm:px-5 py-2 text-xs sm:text-sm font-bold text-white bg-[#16A34A] hover:bg-[#15803D] active:bg-[#166534] rounded-lg transition-all shadow-xs"
-              aria-label="Login button"
+              aria-label={isAuthenticated ? 'Open dashboard' : 'Login'}
             >
               <User className="w-4 h-4 stroke-[2.2]" />
-              <span>Login</span>
+              <span>{isAuthenticated ? 'My Dashboard' : 'Login'}</span>
             </button>
 
             {/* Mobile Menu Toggle */}
@@ -400,27 +387,20 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
             >
               Home
             </button>
-            <button
-              onClick={() => {
-                setActiveNavTab('About Us');
-                setMobileMenuOpen(false);
-                const el = document.getElementById('why-choose-section');
-                if (el) el.scrollIntoView({ behavior: 'smooth' });
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100"
-            >
-              About Us
-            </button>
-            <button
-              onClick={() => {
-                onSelectExamFilter('eltnoy-national-test');
-                setMobileMenuOpen(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100 flex justify-between"
-            >
-              <span>ELTNOY National Test 2025</span>
-              <span className="text-xs text-[#16A34A] font-bold">Apply Now</span>
-            </button>
+            <p className="px-3 pt-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">Published exam forms</p>
+            {examinations.length ? examinations.map((exam) => (
+              <button
+                key={exam.id}
+                onClick={() => {
+                  onSelectExamFilter(exam.id);
+                  setMobileMenuOpen(false);
+                  document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100"
+              >
+                {exam.name} <span className="text-xs text-slate-500">({exam.code})</span>
+              </button>
+            )) : <p className="px-3 py-2 text-sm text-slate-500">No exams published yet.</p>}
             <button
               onClick={() => {
                 onOpenAdmitCard();
@@ -473,7 +453,17 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               }}
               className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100 font-semibold text-rose-600"
             >
-              AI Proctoring Incident Room
+              Official Administration Dashboard
+            </button>
+            <button
+              onClick={() => {
+                setActiveNavTab('About Us');
+                setMobileMenuOpen(false);
+                document.getElementById('why-choose-section')?.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100"
+            >
+              About Us
             </button>
           </div>
         </div>

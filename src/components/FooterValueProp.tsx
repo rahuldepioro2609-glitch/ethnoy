@@ -10,9 +10,6 @@ import {
   Users,
   Cog,
   BarChart2,
-  Mail,
-  Phone,
-  MapPin,
   GraduationCap,
   ArrowUp,
 } from 'lucide-react';
@@ -22,12 +19,15 @@ interface FooterValuePropProps {
   onOpenAdmitCard: () => void;
   onOpenMockExam: () => void;
   onOpenCenterLocator: () => void;
+  onOpenResults: () => void;
 }
 
 export const FooterValueProp: React.FC<FooterValuePropProps> = ({
   onOpenGrievance,
   onOpenAdmitCard,
   onOpenMockExam,
+  onOpenCenterLocator,
+  onOpenResults,
 }) => {
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -57,10 +57,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
               <div>
                 <div className="text-xs font-bold text-slate-900 leading-tight">
-                  Secure &amp; Fair
+                  Role-based Access
                 </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">
-                  AI Monitoring System
+                  Protected portal accounts
                 </div>
               </div>
             </div>
@@ -87,10 +87,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
               <div>
                 <div className="text-xs font-bold text-slate-900 leading-tight">
-                  Multi-Exam Support
+                  Exam Information
                 </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">
-                  For Schools, Colleges &amp; Institutes
+                  Notices and schedules
                 </div>
               </div>
             </div>
@@ -102,10 +102,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
               <div>
                 <div className="text-xs font-bold text-slate-900 leading-tight">
-                  Real-time Analytics
+                  Candidate Helpdesk
                 </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">
-                  For Better Decision Making
+                  Feedback and issue reports
                 </div>
               </div>
             </div>
@@ -128,7 +128,7 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
             </div>
             <p className="text-slate-400 leading-relaxed text-xs">
-              AI-Powered Examination Ecosystem providing end-to-end computer-based testing, automated proctoring, and instant verification for national entrance exams.
+              Examination portal for applications, admit-card lookup, result lookup, practice tests, and candidate support.
             </p>
           </div>
 
@@ -149,9 +149,14 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
                 </button>
               </li>
               <li>
-                <a href="#results" className="hover:text-white transition-colors">
-                  Check Answer Keys &amp; Results
-                </a>
+                <button onClick={onOpenCenterLocator} className="hover:text-white transition-colors">
+                  Find a Test Center
+                </button>
+              </li>
+              <li>
+                <button onClick={onOpenResults} className="hover:text-white transition-colors">
+                  Check Examination Results
+                </button>
               </li>
               <li>
                 <button onClick={onOpenGrievance} className="hover:text-white transition-colors">
@@ -164,13 +169,12 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
           {/* Col 3: Examination Programs */}
           <div className="space-y-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-white">
-              Active Examinations
+              Exam Information
             </h4>
             <ul className="space-y-1.5 text-slate-400">
-              <li>ELTNOY National Test 2025 (Under Graduate)</li>
-              <li>ELTNOY Scholarship Test 2025 (Class 10th-12th)</li>
-              <li>ELTNOY Teacher Eligibility Test 2025</li>
-              <li>ELTNOY Skill Assessment Test 2025</li>
+              <li>Exam schedules are published in the latest portal notices.</li>
+              <li>Registration status is shown with each examination listing.</li>
+              <li>Use the admit card as the source of truth for your venue.</li>
             </ul>
           </div>
 
@@ -180,18 +184,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               Contact &amp; Support
             </h4>
             <div className="space-y-1.5 text-slate-400 text-xs">
-              <div className="flex items-center gap-2">
-                <Phone className="w-3.5 h-3.5 text-[#16A34A]" />
-                <span>+91-XXXXXXXXXX (Toll-Free Helpdesk)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Mail className="w-3.5 h-3.5 text-sky-400" />
-                <span>support@eltnoy.com</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                <span>ELTNOY Center, Technology Park, Sector 62</span>
-              </div>
+              <p>For assistance, submit a message through the candidate helpdesk.</p>
+              <button onClick={onOpenGrievance} className="text-emerald-300 hover:text-white transition-colors">
+                Open candidate helpdesk
+              </button>
             </div>
             <button
               onClick={scrollToTop}
@@ -205,14 +201,8 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
 
         {/* Bottom copyright */}
         <div className="mt-8 pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500">
-          <span>© 2025 ELTNOY Examination Portal. All Rights Reserved.</span>
-          <div className="flex items-center gap-4">
-            <a href="#privacy" className="hover:text-slate-300">Privacy Policy</a>
-            <span>·</span>
-            <a href="#terms" className="hover:text-slate-300">Terms of Service</a>
-            <span>·</span>
-            <a href="#security" className="hover:text-slate-300">Security &amp; AI Compliance</a>
-          </div>
+          <span>© {new Date().getFullYear()} ELTNOY Examination Portal.</span>
+          <span>Privacy notice, terms, and security disclosures must be added before public launch.</span>
         </div>
       </div>
     </footer>

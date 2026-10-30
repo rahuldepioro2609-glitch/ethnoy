@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, FileText, Calendar, Building2, ExternalLink, ArrowRight } from 'lucide-react';
-import { EXAMINATIONS, NOTICES, TEST_CENTERS, ExamItem, NoticeItem, TestCenter } from '../data/portalData';
+import { NOTICES, TEST_CENTERS, ExamItem, NoticeItem, TestCenter } from '../data/portalData';
 
 interface GlobalSearchModalProps {
   isOpen: boolean;
@@ -14,6 +14,7 @@ interface GlobalSearchModalProps {
   onSelectNotice: (notice: NoticeItem) => void;
   onOpenAdmitCard: () => void;
   onOpenMockExam: () => void;
+  examinations: ExamItem[];
 }
 
 export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
@@ -23,6 +24,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   onSelectNotice,
   onOpenAdmitCard,
   onOpenMockExam,
+  examinations,
 }) => {
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -39,7 +41,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
 
   const q = query.trim().toLowerCase();
 
-  const matchedExams = EXAMINATIONS.filter(
+  const matchedExams = examinations.filter(
     (e) =>
       e.name.toLowerCase().includes(q) ||
       e.code.toLowerCase().includes(q) ||

@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: eltnoy-portal
+    runtime: node
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run db:migrate && npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "false"
+      - key: APP_ORIGIN
+        sync: false

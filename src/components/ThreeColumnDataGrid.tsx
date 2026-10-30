@@ -16,7 +16,6 @@ import {
   Building2,
 } from 'lucide-react';
 import {
-  EXAMINATIONS,
   NOTICES,
   QUICK_LINKS_TILES,
   ExamItem,
@@ -27,18 +26,22 @@ interface ThreeColumnDataGridProps {
   onOpenNotice: (notice: NoticeItem) => void;
   onOpenExamApply: (exam: ExamItem) => void;
   onQuickLinkAction: (actionId: string) => void;
+  examinations: ExamItem[];
   filterExamId?: string;
+  isAuthenticated: boolean;
 }
 
 export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   onOpenNotice,
   onOpenExamApply,
   onQuickLinkAction,
+  examinations,
   filterExamId,
+  isAuthenticated,
 }) => {
   const displayedExams = filterExamId
-    ? EXAMINATIONS.filter((e) => e.id === filterExamId)
-    : EXAMINATIONS;
+    ? examinations.filter((e) => e.id === filterExamId)
+    : examinations;
 
   const renderQuickTileIcon = (type: string) => {
     switch (type) {
@@ -60,7 +63,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   };
 
   return (
-    <section className="py-8 bg-[#F4F8FC]" aria-label="ELTNOY Information Center">
+    <section id="exam-list" className="py-8 bg-[#F4F8FC]" aria-label="ELTNOY Information Center">
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           {/* COLUMN 1: Latest Notifications (approx 4 cols) */}
@@ -84,10 +87,12 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
             {/* Notifications Rows */}
             <div className="divide-y divide-slate-100 flex-1">
               {NOTICES.map((notice) => (
-                <div
+                <button
                   key={notice.id}
+                  type="button"
                   onClick={() => onOpenNotice(notice)}
-                  className="p-3.5 sm:p-4 hover:bg-slate-50/90 transition-colors cursor-pointer flex items-center gap-3.5 group"
+                  className="w-full p-3.5 sm:p-4 text-left hover:bg-slate-50/90 transition-colors cursor-pointer flex items-center gap-3.5 group focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-600"
+                  aria-label={`Read notice: ${notice.title}`}
                 >
                   {/* Date Badge: Stacked Blue Block */}
                   <div className="w-11 h-11 rounded-lg bg-sky-50 border border-sky-100 text-[#0284C7] flex flex-col items-center justify-center shrink-0">
@@ -108,7 +113,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                       )}
                     </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -124,7 +129,8 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                 </h3>
               </div>
               <button
-                onClick={() => onOpenExamApply(EXAMINATIONS[0])}
+                onClick={() => displayedExams[0] && onOpenExamApply(displayedExams[0])}
+                disabled={!displayedExams.length}
                 className="text-xs text-emerald-100 hover:text-white transition-colors"
               >
                 View All →
@@ -133,7 +139,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
 
             {/* Examinations Cards */}
             <div className="divide-y divide-slate-100 flex-1">
-              {displayedExams.map((exam) => (
+              {displayedExams.length ? displayedExams.map((exam) => (
                 <div
                   key={exam.id}
                   className="p-3.5 sm:p-4 hover:bg-slate-50/80 transition-colors flex items-center justify-between gap-3"
@@ -159,7 +165,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
 
                   {/* Right: Apply Button */}
                   <div className="shrink-0">
-                    {exam.isButtonActive ? (
+                    {exam.isButtonActive && Date.parse(exam.regEnd) >= Date.now() ? (
                       <button
                         onClick={() => onOpenExamApply(exam)}
                         className="px-3.5 py-1.5 bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-bold rounded-md shadow-2xs transition-colors whitespace-nowrap"
@@ -168,15 +174,17 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                       </button>
                     ) : (
                       <button
-                        onClick={() => onOpenExamApply(exam)}
-                        className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold rounded-md border border-slate-200 transition-colors whitespace-nowrap"
+                        type="button"
+                        disabled
+                        aria-label={`${Date.parse(exam.regEnd) < Date.now() ? 'Registration is closed' : 'Registration has not opened'} for ${exam.name}`}
+                        className="px-3.5 py-1.5 bg-slate-100 text-slate-500 text-xs font-semibold rounded-md border border-slate-200 whitespace-nowrap cursor-not-allowed"
                       >
-                        Apply Soon
+                        {Date.parse(exam.regEnd) < Date.now() ? 'Registration closed' : 'Opens soon'}
                       </button>
                     )}
                   </div>
                 </div>
-              ))}
+              )) : <p className="p-5 text-sm text-slate-500">No published exam forms are currently available.</p>}
             </div>
           </div>
 
@@ -192,7 +200,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
 
             {/* 3x2 Grid of Colorful Tiles */}
             <div className="p-4 grid grid-cols-2 gap-3 flex-1">
-              {QUICK_LINKS_TILES.map((tile) => (
+              {QUICK_LINKS_TILES.filter((tile) => !isAuthenticated || !tile.actionId.startsWith('login-')).map((tile) => (
                 <button
                   key={tile.id}
                   onClick={() => onQuickLinkAction(tile.actionId)}

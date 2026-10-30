@@ -23,8 +23,6 @@ import {
 } from 'lucide-react';
 import {
   SAMPLE_ANSWER_KEYS,
-  INITIAL_OBJECTIONS,
-  calculateObjectionFee,
   validateObjection,
   filterQuestions,
   AnswerKeyQuestion,
@@ -44,7 +42,7 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
 }) => {
   const [activeTab, setActiveTab] = useState<'keys' | 'my-objections'>('keys');
   const [questions, setQuestions] = useState<AnswerKeyQuestion[]>(SAMPLE_ANSWER_KEYS);
-  const [objections, setObjections] = useState<CandidateObjection[]>(INITIAL_OBJECTIONS);
+  const [objections, setObjections] = useState<CandidateObjection[]>([]);
   const [selectedSubject, setSelectedSubject] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedBookletSet, setSelectedBookletSet] = useState<string>('Set A');
@@ -150,13 +148,13 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
             <div>
               <div className="flex items-center gap-2">
                 <h2 id="answer-key-modal-title" className="text-lg font-bold tracking-tight">
-                  Official Answer Key &amp; Online Objection Tracker
+                  Answer-Key Preview &amp; Objection Information
                 </h2>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-200 border border-purple-400/30">
                   Window: Active
                 </span>
               </div>
-              <p className="text-xs text-sky-200">{defaultExamName} · Provisional Answer Key Challenge Portal</p>
+              <p className="text-xs text-sky-200">{defaultExamName} · Sample content only</p>
             </div>
           </div>
           <button
@@ -245,11 +243,10 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
                 <div className="flex items-start gap-2.5">
                   <BookOpen className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
                   <div>
-                    <span className="font-bold block">How to File an Online Challenge:</span>
+                    <span className="font-bold block">Sample answer-key preview — not official exam content</span>
                     <span className="text-sky-800 text-[11px]">
-                      Compare the Official Key with your recorded response. If you believe the official key is incorrect,
-                      click <strong>"Challenge Key"</strong> on that question, cite standard textbook references, and upload proof.
-                      Fee is ₹500 per question (100% refunded if challenge is upheld by the expert committee).
+                        Questions and answer keys are illustrative samples. Objection filing, document upload, and payment are not enabled.
+                        Do not rely on this preview for a real examination.
                     </span>
                   </div>
                 </div>
@@ -283,11 +280,12 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
 
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => handleOpenChallenge(q)}
-                          className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1 shadow-2xs"
+                          type="button"
+                          disabled
+                          title="Objection filing is not enabled"
+                          className="px-3 py-1 bg-slate-100 text-slate-500 rounded-lg text-xs font-bold flex items-center gap-1 cursor-not-allowed"
                         >
-                          <span>Challenge Key</span>
-                          <ChevronRight className="w-3.5 h-3.5" />
+                          <span>Filing unavailable</span>
                         </button>
                       </div>
                     </div>
@@ -324,7 +322,7 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
                             <div className="flex items-center gap-1.5 shrink-0">
                               {isOfficial && (
                                 <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600 text-white">
-                                  Official Key
+                                  Sample Key
                                 </span>
                               )}
                               {isCandidate && !isOfficial && (
@@ -340,7 +338,7 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
 
                     {/* Official Solution Explanation */}
                     <div className="bg-slate-50 rounded-lg p-2.5 text-[11px] text-slate-600 border border-slate-100 flex items-start gap-2">
-                      <span className="font-bold text-slate-700 shrink-0">Official Explanation:</span>
+                      <span className="font-bold text-slate-700 shrink-0">Sample Explanation:</span>
                       <span>{q.explanation}</span>
                     </div>
                   </div>
@@ -357,13 +355,13 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
                   Submitted Challenge Claims &amp; Expert Committee Verification Status
                 </h4>
                 <span className="text-xs text-slate-500 font-medium">
-                  Total Challenge Fee Recorded: ₹{calculateObjectionFee(objections.length)}
+                  Sample preview only — no objections or payments are recorded.
                 </span>
               </div>
 
               {objections.length === 0 ? (
                 <div className="text-center py-12 text-slate-500 text-xs">
-                  No objections filed yet. You can challenge any question from the Question Key Matrix tab.
+                  No real objections are available. Objection filing is not enabled.
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -601,7 +599,7 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
         <div className="bg-slate-50 border-t border-slate-200 px-6 py-3.5 flex items-center justify-between text-xs text-slate-500">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-purple-600" />
-            <span>All filed challenges undergo blind peer review by a 3-member National Expert Board.</span>
+            <span>Challenge filing and payment are not enabled in this preview.</span>
           </div>
           <button
             onClick={onClose}

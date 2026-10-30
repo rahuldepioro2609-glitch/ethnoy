@@ -5,8 +5,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Phone,
-  Mail,
   Headphones,
   Globe,
   Eye,
@@ -94,7 +92,7 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
           </span>
         </div>
 
-        {/* Right: Helpdesk, Phone, Email, Language Selector */}
+        {/* Right: Helpdesk and language selector */}
         <div className="flex items-center flex-wrap gap-x-3 sm:gap-x-4 gap-y-1 text-xs text-slate-200 ml-auto">
           {/* Helpdesk */}
           <button
@@ -106,29 +104,6 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
             <Headphones className="w-3.5 h-3.5 text-sky-300" />
             <span className="font-medium">{t.helpdesk}</span>
           </button>
-
-          <span className="hidden sm:inline text-slate-400/50">|</span>
-
-          {/* Helpline Phone */}
-          <a
-            href="tel:+919876543210"
-            className="flex items-center gap-1.5 hover:text-white transition-colors"
-          >
-            <Phone className="w-3.5 h-3.5 text-sky-300" />
-            <span className="font-sans">{t.phoneLabel}</span>
-          </a>
-
-          <span className="hidden sm:inline text-slate-400/50">|</span>
-
-          {/* Email Support */}
-          <a
-            href="mailto:support@eltnoy.com"
-            className="flex items-center gap-1.5 hover:text-white transition-colors"
-          >
-            <Mail className="w-3.5 h-3.5 text-sky-300" />
-            <span className="hidden md:inline">{t.emailLabel}</span>
-            <span className="md:hidden">Email</span>
-          </a>
 
           <span className="hidden sm:inline text-slate-400/50">|</span>
 
@@ -176,6 +151,9 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
                   <span>Portal Language</span>
                   <span className="text-emerald-400 font-mono">3 Options</span>
                 </div>
+                <p className="px-3 py-1.5 text-[10px] leading-relaxed text-slate-400">
+                  Language selection currently translates the utility bar only.
+                </p>
 
                 {LANGUAGE_OPTIONS.map((option) => {
                   const isSelected = selectedLanguage === option.id;

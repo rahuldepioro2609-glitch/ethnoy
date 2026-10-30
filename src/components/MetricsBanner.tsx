@@ -4,42 +4,42 @@
  */
 
 import React from 'react';
-import { Users2, UserCheck2, Building2, ShieldCheck, Trophy } from 'lucide-react';
+import { UserRound, ClipboardCheck, Building2, ShieldCheck, MessageSquareText } from 'lucide-react';
 
 export const MetricsBanner: React.FC = () => {
   const metrics = [
     {
-      value: '50+',
-      label: 'Examinations Conducted',
-      icon: Users2,
+      value: 'Candidate',
+      label: 'Dedicated portal',
+      icon: UserRound,
       textColor: 'text-[#16A34A]',
       iconColor: 'text-[#16A34A]',
     },
     {
-      value: '10 Million+',
-      label: 'Students Registered',
-      icon: UserCheck2,
+      value: 'Applications',
+      label: 'Online submission',
+      icon: ClipboardCheck,
       textColor: 'text-[#0284C7]',
       iconColor: 'text-[#0284C7]',
     },
     {
-      value: '1,000+',
-      label: 'Institutes Associated',
+      value: 'Centers',
+      label: 'Assigned candidate check-in',
       icon: Building2,
       textColor: 'text-[#9333EA]',
       iconColor: 'text-[#9333EA]',
     },
     {
-      value: '99.9%',
-      label: 'System Uptime',
+      value: 'Secure',
+      label: 'Role-based account access',
       icon: ShieldCheck,
       textColor: 'text-[#16A34A]',
       iconColor: 'text-[#16A34A]',
     },
     {
-      value: '100%',
-      label: 'Transparent & Secure',
-      icon: Trophy,
+      value: 'Helpdesk',
+      label: 'Feedback and issue reports',
+      icon: MessageSquareText,
       textColor: 'text-[#D97706]',
       iconColor: 'text-[#D97706]',
     },

@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { X, LogIn, User, ShieldCheck, Building2, CheckCircle2, Lock } from 'lucide-react';
+import { apiRequest } from '../api';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -14,43 +15,38 @@ interface LoginModalProps {
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLoginSuccess }) => {
   const [role, setRole] = useState<'candidate' | 'center' | 'official'>('candidate');
-  const [username, setUsername] = useState('NEA-2026-88419');
-  const [password, setPassword] = useState('••••••••');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loggedInNotice, setLoggedInNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleQuickFill = (targetRole: 'candidate' | 'center' | 'official') => {
-    setRole(targetRole);
-    if (targetRole === 'candidate') {
-      setUsername('NEA-2026-88419');
-      setPassword('CandidatePass2026');
-    } else if (targetRole === 'center') {
-      setUsername('SUP-DELHI-0419');
-      setPassword('CenterAdminSecure');
-    } else {
-      setUsername('OFFICIAL-EXAM-NEA');
-      setPassword('DirectorateAuth#2026');
-    }
-  };
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    let name = 'Aarav Sharma';
-    let roleLabel = 'Registered Candidate';
-    if (role === 'center') {
-      name = 'Dr. V. K. Malhotra (Center Superintendent)';
-      roleLabel = 'Test Center Admin';
-    } else if (role === 'official') {
-      name = 'NEA Central Board Directorate';
-      roleLabel = 'Assessment Official';
-    }
-
-    setLoggedInNotice(`Authenticated successfully as ${name} (${roleLabel})`);
-    setTimeout(() => {
-      onLoginSuccess({ name, role: roleLabel, id: username });
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      const { user } = await apiRequest<{
+        user: { id: string; loginId: string; name: string; role: 'candidate' | 'center' | 'official' };
+      }>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ loginId: username.trim(), password, role }),
+      });
+      const roleLabels = {
+        candidate: 'Registered Candidate',
+        center: 'Test Center Admin',
+        official: 'Assessment Official',
+      };
+      setLoggedInNotice(`Signed in as ${user.name} (${roleLabels[user.role]})`);
+      onLoginSuccess({ name: user.name, role: roleLabels[user.role], id: user.loginId });
       onClose();
-    }, 800);
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : 'Sign in failed. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -85,7 +81,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
           {/* Role Tabs */}
           <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl text-xs font-semibold">
             <button
-              onClick={() => handleQuickFill('candidate')}
+              onClick={() => setRole('candidate')}
               className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
                 role === 'candidate' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
@@ -94,7 +90,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               <span>Candidate</span>
             </button>
             <button
-              onClick={() => handleQuickFill('center')}
+              onClick={() => setRole('center')}
               className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
                 role === 'center' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
@@ -103,7 +99,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               <span>Center</span>
             </button>
             <button
-              onClick={() => handleQuickFill('official')}
+              onClick={() => setRole('official')}
               className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
                 role === 'official' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
@@ -121,6 +117,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
+            {error && (
+              <div role="alert" className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs">
+                {error}
+              </div>
+            )}
             <div>
               <label htmlFor="portal-login-id" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 {role === 'candidate' ? 'Application Number / Roll No' : 'Staff / Node ID'}
@@ -130,6 +131,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-hidden uppercase"
                 required
               />
@@ -144,6 +146,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 required
               />
@@ -152,24 +155,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
             <div className="pt-2 space-y-2">
               <button
                 type="submit"
+                disabled={isSubmitting}
                 className="w-full py-3 bg-[#10B981] hover:bg-[#059669] text-white font-bold text-xs rounded-xl shadow-md transition-colors flex items-center justify-center gap-1.5 uppercase tracking-wider"
               >
                 <Lock className="w-4 h-4" />
-                <span>Secure Sign In</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill(role)}
-                className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] rounded-lg transition-colors"
-              >
-                Quick Demo 1-Click Login
+                <span>{isSubmitting ? 'Signing In…' : 'Secure Sign In'}</span>
               </button>
             </div>
           </form>
 
           <div className="text-[11px] text-slate-400 text-center border-t border-slate-100 pt-3">
-            Protected by 256-Bit SSL Encrypted Handshake · AI Security Gateway
+            Accounts must be provisioned by a portal administrator.
           </div>
         </div>
       </div>
