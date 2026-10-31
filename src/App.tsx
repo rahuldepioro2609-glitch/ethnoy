@@ -20,43 +20,32 @@ import { ExamApplyModal } from './components/ExamApplyModal';
 import { CandidateResultModal } from './components/CandidateResultModal';
 import { AnswerKeyObjectionModal } from './components/AnswerKeyObjectionModal';
 import { FeedbackSlideOut } from './components/FeedbackSlideOut';
-import { NOTICES, ExamItem, NoticeItem } from './data/portalData';
-import { UserCheck, LogOut, CheckCircle2 } from 'lucide-react';
+import { ExamItem, NoticeItem } from './data/portalData';
+import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
 import { ApiError, apiRequest } from './api';
 import { PortalRole, RoleDashboard, RoleLoginPage } from './components/RolePortal';
+import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './utils/examSchedule';
+import { getSavedLanguage, LANGUAGE_LOCALES, Language } from './utils/languageLogic';
 
-function dateOnlyValue(value: string): number {
-  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
-  const date = new Date(year, month - 1, day);
-  if (
-    !Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day) ||
-    date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day
-  ) return Number.NaN;
-  return date.getTime();
-}
-
-function mapPublishedExam(exam: Record<string, unknown>): ExamItem {
+function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
   const examDate = String(exam.examDate).slice(0, 10);
   const regStart = String(exam.regStart).slice(0, 10);
   const regEnd = String(exam.regEnd).slice(0, 10);
-  const examDateValue = new Date(dateOnlyValue(examDate));
-  const today = new Date();
-  const todayValue = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const startValue = dateOnlyValue(regStart);
-  const endValue = dateOnlyValue(regEnd);
-  const isButtonActive = Number.isFinite(startValue) && Number.isFinite(endValue) &&
-    todayValue.getTime() >= startValue && todayValue.getTime() <= endValue;
+  const timeZone = String(exam.timeZone || DEFAULT_EXAM_TIME_ZONE);
+  const dateParts = getDateOnlyParts(examDate, locale);
+  const isButtonActive = isRegistrationOpen(regStart, regEnd, timeZone);
   return {
     id: String(exam.id),
     code: String(exam.code),
     name: String(exam.name),
     category: exam.category as ExamItem['category'],
     targetAudience: String(exam.targetAudience),
-    day: String(examDateValue.getDate()).padStart(2, '0'),
-    month: examDateValue.toLocaleString('en', { month: 'short' }).toUpperCase(),
+    day: dateParts.day,
+    month: dateParts.month,
     regStart,
     regEnd,
     examDate,
+    timeZone,
     fee: String(exam.fee),
     status: isButtonActive ? 'Apply Now' : 'Apply Soon',
     isButtonActive,
@@ -67,10 +56,30 @@ function mapPublishedExam(exam: Record<string, unknown>): ExamItem {
   };
 }
 
+function mapPublishedNotice(notice: Record<string, unknown>, locale: string): NoticeItem {
+  const publishedAt = new Date(String(notice.published_at));
+  const validDate = Number.isFinite(publishedAt.getTime()) ? publishedAt : new Date();
+  return {
+    id: String(notice.id),
+    day: new Intl.DateTimeFormat(locale, { day: '2-digit' }).format(validDate),
+    month: new Intl.DateTimeFormat(locale, { month: 'short' }).format(validDate),
+    title: String(notice.title),
+    date: validDate.toLocaleDateString(locale, { day: '2-digit', month: 'short', year: 'numeric' }),
+    category: notice.category as NoticeItem['category'],
+    isNew: Date.now() - validDate.getTime() < 7 * 24 * 60 * 60 * 1000,
+    summary: String(notice.summary),
+    fullContent: String(notice.full_content),
+    refNo: String(notice.reference_number),
+  };
+}
+
 export default function App() {
   const [pathname, setPathname] = useState(window.location.pathname);
   const [fontSizeLevel, setFontSizeLevel] = useState<number>(0);
   const [highContrast, setHighContrast] = useState<boolean>(false);
+  const [language, setLanguage] = useState<Language>(() => (
+    typeof window === 'undefined' ? 'English' : getSavedLanguage(window.localStorage.getItem('portal-language'))
+  ));
   const [activeNavTab, setActiveNavTab] = useState<string>('Home');
 
   // Active Modals
@@ -83,9 +92,12 @@ export default function App() {
   const [isAnswerKeyOpen, setIsAnswerKeyOpen] = useState(false);
   const [activeNotice, setActiveNotice] = useState<NoticeItem | null>(null);
   const [activeApplyExam, setActiveApplyExam] = useState<ExamItem | null>(null);
-  const [pendingApplyExam, setPendingApplyExam] = useState<ExamItem | null>(null);
+  const [pendingServiceAction, setPendingServiceAction] = useState<(() => void) | null>(null);
   const [selectedExamFilter, setSelectedExamFilter] = useState<string | undefined>(undefined);
   const [publishedExams, setPublishedExams] = useState<ExamItem[]>([]);
+  const [publishedInstituteForms, setPublishedInstituteForms] = useState<Record<string, unknown>[]>([]);
+  const [portalNotices, setPortalNotices] = useState<NoticeItem[]>([]);
+  const [noticeLoadError, setNoticeLoadError] = useState<string | null>(null);
 
   // User state
   const [loggedInUser, setLoggedInUser] = useState<{ name: string; role: string; id: string; accountRole: PortalRole } | null>(null);
@@ -102,7 +114,7 @@ export default function App() {
     const handlePopState = () => setPathname(window.location.pathname);
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [language]);
 
   // Keyboard shortcut listener for Ctrl+K / Cmd+K
   useEffect(() => {
@@ -129,11 +141,58 @@ export default function App() {
 
   useEffect(() => {
     apiRequest<{ exams: Record<string, unknown>[] }>('/api/exams')
-      .then(({ exams }) => setPublishedExams(exams.map(mapPublishedExam)))
+      .then(({ exams }) => setPublishedExams(exams.map((exam) => mapPublishedExam(exam, LANGUAGE_LOCALES[language]))))
       .catch((error: unknown) => {
         setSystemAlert(error instanceof Error ? error.message : 'Could not load published exam forms.');
       });
+  }, [language]);
+
+  useEffect(() => {
+    let active = true;
+    const loadInstituteForms = () => {
+      apiRequest<{ forms: Record<string, unknown>[] }>('/api/institute-forms')
+        .then(({ forms }) => {
+          if (active) setPublishedInstituteForms(forms);
+        })
+        .catch((error: unknown) => {
+          if (active) {
+            setSystemAlert(error instanceof Error ? error.message : 'Could not load approved institute forms.');
+          }
+        });
+    };
+    loadInstituteForms();
+    const interval = window.setInterval(loadInstituteForms, 30_000);
+    window.addEventListener('focus', loadInstituteForms);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', loadInstituteForms);
+    };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadNotices = () => {
+      apiRequest<{ notices: Record<string, unknown>[] }>('/api/notices')
+        .then(({ notices }) => {
+          if (!active) return;
+          setPortalNotices(notices.map((notice) => mapPublishedNotice(notice, LANGUAGE_LOCALES[language])));
+          setNoticeLoadError(null);
+        })
+        .catch((error: unknown) => {
+          if (!active) return;
+          setNoticeLoadError(error instanceof Error ? error.message : 'Could not load published notices.');
+        });
+    };
+    loadNotices();
+    const interval = window.setInterval(loadNotices, 30_000);
+    window.addEventListener('focus', loadNotices);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', loadNotices);
+    };
+  }, [language]);
 
   useEffect(() => {
     apiRequest<{
@@ -165,6 +224,25 @@ export default function App() {
     }
   };
 
+  const requireCandidateLogin = (action: () => void) => {
+    if (loggedInUser?.accountRole === 'candidate') {
+      action();
+      return;
+    }
+    if (loggedInUser) {
+      setSystemAlert('Please sign in with a student account to use this service.');
+      return;
+    }
+    setPendingServiceAction(() => action);
+    navigate('/login/candidate');
+  };
+
+  const handleOpenAdmitCard = () => requireCandidateLogin(() => setIsAdmitCardOpen(true));
+  const handleOpenMockExam = () => requireCandidateLogin(() => setIsMockExamOpen(true));
+  const handleOpenAnswerKey = () => requireCandidateLogin(() => setIsAnswerKeyOpen(true));
+  const handleOpenResults = () => requireCandidateLogin(() => setIsResultOpen(true));
+  const handleOpenCenterLocator = () => requireCandidateLogin(() => setIsCenterLocatorOpen(true));
+
   const handleQuickLinkAction = (actionId: string) => {
     switch (actionId) {
       case 'apply':
@@ -182,18 +260,18 @@ export default function App() {
         navigate('/login/center');
         break;
       case 'admit-card':
-        setIsAdmitCardOpen(true);
+        handleOpenAdmitCard();
         break;
       case 'cbt-mock':
       case 'cbt-exam':
-        setIsMockExamOpen(true);
+        handleOpenMockExam();
         break;
       case 'answer-key':
-        setIsAnswerKeyOpen(true);
+        handleOpenAnswerKey();
         break;
       case 'results':
       case 'result':
-        setIsResultOpen(true);
+        handleOpenResults();
         break;
       case 'ai-proctoring':
         navigate('/login/official');
@@ -202,7 +280,7 @@ export default function App() {
         handleOpenGrievance();
         break;
       case 'centers':
-        setIsCenterLocatorOpen(true);
+        handleOpenCenterLocator();
         break;
       default:
         break;
@@ -210,31 +288,24 @@ export default function App() {
   };
 
   const handleOpenExamApply = (exam: ExamItem) => {
-    const today = new Date();
-    const todayValue = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-    const registrationStart = dateOnlyValue(exam.regStart);
-    const registrationEnd = dateOnlyValue(exam.regEnd);
-    if (!exam.isButtonActive || Number.isNaN(registrationEnd) || Number.isNaN(registrationStart) || todayValue < registrationStart || todayValue > registrationEnd) {
+    if (!exam.isButtonActive || !isRegistrationOpen(exam.regStart, exam.regEnd, exam.timeZone || DEFAULT_EXAM_TIME_ZONE)) {
       setSystemAlert(`Applications for ${exam.name} are not open. Please check the exam schedule.`);
       window.setTimeout(() => setSystemAlert(null), 6000);
       return;
     }
-    if (!loggedInUser || loggedInUser.accountRole !== 'candidate') {
-      setPendingApplyExam(exam);
-      navigate('/login/candidate');
-      return;
-    }
-    setActiveApplyExam(exam);
+    requireCandidateLogin(() => setActiveApplyExam(exam));
   };
 
   const handleOpenGrievance = () => {
-    setIsFeedbackOpen(true);
-    setSystemAlert('Candidate helpdesk is open. Submit your issue using the feedback panel.');
-    setTimeout(() => setSystemAlert(null), 6000);
+    requireCandidateLogin(() => {
+      setIsFeedbackOpen(true);
+      setSystemAlert('Candidate helpdesk is open. Submit your issue using the feedback panel.');
+      setTimeout(() => setSystemAlert(null), 6000);
+    });
   };
 
   const handleNoticeCategoryFilter = (category: string) => {
-    const matched = NOTICES.find((n) => n.category === category);
+    const matched = portalNotices.find((n) => n.category === category);
     if (matched) {
       setActiveNotice(matched);
     } else {
@@ -272,10 +343,10 @@ export default function App() {
       official: 'Assessment Official',
     };
     setLoggedInUser({ ...user, accountRole: user.role, role: roleLabels[user.role] });
-    if (user.role === 'candidate' && pendingApplyExam) {
+    if (user.role === 'candidate' && pendingServiceAction) {
       navigate('/');
-      setActiveApplyExam(pendingApplyExam);
-      setPendingApplyExam(null);
+      pendingServiceAction();
+      setPendingServiceAction(null);
     } else {
       navigate(`/dashboard/${user.role}`);
     }
@@ -299,11 +370,11 @@ export default function App() {
         onHome={() => navigate('/')}
         onOpenAdmitCard={() => {
           navigate('/');
-          setIsAdmitCardOpen(true);
+          handleOpenAdmitCard();
         }}
         onOpenResults={() => {
           navigate('/');
-          setIsResultOpen(true);
+          handleOpenResults();
         }}
       />
     );
@@ -322,6 +393,7 @@ export default function App() {
         highContrast={highContrast}
         onToggleHighContrast={() => setHighContrast((prev) => !prev)}
         onOpenGrievance={handleOpenGrievance}
+        onLanguageChange={setLanguage}
       />
 
       {/* Sticky Navbar: ELTNOY Logo, navigation links, search, and account action */}
@@ -329,13 +401,13 @@ export default function App() {
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenLogin={() => navigate(loggedInUser ? `/dashboard/${loggedInUser.accountRole}` : '/login')}
         isAuthenticated={Boolean(loggedInUser)}
-        onOpenAdmitCard={() => setIsAdmitCardOpen(true)}
-        onOpenMockExam={() => setIsMockExamOpen(true)}
-        onOpenCenterLocator={() => setIsCenterLocatorOpen(true)}
+        onOpenAdmitCard={handleOpenAdmitCard}
+        onOpenMockExam={handleOpenMockExam}
+        onOpenCenterLocator={handleOpenCenterLocator}
         onOpenNoticeCategory={handleNoticeCategoryFilter}
         onSelectExamFilter={(examId) => setSelectedExamFilter(examId)}
-        onOpenResultsPortal={() => setIsResultOpen(true)}
-        onOpenAnswerKeyPortal={() => setIsAnswerKeyOpen(true)}
+        onOpenResultsPortal={handleOpenResults}
+        onOpenAnswerKeyPortal={handleOpenAnswerKey}
         onOpenInstituteDashboard={() => navigate('/login/center')}
         onOpenAiProctoring={() => navigate('/login/official')}
         examinations={publishedExams}
@@ -344,8 +416,39 @@ export default function App() {
       />
 
       <div role="note" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-950">
-        Preview environment: exam schedules, notices, center details, and answer keys contain sample content. Verify and replace it before accepting public applications.
+        Preview environment: exam schedules, center details, and answer keys may contain sample content. Verify all information before accepting public applications.
       </div>
+
+      <section aria-label="Latest portal updates" className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-[1440px] flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:gap-3 sm:px-6 lg:px-8">
+          <div className="flex shrink-0 items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-[#0B2E59]">
+            <BellRing className="h-4 w-4 text-amber-600" />
+            <span>Latest updates</span>
+          </div>
+          <div className="min-w-0 flex-1 overflow-hidden">
+            {portalNotices.length ? <div className="portal-news-track flex w-max items-center gap-6 py-1">
+            {[...portalNotices, ...portalNotices].map((notice, index) => (
+              <button
+                key={`${notice.id}-${index}`}
+                type="button"
+                onClick={() => setActiveNotice(notice)}
+                className="max-w-[280px] truncate text-left text-xs font-semibold text-slate-700 transition hover:text-emerald-700 sm:max-w-[360px]"
+                aria-label={`Open ${notice.category} notice: ${notice.title}`}
+              >
+                <span className="mr-1.5 text-emerald-700">•</span>{notice.title}
+              </button>
+            ))}
+            </div> : <p role={noticeLoadError ? 'alert' : 'status'} className="py-1 text-xs text-slate-500">{noticeLoadError ? `Notices could not be loaded: ${noticeLoadError}` : 'No updates have been published yet.'}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={() => document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' })}
+            className="hidden shrink-0 items-center gap-1 text-xs font-bold text-emerald-800 hover:text-emerald-600 sm:inline-flex"
+          >
+            <CalendarDays className="h-4 w-4" /> Exam calendar
+          </button>
+        </div>
+      </section>
 
       {/* Signed-in account bar */}
       {loggedInUser && (
@@ -407,10 +510,10 @@ export default function App() {
             else setSystemAlert('No exam applications are currently open.');
           }}
           hasOpenExams={publishedExams.some((exam) => exam.isButtonActive)}
-          onOpenMockExam={() => setIsMockExamOpen(true)}
-          onOpenAdmitCard={() => setIsAdmitCardOpen(true)}
-          onOpenResults={() => setIsResultOpen(true)}
-          onOpenAnswerKey={() => setIsAnswerKeyOpen(true)}
+          onOpenMockExam={handleOpenMockExam}
+          onOpenAdmitCard={handleOpenAdmitCard}
+          onOpenResults={handleOpenResults}
+          onOpenAnswerKey={handleOpenAnswerKey}
           onOpenInstituteDashboard={() => navigate('/login/center')}
           onOpenLogin={() => navigate(loggedInUser ? `/dashboard/${loggedInUser.accountRole}` : '/login')}
           isAuthenticated={Boolean(loggedInUser)}
@@ -425,20 +528,52 @@ export default function App() {
           onOpenExamApply={handleOpenExamApply}
           onQuickLinkAction={handleQuickLinkAction}
           examinations={publishedExams}
+          notices={portalNotices}
           filterExamId={selectedExamFilter}
           isAuthenticated={Boolean(loggedInUser)}
         />
 
+        <section aria-labelledby="institute-opportunities-heading" className="bg-white py-8">
+          <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
+            <div className="mb-4">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">Approved by ELTNOY Super Admin</p>
+              <h2 id="institute-opportunities-heading" className="mt-1 text-2xl font-black text-[#0B2E59]">Institute exam & teacher forms</h2>
+              <p className="mt-1 text-sm text-slate-600">These listings are published only after institute and form review. Applications are handled by the institute.</p>
+            </div>
+            {publishedInstituteForms.length ? (
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {publishedInstituteForms.map((form) => (
+                  <article key={String(form.id)} className="rounded-xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
+                    <span className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-800">{form.form_type === 'teacher_recruitment' ? 'Teacher recruitment' : 'Exam application'}</span>
+                    <h3 className="mt-3 text-lg font-extrabold text-[#0B2E59]">{String(form.title)}</h3>
+                    <p className="mt-1 text-sm font-semibold text-slate-600">{String(form.institute_name)}</p>
+                    <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{String(form.description)}</p>
+                    <p className="mt-3 text-sm text-slate-600"><strong>Eligibility:</strong> {String(form.eligibility)}</p>
+                    {typeof form.application_deadline === 'string' && form.application_deadline && <p className="mt-2 text-sm text-slate-600"><strong>Deadline:</strong> {form.application_deadline.slice(0, 10)}</p>}
+                    {typeof form.external_url === 'string' && form.external_url ? (
+                      <a href={form.external_url} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">Apply on institute website</a>
+                    ) : typeof form.contact_email === 'string' && form.contact_email ? (
+                      <a href={`mailto:${form.contact_email}`} className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">Contact institute</a>
+                    ) : (
+                      <p className="mt-4 text-xs text-slate-500">Contact the institute directly for application instructions.</p>
+                    )}
+                  </article>
+                ))}
+              </div>
+            ) : <p className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">No approved institute forms are currently available.</p>}
+          </div>
+        </section>
+
         {/* FREQUENTLY ASKED QUESTIONS (FAQ) ACCORDION */}
         <FAQAccordion
-          onOpenAdmitCard={() => setIsAdmitCardOpen(true)}
-          onOpenMockExam={() => setIsMockExamOpen(true)}
+          onOpenAdmitCard={handleOpenAdmitCard}
+          onOpenMockExam={handleOpenMockExam}
           onOpenExamApply={() => {
             const openExam = publishedExams.find((exam) => exam.isButtonActive);
             if (openExam) handleOpenExamApply(openExam);
             else setSystemAlert('No exam applications are currently open.');
           }}
-          onOpenCenterLocator={() => setIsCenterLocatorOpen(true)}
+          onOpenCenterLocator={handleOpenCenterLocator}
           onOpenFeedback={handleOpenGrievance}
         />
       </main>
@@ -446,10 +581,10 @@ export default function App() {
       {/* FOOTER VALUE PROP: "Why Choose ELTNOY?" 4-Item Horizontal Strip + Full Directory */}
       <FooterValueProp
         onOpenGrievance={handleOpenGrievance}
-        onOpenAdmitCard={() => setIsAdmitCardOpen(true)}
-        onOpenMockExam={() => setIsMockExamOpen(true)}
-        onOpenCenterLocator={() => setIsCenterLocatorOpen(true)}
-        onOpenResults={() => setIsResultOpen(true)}
+        onOpenAdmitCard={handleOpenAdmitCard}
+        onOpenMockExam={handleOpenMockExam}
+        onOpenCenterLocator={handleOpenCenterLocator}
+        onOpenResults={handleOpenResults}
       />
 
       {/* Interactive Modals */}
@@ -472,9 +607,10 @@ export default function App() {
           window.scrollTo({ top: 600, behavior: 'smooth' });
         }}
         onSelectNotice={(notice) => setActiveNotice(notice)}
-        onOpenAdmitCard={() => setIsAdmitCardOpen(true)}
-        onOpenMockExam={() => setIsMockExamOpen(true)}
+        onOpenAdmitCard={handleOpenAdmitCard}
+        onOpenMockExam={handleOpenMockExam}
         examinations={publishedExams}
+        notices={portalNotices}
       />
 
       <CenterLocatorModal
@@ -510,7 +646,7 @@ export default function App() {
       {/* Persistent Feedback & Bug Report Slide-out Panel */}
       <FeedbackSlideOut
         isOpen={isFeedbackOpen}
-        onOpen={() => setIsFeedbackOpen(true)}
+        onOpen={handleOpenGrievance}
         onClose={() => setIsFeedbackOpen(false)}
         loggedInUser={loggedInUser}
       />

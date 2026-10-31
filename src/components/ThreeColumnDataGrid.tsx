@@ -16,17 +16,18 @@ import {
   Building2,
 } from 'lucide-react';
 import {
-  NOTICES,
   QUICK_LINKS_TILES,
   ExamItem,
   NoticeItem,
 } from '../data/portalData';
+import { DEFAULT_EXAM_TIME_ZONE, currentDateInTimeZone } from '../utils/examSchedule';
 
 interface ThreeColumnDataGridProps {
   onOpenNotice: (notice: NoticeItem) => void;
   onOpenExamApply: (exam: ExamItem) => void;
   onQuickLinkAction: (actionId: string) => void;
   examinations: ExamItem[];
+  notices: NoticeItem[];
   filterExamId?: string;
   isAuthenticated: boolean;
 }
@@ -36,6 +37,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   onOpenExamApply,
   onQuickLinkAction,
   examinations,
+  notices,
   filterExamId,
   isAuthenticated,
 }) => {
@@ -67,7 +69,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           {/* COLUMN 1: Latest Notifications (approx 4 cols) */}
-          <div className="lg:col-span-4 bg-white rounded-xl shadow-xs border border-slate-200/90 overflow-hidden flex flex-col">
+          <div id="public-notices" className="scroll-mt-56 lg:col-span-4 bg-white rounded-xl shadow-xs border border-slate-200/90 overflow-hidden flex flex-col">
             {/* Deep Navy Blue Header Bar */}
             <div className="bg-[#0B254E] text-white px-5 py-3.5 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -77,7 +79,8 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                 </h3>
               </div>
               <button
-                onClick={() => onOpenNotice(NOTICES[0])}
+                onClick={() => notices[0] && onOpenNotice(notices[0])}
+                disabled={!notices.length}
                 className="text-xs text-sky-200 hover:text-white transition-colors"
               >
                 View All →
@@ -86,7 +89,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
 
             {/* Notifications Rows */}
             <div className="divide-y divide-slate-100 flex-1">
-              {NOTICES.map((notice) => (
+              {notices.map((notice) => (
                 <button
                   key={notice.id}
                   type="button"
@@ -115,6 +118,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                   </div>
                 </button>
               ))}
+              {!notices.length && <p className="p-5 text-sm text-slate-500">No notices have been published yet.</p>}
             </div>
           </div>
 
@@ -165,7 +169,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
 
                   {/* Right: Apply Button */}
                   <div className="shrink-0">
-                    {exam.isButtonActive && Date.parse(exam.regEnd) >= Date.now() ? (
+                    {exam.isButtonActive ? (
                       <button
                         onClick={() => onOpenExamApply(exam)}
                         className="px-3.5 py-1.5 bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-bold rounded-md shadow-2xs transition-colors whitespace-nowrap"
@@ -176,10 +180,10 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                       <button
                         type="button"
                         disabled
-                        aria-label={`${Date.parse(exam.regEnd) < Date.now() ? 'Registration is closed' : 'Registration has not opened'} for ${exam.name}`}
+                        aria-label={`${exam.regEnd < currentDateInTimeZone(new Date(), exam.timeZone || DEFAULT_EXAM_TIME_ZONE) ? 'Registration is closed' : 'Registration has not opened'} for ${exam.name}`}
                         className="px-3.5 py-1.5 bg-slate-100 text-slate-500 text-xs font-semibold rounded-md border border-slate-200 whitespace-nowrap cursor-not-allowed"
                       >
-                        {Date.parse(exam.regEnd) < Date.now() ? 'Registration closed' : 'Opens soon'}
+                        {exam.regEnd < currentDateInTimeZone(new Date(), exam.timeZone || DEFAULT_EXAM_TIME_ZONE) ? 'Registration closed' : 'Opens soon'}
                       </button>
                     )}
                   </div>

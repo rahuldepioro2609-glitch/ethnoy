@@ -94,9 +94,6 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
   useEffect(() => {
     if (loggedInUser) {
       setCandidateName(loggedInUser.name);
-      if (loggedInUser.id) {
-        setApplicationNumber(loggedInUser.id);
-      }
     }
   }, [loggedInUser]);
 

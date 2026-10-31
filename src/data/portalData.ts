@@ -16,6 +16,7 @@ export interface ExamItem {
   regStart: string;
   regEnd: string;
   examDate: string;
+  timeZone?: string;
   fee: string;
   status: 'Apply Now' | 'Apply Soon';
   isButtonActive: boolean;

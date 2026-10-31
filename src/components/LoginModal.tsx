@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { X, LogIn, User, ShieldCheck, Building2, CheckCircle2, Lock } from 'lucide-react';
+import { X, LogIn, User, ShieldCheck, Building2, CheckCircle2, Lock, Eye, EyeOff } from 'lucide-react';
 import { apiRequest } from '../api';
 
 interface LoginModalProps {
@@ -17,6 +17,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
   const [role, setRole] = useState<'candidate' | 'center' | 'official'>('candidate');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [loggedInNotice, setLoggedInNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -81,7 +82,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
           {/* Role Tabs */}
           <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl text-xs font-semibold">
             <button
-              onClick={() => setRole('candidate')}
+              onClick={() => { setRole('candidate'); setIsPasswordVisible(false); }}
               className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
                 role === 'candidate' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
@@ -90,7 +91,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               <span>Candidate</span>
             </button>
             <button
-              onClick={() => setRole('center')}
+              onClick={() => { setRole('center'); setIsPasswordVisible(false); }}
               className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
                 role === 'center' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
@@ -99,7 +100,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               <span>Center</span>
             </button>
             <button
-              onClick={() => setRole('official')}
+              onClick={() => { setRole('official'); setIsPasswordVisible(false); }}
               className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
                 role === 'official' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
@@ -141,15 +142,26 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               <label htmlFor="portal-login-pass" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 Password / Passkey
               </label>
-              <input
-                id="portal-login-pass"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-                required
-              />
+              <div className="relative">
+                <input
+                  id="portal-login-pass"
+                  type={isPasswordVisible ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  className="w-full px-3.5 py-2.5 pr-12 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsPasswordVisible((visible) => !visible)}
+                  aria-label={isPasswordVisible ? 'Hide password' : 'Show password'}
+                  aria-pressed={isPasswordVisible}
+                  className="absolute inset-y-0 right-0 inline-flex items-center justify-center px-3 text-slate-500 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-emerald-600"
+                >
+                  {isPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
 
             <div className="pt-2 space-y-2">

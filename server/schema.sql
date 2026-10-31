@@ -56,6 +56,21 @@ CREATE TABLE IF NOT EXISTS feedback (
 );
 CREATE INDEX IF NOT EXISTS feedback_created_at_idx ON feedback(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS portal_notices (
+  id text PRIMARY KEY,
+  title text NOT NULL CHECK (char_length(title) BETWEEN 8 AND 180),
+  category text NOT NULL CHECK (category IN ('Registration', 'Admit Card', 'Answer Key', 'Result', 'Circular')),
+  summary text NOT NULL CHECK (char_length(summary) BETWEEN 10 AND 500),
+  full_content text NOT NULL CHECK (char_length(full_content) BETWEEN 10 AND 10000),
+  reference_number text NOT NULL UNIQUE,
+  is_published boolean NOT NULL DEFAULT true,
+  created_by text REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  published_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS portal_notices_published_idx
+  ON portal_notices(is_published, published_at DESC);
+
 CREATE TABLE IF NOT EXISTS applications (
   id text PRIMARY KEY,
   user_id text REFERENCES users(id) ON DELETE SET NULL,
@@ -94,6 +109,7 @@ CREATE TABLE IF NOT EXISTS exams (
   registration_start date NOT NULL,
   registration_end date NOT NULL,
   exam_date date NOT NULL,
+  time_zone text NOT NULL DEFAULT 'Asia/Kolkata',
   fee text NOT NULL,
   duration text NOT NULL,
   mode text NOT NULL,
@@ -103,6 +119,7 @@ CREATE TABLE IF NOT EXISTS exams (
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (registration_end >= registration_start)
 );
+ALTER TABLE exams ADD COLUMN IF NOT EXISTS time_zone text NOT NULL DEFAULT 'Asia/Kolkata';
 CREATE INDEX IF NOT EXISTS exams_public_dates_idx
   ON exams(is_published, registration_start, registration_end);
 
@@ -118,6 +135,54 @@ CREATE TABLE IF NOT EXISTS admit_cards (
   center_address text NOT NULL,
   published_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS answer_key_questions (
+  id text PRIMARY KEY,
+  exam_code text NOT NULL,
+  question_number integer NOT NULL CHECK (question_number > 0),
+  subject text NOT NULL,
+  question_text text NOT NULL,
+  options jsonb NOT NULL,
+  official_key text NOT NULL CHECK (official_key IN ('A', 'B', 'C', 'D')),
+  explanation text NOT NULL DEFAULT '',
+  is_published boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (exam_code, question_number)
+);
+CREATE INDEX IF NOT EXISTS answer_key_public_idx
+  ON answer_key_questions(exam_code, is_published, question_number);
+
+CREATE TABLE IF NOT EXISTS online_exam_questions (
+  id text PRIMARY KEY,
+  exam_code text NOT NULL,
+  exam_name text NOT NULL,
+  duration_minutes integer NOT NULL CHECK (duration_minutes BETWEEN 1 AND 600),
+  question_number integer NOT NULL CHECK (question_number > 0),
+  section text NOT NULL,
+  question_text text NOT NULL,
+  options jsonb NOT NULL,
+  correct_option text NOT NULL CHECK (correct_option IN ('A', 'B', 'C', 'D')),
+  points integer NOT NULL DEFAULT 1 CHECK (points BETWEEN 1 AND 100),
+  is_published boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (exam_code, question_number)
+);
+CREATE INDEX IF NOT EXISTS online_exam_public_idx
+  ON online_exam_questions(exam_code, is_published, question_number);
+
+CREATE TABLE IF NOT EXISTS online_exam_attempts (
+  id text PRIMARY KEY,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  exam_code text NOT NULL,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  submitted_at timestamptz,
+  responses jsonb,
+  score jsonb,
+  UNIQUE (user_id, exam_code)
+);
+CREATE INDEX IF NOT EXISTS online_exam_attempts_user_idx
+  ON online_exam_attempts(user_id, submitted_at DESC);
 
 CREATE TABLE IF NOT EXISTS center_checkins (
   id text PRIMARY KEY,
@@ -159,5 +224,89 @@ CREATE TABLE IF NOT EXISTS published_results (
   published_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (exam_code, roll_number)
 );
+ALTER TABLE published_results ADD COLUMN IF NOT EXISTS is_published boolean NOT NULL DEFAULT true;
 CREATE UNIQUE INDEX IF NOT EXISTS published_results_application_idx
   ON published_results(exam_code, application_number);
+
+CREATE TABLE IF NOT EXISTS institute_forms (
+  id text PRIMARY KEY,
+  institute_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  form_type text NOT NULL CHECK (form_type IN ('exam_application', 'teacher_recruitment')),
+  title text NOT NULL CHECK (char_length(title) BETWEEN 5 AND 160),
+  description text NOT NULL CHECK (char_length(description) BETWEEN 10 AND 3000),
+  eligibility text NOT NULL CHECK (char_length(eligibility) BETWEEN 3 AND 1000),
+  application_deadline date,
+  external_url text,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  reviewed_by text REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS institute_forms_public_idx
+  ON institute_forms(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS institute_forms_institute_idx
+  ON institute_forms(institute_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS institute_profile_changes (
+  id text PRIMARY KEY,
+  institute_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  display_name text NOT NULL CHECK (char_length(display_name) BETWEEN 2 AND 150),
+  contact_email text NOT NULL,
+  registration_number text NOT NULL CHECK (char_length(registration_number) BETWEEN 3 AND 100),
+  registered_address text NOT NULL CHECK (char_length(registered_address) BETWEEN 10 AND 500),
+  website text,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  reviewed_by text REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS institute_profile_changes_pending_idx
+  ON institute_profile_changes(institute_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS institute_profile_changes_status_idx
+  ON institute_profile_changes(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS institute_wallet_entries (
+  id text PRIMARY KEY,
+  institute_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entry_type text NOT NULL CHECK (entry_type IN ('credit', 'debit')),
+  amount_paise bigint NOT NULL CHECK (amount_paise > 0),
+  description text NOT NULL CHECK (char_length(description) BETWEEN 3 AND 300),
+  payment_reference text UNIQUE,
+  transfer_reference text UNIQUE,
+  withdrawal_id text UNIQUE,
+  created_by text REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    (entry_type = 'credit' AND payment_reference IS NOT NULL AND withdrawal_id IS NULL AND transfer_reference IS NULL)
+    OR
+    (entry_type = 'debit' AND payment_reference IS NULL AND withdrawal_id IS NOT NULL AND transfer_reference IS NOT NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS institute_wallet_entries_institute_idx
+  ON institute_wallet_entries(institute_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS institute_withdrawals (
+  id text PRIMARY KEY,
+  institute_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount_paise bigint NOT NULL CHECK (amount_paise > 0),
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'paid')),
+  transfer_reference text UNIQUE,
+  reviewed_by text REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK ((status = 'paid') = (transfer_reference IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS institute_withdrawals_institute_idx
+  ON institute_withdrawals(institute_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS institute_withdrawals_status_idx
+  ON institute_withdrawals(status, created_at DESC);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'institute_wallet_withdrawal_fk'
+  ) THEN
+    ALTER TABLE institute_wallet_entries
+      ADD CONSTRAINT institute_wallet_withdrawal_fk
+      FOREIGN KEY (withdrawal_id) REFERENCES institute_withdrawals(id) ON DELETE CASCADE;
+  END IF;
+END $$;

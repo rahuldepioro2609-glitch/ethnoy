@@ -98,7 +98,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12 relative z-10">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
           {/* Left Column: Heading, Subtitle, 4 Checkmarks, CTAs */}
-          <div className="lg:col-span-5 space-y-5">
+          <div className="lg:col-span-4 space-y-5">
             {/* Tagline */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/80 border border-sky-200 shadow-2xs text-[#0284c7] text-xs font-semibold">
               <Sparkles className="w-3.5 h-3.5 text-sky-500" />
@@ -107,8 +107,8 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
 
             {/* Giant Heading matching ELTNOY layout */}
             <div className="space-y-0.5">
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black text-[#16A34A] tracking-tight leading-none">
-                ELTNOY
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight leading-none">
+                <span className="text-[#16A34A]">ELT</span><span className="text-[#0B5CCA]">NOY</span>
               </h1>
               <h2 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-[#0B254E] tracking-tight leading-tight">
                 Examination Portal
@@ -171,13 +171,15 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             </div>
           </div>
 
-          {/* Center Column: Student Photo with "Your Future Our Mission" */}
-          <div className="lg:col-span-4 relative flex items-center justify-center">
-            <div className="relative w-full max-w-md mx-auto rounded-2xl overflow-hidden shadow-md border border-white/80 bg-white/50 backdrop-blur-xs group">
+          {/* Center Column: Full-width student mission banner */}
+          <div className="lg:col-span-5 relative flex items-center justify-center">
+            <div className="w-full overflow-hidden rounded-2xl border border-white/80 bg-white p-1.5 shadow-lg">
               <img
-                src="/assets/student-hero.png"
-                alt="Students taking examination at ELTNOY Portal - Your Future Our Mission"
-                className="w-full h-auto object-cover transform group-hover:scale-[1.02] transition-transform duration-300"
+                src="/assets/mission-students.png"
+                alt="Student holding books on campus, with the message Your Future, Our Mission"
+                className="block aspect-[16/9] w-full rounded-xl object-contain"
+                loading="eager"
+                decoding="async"
               />
             </div>
           </div>

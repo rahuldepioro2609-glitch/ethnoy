@@ -7,6 +7,30 @@
   }
 }
 
+@keyframes portal-news-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.portal-news-track {
+  animation: portal-news-marquee 34s linear infinite;
+}
+
+.portal-news-track:hover,
+.portal-news-track:focus-within {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portal-news-track {
+    animation: none;
+  }
+}
+
 @media print {
   body * {
     visibility: hidden;

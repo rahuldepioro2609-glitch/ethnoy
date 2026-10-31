@@ -8,15 +8,15 @@ import {
   Search,
   ChevronDown,
   User,
-  Menu,
-  X,
   GraduationCap,
   FileCheck,
   Building2,
   Phone,
   Award,
+  CalendarDays,
 } from 'lucide-react';
 import { ExamItem } from '../data/portalData';
+import { BrandLogo } from './BrandLogo';
 
 interface StickyNavbarProps {
   onOpenSearch: () => void;
@@ -54,7 +54,6 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
   setActiveNavTab,
 }) => {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
@@ -72,44 +71,112 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
     setActiveDropdown((prev) => (prev === name ? null : name));
   };
 
+  const mobileLinks: { label: string; activeTab?: string; onClick: () => void }[] = [
+    { label: 'Home', activeTab: 'Home', onClick: () => {
+      setActiveNavTab('Home');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } },
+    { label: 'Examinations', activeTab: 'Examinations', onClick: () => {
+      setActiveNavTab('Examinations');
+      document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' });
+    } },
+    { label: 'Public Notices', activeTab: 'Public Notices', onClick: () => {
+      setActiveNavTab('Public Notices');
+      document.getElementById('public-notices')?.scrollIntoView({ behavior: 'smooth' });
+    } },
+    { label: 'Admit Card', onClick: onOpenAdmitCard },
+    { label: 'Practice Exam', onClick: onOpenMockExam },
+    { label: 'Answer Keys', onClick: onOpenAnswerKeyPortal },
+    { label: 'Results', activeTab: 'Results', onClick: () => {
+      setActiveNavTab('Results');
+      onOpenResultsPortal();
+    } },
+    { label: 'Institute', activeTab: 'Institute Zone', onClick: onOpenInstituteDashboard },
+    { label: 'Admin', activeTab: 'Institute Zone', onClick: onOpenAiProctoring },
+    { label: 'Contact', activeTab: 'Contact Us', onClick: () => {
+      setActiveNavTab('Contact Us');
+      document.getElementById('footer-contact')?.scrollIntoView({ behavior: 'smooth' });
+    } },
+    { label: 'About', activeTab: 'About Us', onClick: () => {
+      setActiveNavTab('About Us');
+      document.getElementById('about-eltnoy')?.scrollIntoView({ behavior: 'smooth' });
+    } },
+  ];
+
   return (
-    <header className="sticky top-0 z-40 bg-white border-b border-slate-200/90 shadow-2xs">
+    <header className="sticky top-0 z-40 border-b border-slate-200/90 bg-white shadow-2xs">
       <div className="max-w-[1440px] mx-auto px-4 md:px-8">
-        <div className="flex items-center justify-between h-20 gap-4">
-          {/* Left: ELTNOY Brand Logo */}
-          <div className="flex items-center gap-3 shrink-0">
+        <div className="flex min-h-[72px] items-center justify-between gap-4 py-2 sm:min-h-[78px] sm:px-2">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-5">
             <button
               onClick={() => {
                 setActiveNavTab('Home');
                 onSelectExamFilter(undefined);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              className="flex items-center gap-3 text-left group focus-visible:outline-emerald-600 rounded-lg p-0.5"
+              className="flex shrink-0 items-center rounded-lg p-0.5 text-left focus-visible:outline-emerald-600"
               aria-label="ELTNOY Examination Portal Home"
             >
-              {/* Graduation Cap Icon */}
-              <div className="relative">
-                <div className="w-11 h-11 rounded-lg bg-emerald-600/10 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <GraduationCap className="w-7 h-7 text-[#15803D] stroke-[2.2]" />
-                </div>
-              </div>
-              <div className="flex flex-col">
-                <div className="flex items-center text-2xl font-black tracking-tight leading-none">
-                  <span className="text-[#16A34A]">ELT</span>
-                  <span className="text-[#0B254E]">NOY</span>
-                </div>
-                <span className="text-[11px] font-semibold text-slate-600 tracking-wide mt-1">
-                  Examination Portal
-                </span>
-              </div>
+              <BrandLogo />
+            </button>
+            <div className="hidden items-center gap-1 border-l border-slate-200 pl-3 lg:flex xl:gap-2 xl:pl-4">
+              <button
+                type="button"
+                onClick={() => document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' })}
+                className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-emerald-50 hover:text-emerald-800 xl:px-2.5 xl:text-xs"
+              >
+                <CalendarDays className="h-4 w-4 text-emerald-700" />
+                Exam Calendar
+              </button>
+              <button
+                type="button"
+                onClick={() => document.querySelector('[aria-label="Latest portal updates"]')?.scrollIntoView({ behavior: 'smooth' })}
+                className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-amber-50 hover:text-amber-800 xl:px-2.5 xl:text-xs"
+              >
+                <FileCheck className="h-4 w-4 text-amber-600" />
+                Latest Notices
+              </button>
+              <button
+                type="button"
+                onClick={onOpenAdmitCard}
+                className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-sky-50 hover:text-sky-800 xl:px-2.5 xl:text-xs"
+              >
+                <GraduationCap className="h-4 w-4 text-sky-700" />
+                Candidate Services
+              </button>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              className="flex h-10 w-10 items-center justify-center rounded-full text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 sm:h-auto sm:w-56 sm:justify-start sm:gap-2 sm:rounded-lg sm:border sm:border-slate-300 sm:bg-slate-50 sm:px-3 sm:py-2 sm:text-left"
+              title="Search (Ctrl+K)"
+              aria-label="Search exams and portal services"
+            >
+              <Search className="h-5 w-5 shrink-0 text-slate-500" />
+              <span className="hidden truncate text-xs text-slate-500 sm:inline">Search exams and services</span>
+              <span className="ml-auto hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-400 md:inline">Ctrl K</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenLogin}
+              className="flex items-center gap-1.5 rounded-lg bg-[#16A34A] px-3 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-[#15803D] sm:px-4 sm:text-sm"
+              aria-label={isAuthenticated ? 'Open dashboard' : 'Login'}
+            >
+              <User className="h-4 w-4 stroke-[2.2]" />
+              <span className="hidden sm:inline">{isAuthenticated ? 'My Dashboard' : 'Login'}</span>
             </button>
           </div>
+        </div>
 
+        <div className="hidden border-t border-slate-200 bg-white lg:block">
+          <div className="flex min-h-[48px] items-center gap-3">
           {/* Center Navigation Links: Home, Examinations, Student Zone, Institute Zone, Results, Contact Us, About Us */}
           <nav
             ref={dropdownRef}
             aria-label="Primary Navigation"
-            className="hidden lg:flex items-center gap-4 xl:gap-6 text-[13px] font-semibold text-slate-700"
+            className="flex items-center gap-4 xl:gap-6 text-[13px] font-semibold text-slate-700"
           >
             {/* 1. Home */}
             <div className="relative py-2">
@@ -149,6 +216,16 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
 
               {activeDropdown === 'exams' && (
                 <div className="absolute left-0 mt-2 w-72 bg-white rounded-xl shadow-xl border border-slate-200 py-2 animate-in fade-in zoom-in-95 duration-150 z-50">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' });
+                      setActiveDropdown(null);
+                    }}
+                    className="w-full border-b border-slate-100 px-3 py-2 text-left text-xs font-bold text-emerald-800 hover:bg-emerald-50"
+                  >
+                    View exam calendar and application windows →
+                  </button>
                   <div className="px-3 py-1.5 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                     Published exam forms
                   </div>
@@ -167,6 +244,22 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                   )) : <p className="px-3 py-2 text-xs text-slate-500">No exams published yet.</p>}
                 </div>
               )}
+            </div>
+
+            <div className="relative py-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveNavTab('Public Notices');
+                  document.getElementById('public-notices')?.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className={`transition-colors pb-1 ${
+                  activeNavTab === 'Public Notices' ? 'font-bold text-slate-900' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Public Notices
+              </button>
+              {activeNavTab === 'Public Notices' && <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full bg-[#16A34A]" />}
             </div>
 
             {/* 3. Student Zone Dropdown */}
@@ -323,7 +416,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               <button
                 onClick={() => {
                   setActiveNavTab('About Us');
-                  const el = document.getElementById('why-choose-section');
+                  const el = document.getElementById('about-eltnoy');
                   if (el) el.scrollIntoView({ behavior: 'smooth' });
                 }}
                 className={`transition-colors pb-1 ${
@@ -340,134 +433,28 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
             </div>
           </nav>
 
-          {/* Right Section: Search Trigger & Account Button */}
-          <div className="flex items-center gap-3 shrink-0">
-            {/* Search Icon Button */}
-            <button
-              onClick={onOpenSearch}
-              className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-full transition-colors focus-visible:outline-[#16A34A]"
-              title="Search (Ctrl+K)"
-              aria-label="Open search dialog"
-            >
-              <Search className="w-5 h-5 text-slate-600" />
-            </button>
-
-            <button
-              onClick={onOpenLogin}
-              className="flex items-center gap-1.5 px-4 sm:px-5 py-2 text-xs sm:text-sm font-bold text-white bg-[#16A34A] hover:bg-[#15803D] active:bg-[#166534] rounded-lg transition-all shadow-xs"
-              aria-label={isAuthenticated ? 'Open dashboard' : 'Login'}
-            >
-              <User className="w-4 h-4 stroke-[2.2]" />
-              <span>{isAuthenticated ? 'My Dashboard' : 'Login'}</span>
-            </button>
-
-            {/* Mobile Menu Toggle */}
-            <button
-              onClick={() => setMobileMenuOpen((prev) => !prev)}
-              className="lg:hidden p-2 text-slate-700 hover:bg-slate-100 rounded-lg focus-visible:outline-emerald-600"
-              aria-label="Toggle navigation menu"
-            >
-              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-            </button>
-          </div>
         </div>
-      </div>
-
-      {/* Mobile Drawer Menu */}
-      {mobileMenuOpen && (
-        <div className="lg:hidden border-t border-slate-200 bg-white px-4 py-4 space-y-3 shadow-lg">
-          <div className="space-y-1 text-sm font-medium text-slate-800">
-            <button
-              onClick={() => {
-                setActiveNavTab('Home');
-                setMobileMenuOpen(false);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100 font-semibold"
-            >
-              Home
-            </button>
-            <p className="px-3 pt-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">Published exam forms</p>
-            {examinations.length ? examinations.map((exam) => (
+        <nav aria-label="Mobile quick navigation" className="lg:hidden -mx-4 overflow-x-auto border-t border-slate-100 px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex w-max min-w-full items-center gap-2">
+            {mobileLinks.map((item) => (
               <button
-                key={exam.id}
-                onClick={() => {
-                  onSelectExamFilter(exam.id);
-                  setMobileMenuOpen(false);
-                  document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' });
-                }}
-                className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100"
+                key={item.label}
+                type="button"
+                onClick={item.onClick}
+                aria-current={item.activeTab === activeNavTab ? 'page' : undefined}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 ${
+                  item.activeTab === activeNavTab
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-200 hover:bg-emerald-50'
+                }`}
               >
-                {exam.name} <span className="text-xs text-slate-500">({exam.code})</span>
+                {item.label}
               </button>
-            )) : <p className="px-3 py-2 text-sm text-slate-500">No exams published yet.</p>}
-            <button
-              onClick={() => {
-                onOpenAdmitCard();
-                setMobileMenuOpen(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100"
-            >
-              Download Admit Card
-            </button>
-            <button
-              onClick={() => {
-                onOpenMockExam();
-                setMobileMenuOpen(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100"
-            >
-              Online CBT Exam Simulator
-            </button>
-            <button
-              onClick={() => {
-                onOpenResultsPortal();
-                setMobileMenuOpen(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100 font-semibold text-emerald-700"
-            >
-              Candidate Result &amp; Rank Card
-            </button>
-            <button
-              onClick={() => {
-                onOpenAnswerKeyPortal();
-                setMobileMenuOpen(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100 font-semibold text-purple-700"
-            >
-              Answer Keys &amp; Objections
-            </button>
-            <button
-              onClick={() => {
-                onOpenInstituteDashboard();
-                setMobileMenuOpen(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100 font-semibold text-[#0B254E]"
-            >
-              Institute Administration Dashboard
-            </button>
-            <button
-              onClick={() => {
-                onOpenAiProctoring();
-                setMobileMenuOpen(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100 font-semibold text-rose-600"
-            >
-              Official Administration Dashboard
-            </button>
-            <button
-              onClick={() => {
-                setActiveNavTab('About Us');
-                setMobileMenuOpen(false);
-                document.getElementById('why-choose-section')?.scrollIntoView({ behavior: 'smooth' });
-              }}
-              className="w-full text-left px-3 py-2 rounded-md hover:bg-slate-100"
-            >
-              About Us
-            </button>
+            ))}
           </div>
-        </div>
-      )}
+        </nav>
+      </div>
+      </div>
     </header>
   );
 };

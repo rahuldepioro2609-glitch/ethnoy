@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Award,
@@ -22,12 +22,12 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import {
-  SAMPLE_ANSWER_KEYS,
   validateObjection,
   filterQuestions,
   AnswerKeyQuestion,
   CandidateObjection,
 } from '../utils/answerKeyLogic';
+import { apiRequest } from '../api';
 
 interface AnswerKeyObjectionModalProps {
   isOpen: boolean;
@@ -41,8 +41,14 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
   defaultExamName = 'ELTNOY National Test 2025 (ENT-2025)',
 }) => {
   const [activeTab, setActiveTab] = useState<'keys' | 'my-objections'>('keys');
-  const [questions, setQuestions] = useState<AnswerKeyQuestion[]>(SAMPLE_ANSWER_KEYS);
+  const [questions, setQuestions] = useState<AnswerKeyQuestion[]>([]);
   const [objections, setObjections] = useState<CandidateObjection[]>([]);
+  const [keyLoadError, setKeyLoadError] = useState<string | null>(null);
+  const [availableExamCodes, setAvailableExamCodes] = useState<string[]>([]);
+  const [selectedExamCode, setSelectedExamCode] = useState('');
+  const [examOptionsLoaded, setExamOptionsLoaded] = useState(false);
+  const [examOptionsError, setExamOptionsError] = useState<string | null>(null);
+  const [keysLoaded, setKeysLoaded] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedBookletSet, setSelectedBookletSet] = useState<string>('Set A');
@@ -58,6 +64,67 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
   const [uploadedDocName, setUploadedDocName] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+
+  const preferredExamCode = defaultExamName.match(/\(([^()]*)\)\s*$/)?.[1] ?? '';
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setExamOptionsLoaded(false);
+    setExamOptionsError(null);
+    setSelectedExamCode('');
+    let cancelled = false;
+    apiRequest<{ examCodes: string[] }>('/api/answer-keys/exams')
+      .then(({ examCodes }) => {
+        if (cancelled) return;
+        setAvailableExamCodes(examCodes);
+        setSelectedExamCode((current) => examCodes.includes(current)
+          ? current
+          : examCodes.includes(preferredExamCode)
+            ? preferredExamCode
+            : examCodes[0] ?? '');
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) setExamOptionsError(loadError instanceof Error ? loadError.message : 'Could not load published exams.');
+      })
+      .finally(() => {
+        if (!cancelled) setExamOptionsLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [isOpen, preferredExamCode]);
+
+  useEffect(() => {
+    if (!isOpen || !examOptionsLoaded || examOptionsError || !selectedExamCode) return;
+    setKeyLoadError(null);
+    setQuestions([]);
+    setKeysLoaded(false);
+    let cancelled = false;
+    apiRequest<{ questions: Array<{
+      question_number: number;
+      subject: AnswerKeyQuestion['subject'];
+      question_text: string;
+      options: AnswerKeyQuestion['options'];
+      official_key: AnswerKeyQuestion['officialKey'];
+      explanation: string;
+    }> }>(`/api/answer-keys?examCode=${encodeURIComponent(selectedExamCode)}`)
+      .then(({ questions: publishedKeys }) => {
+        if (!cancelled) setQuestions(publishedKeys.map((question) => ({
+          questionNumber: question.question_number,
+          subject: question.subject,
+          questionText: question.question_text,
+          options: question.options,
+          officialKey: question.official_key,
+          status: 'Key Finalized',
+          explanation: question.explanation,
+        })));
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) setKeyLoadError(loadError instanceof Error ? loadError.message : 'Could not load published answer keys.');
+      })
+      .finally(() => {
+        if (!cancelled) setKeysLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [examOptionsError, examOptionsLoaded, isOpen, selectedExamCode]);
 
   if (!isOpen) return null;
 
@@ -243,10 +310,11 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
                 <div className="flex items-start gap-2.5">
                   <BookOpen className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
                   <div>
-                    <span className="font-bold block">Sample answer-key preview — not official exam content</span>
+                    <span className="font-bold block">{examOptionsError || keyLoadError ? 'Answer keys could not be loaded' : questions.length ? `Official answer key · ${selectedExamCode}` : `No official answer key published for ${selectedExamCode || 'this exam'}`}</span>
                     <span className="text-sky-800 text-[11px]">
-                        Questions and answer keys are illustrative samples. Objection filing, document upload, and payment are not enabled.
-                        Do not rely on this preview for a real examination.
+                      {examOptionsError ?? keyLoadError ?? (questions.length
+                        ? 'Published questions and answer options are supplied by the portal administrator. Objection filing and payment are not enabled.'
+                        : 'The portal administrator must upload and publish verified answer-key data before it appears here.')}
                     </span>
                   </div>
                 </div>
@@ -254,6 +322,17 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
 
               {/* Question Items List */}
               <div className="space-y-3">
+                {availableExamCodes.length > 1 && (
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Examination
+                    <select value={selectedExamCode} onChange={(event) => setSelectedExamCode(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5">
+                      {availableExamCodes.map((code) => <option key={code} value={code}>{code}</option>)}
+                    </select>
+                  </label>
+                )}
+                {!examOptionsLoaded && <p className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-600">Loading published examinations…</p>}
+                {examOptionsLoaded && !availableExamCodes.length && !examOptionsError && <p className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-600">No published examination answer keys are available.</p>}
+                {keysLoaded && Boolean(selectedExamCode) && !questions.length && !keyLoadError && <p className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-600">No published questions are available.</p>}
                 {filteredQuestions.map((q) => (
                   <div
                     key={q.questionNumber}

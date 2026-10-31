@@ -12,6 +12,10 @@ import {
   BarChart2,
   GraduationCap,
   ArrowUp,
+  Compass,
+  Target,
+  ListChecks,
+  Scale,
 } from 'lucide-react';
 
 interface FooterValuePropProps {
@@ -35,6 +39,51 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
 
   return (
     <footer className="bg-white border-t border-slate-200">
+      <section id="about-eltnoy" className="scroll-mt-56 border-b border-slate-200 bg-[#F4F8FC] px-4 py-12 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-[1440px]">
+          <div className="mx-auto max-w-3xl text-center">
+            <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-bold uppercase tracking-wider text-emerald-800">
+              <Compass className="h-4 w-4" /> About ELTNOY
+            </span>
+            <h2 className="mt-3 text-3xl font-black tracking-tight text-[#0B254E]">A clearer path through every exam step</h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-base">
+              ELTNOY brings examination information and candidate services together in one digital portal, with dedicated workspaces for students, approved centers, and administrators.
+            </p>
+          </div>
+
+          <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="inline-flex rounded-xl bg-emerald-50 p-2.5 text-emerald-700"><Compass className="h-5 w-5" /></div>
+              <h3 className="mt-4 font-extrabold text-[#0B254E]">Our vision</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">Make examination journeys easier to understand and access through dependable, inclusive digital services.</p>
+            </article>
+            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="inline-flex rounded-xl bg-blue-50 p-2.5 text-blue-700"><Target className="h-5 w-5" /></div>
+              <h3 className="mt-4 font-extrabold text-[#0B254E]">Our mission</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">Connect candidates and examination teams with clear information, secure role-based access, and practical online workflows.</p>
+            </article>
+            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="inline-flex rounded-xl bg-sky-50 p-2.5 text-sky-700"><ListChecks className="h-5 w-5" /></div>
+              <h3 className="mt-4 font-extrabold text-[#0B254E]">Our objectives</h3>
+              <ul className="mt-2 space-y-1.5 text-sm leading-5 text-slate-600">
+                <li>• Make exam notices and application status easy to find.</li>
+                <li>• Provide candidate access to applications, admit cards, results, and practice.</li>
+                <li>• Support accountable administration and center workflows.</li>
+              </ul>
+            </article>
+            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="inline-flex rounded-xl bg-amber-50 p-2.5 text-amber-700"><Scale className="h-5 w-5" /></div>
+              <h3 className="mt-4 font-extrabold text-[#0B254E]">Our principles</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">Accuracy, accessibility, privacy, fairness, and clear responsibility guide how portal features should be used.</p>
+            </article>
+          </div>
+
+          <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950 sm:text-sm">
+            ELTNOY is an independent examination portal and is not affiliated with the National Testing Agency (NTA) or any government body. Notices and schedules shown in this preview may be sample data; rely on verified portal publications for operational information.
+          </div>
+        </div>
+      </section>
+
       {/* "Why Choose ELTNOY?" Horizontal Strip - Exactly as in Reference Image */}
       <div id="why-choose-section" className="border-b border-slate-200/80 bg-white py-5 px-4 sm:px-6 lg:px-8">
         <div className="max-w-[1440px] mx-auto flex flex-col xl:flex-row items-center justify-between gap-6">

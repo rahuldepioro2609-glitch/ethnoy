@@ -37,16 +37,20 @@ export function setSessionCookie(response: Response, token: string): void {
   });
 }
 
+function getSessionToken(request: AuthenticatedRequest): string | undefined {
+  return request.headers.cookie
+    ?.split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${SESSION_COOKIE}=`))
+    ?.slice(SESSION_COOKIE.length + 1);
+}
+
 export async function requireAuth(
   request: AuthenticatedRequest,
   response: Response,
   next: NextFunction,
 ): Promise<void> {
-  const token = request.headers.cookie
-    ?.split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${SESSION_COOKIE}=`))
-    ?.slice(SESSION_COOKIE.length + 1);
+  const token = getSessionToken(request);
   if (typeof token !== 'string' || token.length < 32 || token.length > 128) {
     response.status(401).json({ error: 'Sign in is required.' });
     return;
@@ -93,6 +97,18 @@ export async function requireAuth(
   } catch (error) {
     next(error);
   }
+}
+
+export function optionalAuth(
+  request: AuthenticatedRequest,
+  response: Response,
+  next: NextFunction,
+): void {
+  if (getSessionToken(request) === undefined) {
+    next();
+    return;
+  }
+  void requireAuth(request, response, next);
 }
 
 export function requireRoles(...roles: UserRole[]) {

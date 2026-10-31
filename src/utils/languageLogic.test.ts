@@ -5,25 +5,25 @@ import {
   LANGUAGE_OPTIONS,
   TOP_BAR_TRANSLATIONS,
   getNextLanguage,
+  getSavedLanguage,
   getTopBarTranslation,
+  LANGUAGE_LOCALES,
   Language,
 } from './languageLogic.js';
 
-test('LANGUAGES contains English, Hindi, and Regional', () => {
-  assert.deepEqual(LANGUAGES, ['English', 'Hindi', 'Regional']);
-  assert.equal(LANGUAGE_OPTIONS.length, 3);
+test('LANGUAGES contains the supported launch languages', () => {
+  assert.deepEqual(LANGUAGES, ['English', 'Hindi', 'Kannada', 'Bengali', 'Marathi']);
+  assert.equal(LANGUAGE_OPTIONS.length, 5);
 });
 
-test('getNextLanguage cycles through English -> Hindi -> Regional -> English', () => {
+test('getNextLanguage cycles through all launch languages', () => {
   let lang: Language = 'English';
-  lang = getNextLanguage(lang);
-  assert.equal(lang, 'Hindi');
-
-  lang = getNextLanguage(lang);
-  assert.equal(lang, 'Regional');
-
-  lang = getNextLanguage(lang);
-  assert.equal(lang, 'English');
+  const sequence: Language[] = [];
+  for (let index = 0; index < LANGUAGES.length; index += 1) {
+    lang = getNextLanguage(lang);
+    sequence.push(lang);
+  }
+  assert.deepEqual(sequence, ['Hindi', 'Kannada', 'Bengali', 'Marathi', 'English']);
 });
 
 test('getNextLanguage falls back gracefully if invalid language provided', () => {
@@ -31,7 +31,7 @@ test('getNextLanguage falls back gracefully if invalid language provided', () =>
   assert.equal(getNextLanguage('InvalidLang'), 'English');
 });
 
-test('getTopBarTranslation returns appropriate localized text for each language', () => {
+test('getTopBarTranslation returns localized text for each supported language', () => {
   const en = getTopBarTranslation('English');
   assert.equal(en.welcome, 'Welcome to ELTNOY Examination Portal');
   assert.equal(en.helpdesk, 'Helpdesk');
@@ -40,7 +40,20 @@ test('getTopBarTranslation returns appropriate localized text for each language'
   assert.ok(hi.welcome.includes('स्वागत'));
   assert.equal(hi.helpdesk, 'सहायता केंद्र');
 
-  const reg = getTopBarTranslation('Regional');
-  assert.ok(reg.welcome.includes('ಸುಸ್ವಾಗತ') || reg.welcome.includes('Regional'));
-  assert.ok(reg.helpdesk.includes('Helpdesk') || reg.helpdesk.includes('ಸಹಾಯವಾಣಿ'));
+  assert.ok(getTopBarTranslation('Kannada').welcome.includes('ಸುಸ್ವಾಗತ'));
+  assert.ok(getTopBarTranslation('Bengali').welcome.includes('স্বাগতম'));
+  assert.ok(getTopBarTranslation('Marathi').welcome.includes('स्वागत'));
+  assert.deepEqual(LANGUAGE_LOCALES, {
+    English: 'en-IN',
+    Hindi: 'hi-IN',
+    Kannada: 'kn-IN',
+    Bengali: 'bn-IN',
+    Marathi: 'mr-IN',
+  });
+});
+
+test('getSavedLanguage returns a supported preference or English fallback', () => {
+  assert.equal(getSavedLanguage('Marathi'), 'Marathi');
+  assert.equal(getSavedLanguage('Regional'), 'English');
+  assert.equal(getSavedLanguage(null), 'English');
 });
