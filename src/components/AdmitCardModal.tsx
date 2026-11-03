@@ -6,10 +6,10 @@
 import React, { useState } from 'react';
 import { X, Printer, Download, CheckCircle2, AlertTriangle, ShieldCheck, QrCode, FileText } from 'lucide-react';
 import {
-  validateAdmitCardLookup,
   CandidateAdmitCardData,
 } from '../utils/examLogic';
-import { apiRequest } from '../api';
+import { ApiError, apiRequest } from '../api';
+import { useLanguage } from '../utils/languageContext';
 
 interface AdmitCardModalProps {
   isOpen: boolean;
@@ -18,8 +18,8 @@ interface AdmitCardModalProps {
 }
 
 export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose, defaultExamCode = 'ENT-2025' }) => {
+  const { t } = useLanguage();
   const [appNumber, setAppNumber] = useState('');
-  const [dob, setDob] = useState('');
   const [examCode, setExamCode] = useState(defaultExamCode);
   const [admitCard, setAdmitCard] = useState<CandidateAdmitCardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,25 +29,25 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
 
   const handleLookup = async (e: React.FormEvent) => {
     e.preventDefault();
-    const val = validateAdmitCardLookup(appNumber, dob);
-    if (!val.isValid) {
-      setError(val.error || 'Please fill in all required fields.');
+    if (appNumber.trim().length < 4) {
+      setError('Application number must be at least 4 characters.');
       return;
     }
     setError(null);
     setIsLoading(true);
     try {
-      const { admitCard: card } = await apiRequest<{ admitCard: CandidateAdmitCardData }>('/api/admit-cards/lookup', {
+      const { admitCard: card } = await apiRequest<{ admitCard: CandidateAdmitCardData }>('/api/candidate/admit-cards/lookup', {
         method: 'POST',
         body: JSON.stringify({
           applicationNumber: appNumber.trim(),
-          dateOfBirth: dob,
           examCode,
         }),
       });
       setAdmitCard(card);
     } catch (lookupError) {
-      setError(lookupError instanceof Error ? lookupError.message : 'Could not load the admit card.');
+      setError(lookupError instanceof ApiError && lookupError.status === 401
+        ? t('Your session has expired. Sign in with your candidate account to view your admit card.')
+        : lookupError instanceof Error ? lookupError.message : 'Could not load the admit card.');
     } finally {
       setIsLoading(false);
     }
@@ -73,17 +73,17 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
             </div>
             <div>
               <h2 className="text-base font-bold leading-none">
-                Candidate Admit Card Download Portal
+                {t('Candidate Admit Card Download Portal')}
               </h2>
               <span className="text-xs text-slate-400">
-                Official Hall Ticket Verification &amp; Center Allotment
+                {t('Official Hall Ticket Verification & Center Allotment')}
               </span>
             </div>
           </div>
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-            aria-label="Close dialog"
+            aria-label={t('Close dialog')}
           >
             <X className="w-5 h-5" />
           </button>
@@ -97,14 +97,14 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
               <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-4 text-xs text-blue-900 flex items-start gap-3">
                 <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold">Security Instructions:</span>                   Enter your application number and date of birth. Admit cards are available after an official has published the center allocation.
+                  <span className="font-bold">{t('Security Instructions:')}</span> {t('Enter an application number linked to your signed-in student account. Admit cards are available after an official has published the center allocation.')}
                 </div>
               </div>
 
               <form onSubmit={handleLookup} className="space-y-4">
                 <div>
                   <label htmlFor="admit-exam-select" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Select Examination
+                    {t('Select Examination')}
                   </label>
                   <select
                     id="admit-exam-select"
@@ -121,29 +121,15 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
 
                 <div>
                   <label htmlFor="admit-app-no" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Application Number
+                    {t('Application Number')}
                   </label>
                   <input
                     id="admit-app-no"
                     type="text"
                     value={appNumber}
                     onChange={(e) => setAppNumber(e.target.value)}
-                    placeholder="e.g. NEA-2026-88419"
+                    placeholder={t('e.g. NEA-2026-88419')}
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono font-bold tracking-wide focus:ring-2 focus:ring-emerald-500 focus:outline-hidden uppercase"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="admit-dob" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Date of Birth (YYYY-MM-DD)
-                  </label>
-                  <input
-                    id="admit-dob"
-                    type="date"
-                    value={dob}
-                    onChange={(e) => setDob(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                     required
                   />
                 </div>
@@ -162,7 +148,7 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                     className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
                   >
                     <FileText className="w-4 h-4" />
-                    <span>{isLoading ? 'Checking…' : 'View &amp; Verify Admit Card'}</span>
+                    <span>{t(isLoading ? 'Checking…' : 'View & Verify Admit Card')}</span>
                   </button>
                 </div>
               </form>
@@ -174,7 +160,7 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
               <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-100 rounded-xl border border-slate-200">
                 <div className="flex items-center gap-2 text-xs text-emerald-800 font-bold bg-emerald-100 px-3 py-1.5 rounded-lg">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Authenticated Admit Card Verified (Status: VALID)</span>
+                  <span>{t('Authenticated Admit Card Verified (Status: VALID)')}</span>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -182,14 +168,14 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                     onClick={handleReset}
                     className="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold transition-colors"
                   >
-                    New Search
+                    {t('New Search')}
                   </button>
                   <button
                     onClick={handlePrint}
                     className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs"
                   >
                     <Printer className="w-4 h-4" />
-                    <span>Print / Save as PDF</span>
+                    <span>{t('Print / Save as PDF')}</span>
                   </button>
                 </div>
               </div>
@@ -236,27 +222,27 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 border border-slate-300 p-4 rounded-lg bg-slate-50/50 text-xs">
                   <div className="md:col-span-3 grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-4">
                     <div>
-                      <span className="text-slate-500 font-medium block">Roll Number:</span>
+                      <span className="text-slate-500 font-medium block">{t('Roll Number:')}</span>
                       <strong className="text-slate-900 font-mono text-sm">{admitCard.rollNumber}</strong>
                     </div>
                     <div>
-                      <span className="text-slate-500 font-medium block">Application No:</span>
+                      <span className="text-slate-500 font-medium block">{t('Application No:')}</span>
                       <strong className="text-slate-900 font-mono">{admitCard.applicationNumber}</strong>
                     </div>
                     <div>
-                      <span className="text-slate-500 font-medium block">Candidate Name:</span>
+                      <span className="text-slate-500 font-medium block">{t('Candidate Name:')}</span>
                       <strong className="text-slate-900 uppercase">{admitCard.candidateName}</strong>
                     </div>
                     <div>
-                      <span className="text-slate-500 font-medium block">Father's Name:</span>
+                      <span className="text-slate-500 font-medium block">{t("Father's Name:")}</span>
                       <strong className="text-slate-900 uppercase">{admitCard.fatherName}</strong>
                     </div>
                     <div>
-                      <span className="text-slate-500 font-medium block">Date of Birth:</span>
+                      <span className="text-slate-500 font-medium block">{t('Date of Birth:')}</span>
                       <strong className="text-slate-900">{admitCard.dob}</strong>
                     </div>
                     <div>
-                      <span className="text-slate-500 font-medium block">Category &amp; Gender:</span>
+                      <span className="text-slate-500 font-medium block">{t('Category & Gender:')}</span>
                       <strong className="text-slate-900">{admitCard.category} / {admitCard.gender}</strong>
                     </div>
                   </div>
@@ -277,22 +263,22 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                   </div>
                   <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-4 bg-white border-b border-slate-200">
                     <div>
-                      <span className="text-slate-500 block">Date of Examination:</span>
+                      <span className="text-slate-500 block">{t('Date of Examination:')}</span>
                       <strong className="text-slate-900 text-sm">{admitCard.examDate}</strong>
                     </div>
                     <div>
-                      <span className="text-slate-500 block">Reporting Time at Center:</span>
+                      <span className="text-slate-500 block">{t('Reporting Time at Center:')}</span>
                       <strong className="text-emerald-700 text-sm">{admitCard.reportingTime}</strong>
                       <span className="text-[10px] text-rose-600 block">Gate closes: {admitCard.gateClosingTime}</span>
                     </div>
                     <div>
-                      <span className="text-slate-500 block">Test Timing / Shift:</span>
+                      <span className="text-slate-500 block">{t('Test Timing / Shift:')}</span>
                       <strong className="text-slate-900">{admitCard.examTiming}</strong>
                     </div>
                   </div>
                   <div className="p-4 bg-slate-50">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-slate-500">Center Code:</span>
+                      <span className="text-slate-500">{t('Center Code:')}</span>
                       <strong className="font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
                         {admitCard.centerCode}
                       </strong>
@@ -304,11 +290,11 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
 
                 {/* Key Instructions */}
                 <div className="text-[11px] space-y-1 text-slate-600 border-t border-slate-200 pt-3">
-                  <div className="font-bold text-slate-800 uppercase">Candidate Advisory:</div>
+                  <div className="font-bold text-slate-800 uppercase">{t('Candidate Advisory:')}</div>
                   <ol className="list-decimal pl-4 space-y-0.5">
-                    <li>This Admit Card must be presented at the verification counter along with Original Valid Photo ID.</li>
-                    <li>No candidate will be allowed entry into the examination hall after 08:30 AM (Gate Closing Time).</li>
-                    <li>Biometric Iris &amp; Thumb impression matching will be performed before workstation login.</li>
+                    <li>{t('This Admit Card must be presented at the verification counter along with Original Valid Photo ID.')}</li>
+                    <li>{t('No candidate will be allowed entry into the examination hall after 08:30 AM (Gate Closing Time).')}</li>
+                    <li>{t('Biometric Iris & Thumb impression matching will be performed before workstation login.')}</li>
                   </ol>
                 </div>
               </div>

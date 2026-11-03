@@ -17,9 +17,9 @@ import {
   Language,
   LANGUAGE_OPTIONS,
   getNextLanguage,
-  getSavedLanguage,
   getTopBarTranslation,
 } from '../utils/languageLogic';
+import { useLanguage } from '../utils/languageContext';
 
 interface TopUtilityBarProps {
   fontSizeLevel: number;
@@ -27,7 +27,6 @@ interface TopUtilityBarProps {
   highContrast: boolean;
   onToggleHighContrast: () => void;
   onOpenGrievance: () => void;
-  onLanguageChange?: (lang: Language) => void;
 }
 
 export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
@@ -36,21 +35,13 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
   highContrast,
   onToggleHighContrast,
   onOpenGrievance,
-  onLanguageChange,
 }) => {
-  const [selectedLanguage, setSelectedLanguage] = useState<Language>(() => (
-    typeof window === 'undefined' ? 'English' : getSavedLanguage(window.localStorage.getItem('portal-language'))
-  ));
+  const { language: selectedLanguage, setLanguage, t: translate } = useLanguage();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [indiaTime, setIndiaTime] = useState(() => new Date());
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Active translations for UI text based on component state
   const t = getTopBarTranslation(selectedLanguage);
-
-  useEffect(() => {
-    window.localStorage.setItem('portal-language', selectedLanguage);
-  }, [selectedLanguage]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setIndiaTime(new Date()), 1000);
@@ -73,16 +64,13 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
   }, [isDropdownOpen]);
 
   const handleSelectLanguage = (lang: Language) => {
-    setSelectedLanguage(lang);
+    setLanguage(lang);
     setIsDropdownOpen(false);
-    onLanguageChange?.(lang);
   };
 
   const handleCycleLanguage = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const nextLang = getNextLanguage(selectedLanguage);
-    setSelectedLanguage(nextLang);
-    onLanguageChange?.(nextLang);
+    setLanguage(getNextLanguage(selectedLanguage));
   };
 
   return (
@@ -181,11 +169,11 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
                 className="absolute right-0 mt-1.5 w-52 bg-[#0B254E] border border-sky-900/80 rounded-lg shadow-xl py-1 text-xs z-50 animate-in fade-in-50 zoom-in-95 duration-150"
               >
                 <div className="px-3 py-1 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-sky-900/60 mb-1 flex items-center justify-between">
-                  <span>Portal Language</span>
+                  <span>{translate('Portal Language')}</span>
                   <span className="text-emerald-400 font-mono">{LANGUAGE_OPTIONS.length} Options</span>
                 </div>
                 <p className="px-3 py-1.5 text-[10px] leading-relaxed text-slate-400">
-                  Navigation, forms, and other page content are not translated yet.
+                  {translate('Choose a language to update portal text.')}
                 </p>
 
                 {LANGUAGE_OPTIONS.map((option) => {
@@ -216,13 +204,13 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
                 })}
 
                 <div className="mt-1 pt-1 border-t border-sky-900/60 px-3 py-1 text-[10px] text-slate-400 flex items-center justify-between">
-                  <span>Quick toggle:</span>
+                  <span>{translate('Quick toggle:')}</span>
                   <button
                     type="button"
                     onClick={handleCycleLanguage}
                     className="text-emerald-400 hover:text-emerald-300 underline font-medium cursor-pointer"
                   >
-                    Cycle Next
+                    {translate('Cycle Next')}
                   </button>
                 </div>
               </div>

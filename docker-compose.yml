@@ -1,0 +1,113 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:?Set DEPLOYMENT_MODE to production or development}
+      PORT: "4000"
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN in .env.production}
+      APP_HOSTNAME: ${APP_HOSTNAME:?Set APP_HOSTNAME in .env.production}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER in .env.production}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env.production}
+      DATABASE_SSL: ${DATABASE_SSL:?Set DATABASE_SSL explicitly in .env.production}
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+      NODE_EXTRA_CA_CERTS: /run/postgresql-ca/ca.crt
+      POSTGRES_CA_FILE: ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE in .env.production}
+      POSTGRES_TLS_DIR: ${POSTGRES_TLS_DIR:?Set POSTGRES_TLS_DIR in .env.production}
+      TLS_CERT_DIR: ${TLS_CERT_DIR:?Set TLS_CERT_DIR in .env.production}
+    command:
+      - sh
+      - -ec
+      - |
+        node --import tsx server/validateDeploymentConfig.ts
+        node -e 'const h = process.env.APP_HOSTNAME; if (!h || h.length > 253 || !h.split(".").every(label => label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label))) { console.error("APP_HOSTNAME must be a valid DNS hostname"); process.exit(1); }'
+        exec npm start
+    volumes:
+      - ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE in .env.production}:/run/postgresql-ca/ca.crt:ro
+    expose:
+      - "4000"
+    networks:
+      - backend
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env.production}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/postgresql-tls/server.crt
+      - -c
+      - ssl_key_file=/run/postgresql-tls/server.key
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ${POSTGRES_TLS_DIR:?Set POSTGRES_TLS_DIR in .env.production}:/run/postgresql-tls:ro
+    networks:
+      - database
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  nginx:
+    image: nginxinc/nginx-unprivileged:stable-alpine
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      APP_HOSTNAME: ${APP_HOSTNAME:?Set APP_HOSTNAME in .env.production}
+      NGINX_ENVSUBST_FILTER: "^APP_HOSTNAME$"
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - ./deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${TLS_CERT_DIR:?Set TLS_CERT_DIR in .env.production}:/etc/nginx/tls:ro
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget -q --header=\"Host: $$APP_HOSTNAME\" -O /dev/null http://127.0.0.1:8080/_internal-health"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  backend:
+    driver: bridge
+  database:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:

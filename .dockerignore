@@ -1,0 +1,24 @@
+.git
+.gitignore
+*.dump
+.dump.
+backup/
+backups/
+.env
+.env.*
+!.env.example
+node_modules
+dist
+coverage
+*.log
+*.heic
+*.jpeg
+*.jpg
+*.png
+*.pdf
+.DS_Store
+
+# Preserve application assets used by the production build.
+!public/
+!public/assets/
+!public/assets/*.png

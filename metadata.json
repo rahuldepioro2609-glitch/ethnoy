@@ -1,6 +1,5 @@
 {
   "name": "ELTNOY Examination Portal",
-  "description": "AI-Powered Examination Ecosystem - A secure, transparent, and technology-driven platform for conducting online examinations.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "description": "Examination management platform for applications, exam administration, and candidate services.",
+  "requestFramePermissions": []
 }

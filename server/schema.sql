@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
   registration_number text,
   registered_address text,
   website text,
+  is_super_admin boolean NOT NULL DEFAULT false,
   account_status text NOT NULL DEFAULT 'approved'
     CHECK (account_status IN ('pending', 'approved', 'rejected')),
   created_at timestamptz NOT NULL DEFAULT now()
@@ -16,6 +17,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_email text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_number text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_address text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS website text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin boolean NOT NULL DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status text NOT NULL DEFAULT 'approved';
 DO $$
 BEGIN
@@ -26,6 +28,62 @@ BEGIN
       CHECK (account_status IN ('pending', 'approved', 'rejected'));
   END IF;
 END $$;
+
+CREATE TABLE IF NOT EXISTS institute_status_history (
+  id text PRIMARY KEY,
+  institution_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  previous_status text NOT NULL CHECK (previous_status IN ('pending', 'approved', 'rejected')),
+  new_status text NOT NULL CHECK (new_status IN ('pending', 'approved', 'rejected')),
+  reviewer_user_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  decision_at timestamptz NOT NULL DEFAULT now(),
+  decision_reason text NOT NULL CHECK (char_length(btrim(decision_reason)) BETWEEN 10 AND 1000),
+  CHECK (previous_status <> new_status)
+);
+CREATE INDEX IF NOT EXISTS institute_status_history_institution_idx
+  ON institute_status_history(institution_id, decision_at DESC);
+
+CREATE OR REPLACE FUNCTION reject_institute_status_history_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'institute status history is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS institute_status_history_append_only ON institute_status_history;
+CREATE TRIGGER institute_status_history_append_only
+  BEFORE UPDATE OR DELETE ON institute_status_history
+  FOR EACH ROW EXECUTE FUNCTION reject_institute_status_history_mutation();
+DROP TRIGGER IF EXISTS institute_status_history_no_truncate ON institute_status_history;
+CREATE TRIGGER institute_status_history_no_truncate
+  BEFORE TRUNCATE ON institute_status_history
+  FOR EACH STATEMENT EXECUTE FUNCTION reject_institute_status_history_mutation();
+
+CREATE TABLE IF NOT EXISTS institute_resubmissions (
+  id text PRIMARY KEY,
+  institution_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  submission_version integer NOT NULL CHECK (submission_version > 0),
+  submission_reference text NOT NULL UNIQUE,
+  submitted_data jsonb NOT NULL,
+  previous_status text NOT NULL DEFAULT 'rejected' CHECK (previous_status = 'rejected'),
+  new_status text NOT NULL DEFAULT 'pending' CHECK (new_status = 'pending'),
+  submitted_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (institution_id, submission_version)
+);
+CREATE INDEX IF NOT EXISTS institute_resubmissions_institution_idx
+  ON institute_resubmissions(institution_id, submitted_at DESC);
+CREATE OR REPLACE FUNCTION reject_institute_resubmission_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'institute resubmissions are append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS institute_resubmissions_append_only ON institute_resubmissions;
+CREATE TRIGGER institute_resubmissions_append_only
+  BEFORE UPDATE OR DELETE ON institute_resubmissions
+  FOR EACH ROW EXECUTE FUNCTION reject_institute_resubmission_mutation();
+DROP TRIGGER IF EXISTS institute_resubmissions_no_truncate ON institute_resubmissions;
+CREATE TRIGGER institute_resubmissions_no_truncate
+  BEFORE TRUNCATE ON institute_resubmissions
+  FOR EACH STATEMENT EXECUTE FUNCTION reject_institute_resubmission_mutation();
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
   token_hash text PRIMARY KEY,
@@ -94,6 +152,14 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS user_id text REFERENCES users(
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS father_name text NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS gender text NOT NULL DEFAULT 'Other';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'General';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS ownership_verified_at timestamptz;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS ownership_verified_by text REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS ownership_verification_method text
+  CHECK (ownership_verification_method IN (
+    'identity_document_review',
+    'registered_contact_confirmation',
+    'institution_confirmation'
+  ));
 CREATE INDEX IF NOT EXISTS applications_exam_code_idx ON applications(exam_code);
 CREATE INDEX IF NOT EXISTS applications_created_at_idx ON applications(created_at DESC);
 CREATE INDEX IF NOT EXISTS applications_user_id_idx ON applications(user_id, created_at DESC);

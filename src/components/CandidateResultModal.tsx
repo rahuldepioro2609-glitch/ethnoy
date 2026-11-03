@@ -25,7 +25,7 @@ import {
   getCutoffComparison,
   CandidateScorecard,
 } from '../utils/resultLogic';
-import { apiRequest } from '../api';
+import { ApiError, apiRequest } from '../api';
 
 interface CandidateResultModalProps {
   isOpen: boolean;
@@ -60,7 +60,7 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
     setActiveScorecard(null);
     setHasSearched(true);
     try {
-      const { scorecard } = await apiRequest<{ scorecard: CandidateScorecard }>('/api/results/lookup', {
+      const { scorecard } = await apiRequest<{ scorecard: CandidateScorecard }>('/api/candidate/results/lookup', {
         method: 'POST',
         body: JSON.stringify({
           identifier: rollInput.trim(),
@@ -70,7 +70,9 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
       });
       setActiveScorecard(scorecard);
     } catch (error) {
-      setLookupError(error instanceof Error ? error.message : 'Could not load the result.');
+      setLookupError(error instanceof ApiError && error.status === 401
+        ? 'Your session has expired. Sign in with your candidate account to view your result.'
+        : error instanceof Error ? error.message : 'Could not load the result.');
     } finally {
       setIsSearching(false);
     }

@@ -9,13 +9,30 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { z } from 'zod';
-import { AuthenticatedRequest, SESSION_TTL_MS, hashSessionToken, newSessionToken, optionalAuth, requireAuth, requireRoles, setSessionCookie } from './auth.js';
+import { AuthenticatedRequest, registrationPasswordSchema, SESSION_TTL_MS, hashSessionToken, newSessionToken, optionalAuth, requireAuth, requireRoles, requireSuperAdmin, requireTrustedMutationOrigin, setSessionCookie } from './auth.js';
 import { addWorkbookSheet, readWorkbookSheet, WORKBOOK_MIME_TYPE } from './adminWorkbook.js';
+import {
+  candidateApplicationsQuery,
+  candidateAdmitCardQuery,
+  candidatePracticeHistoryQuery,
+  candidateResultLookupQuery,
+  candidateResultsQuery,
+  centerCheckinsQuery,
+  centerWorkspaceQueries,
+  linkLegacyApplicationQuery,
+} from './authorizationQueries.js';
 import { pool } from './db.js';
 import { scoreMockResponses } from './mockScoring.js';
 import { DEFAULT_EXAM_TIME_ZONE, isValidTimeZone } from '../src/utils/examSchedule.js';
+import { createInstitutionDocumentsRouter } from './institutionDocuments.js';
+import {
+  createInstitutionSubmissionRouter,
+  createSubmissionCycle,
+  issueSubmissionCapability,
+  setInstitutionSubmissionCookie,
+} from './institutionSubmission.js';
 
-const app = express();
+export const app = express();
 const port = Number(process.env.PORT || 4000);
 const sessionSeconds = Math.floor(SESSION_TTL_MS / 1000);
 
@@ -29,16 +46,7 @@ app.use(helmet({
   },
 }));
 app.use(express.json({ limit: '32kb' }));
-app.use((request, response, next) => {
-  const origin = request.get('origin');
-  const allowedOrigin = process.env.APP_ORIGIN;
-  const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
-  if (isMutation && origin && allowedOrigin && origin !== allowedOrigin) {
-    response.status(403).json({ error: 'Request origin is not allowed.' });
-    return;
-  }
-  next();
-});
+app.use(requireTrustedMutationOrigin);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -54,7 +62,6 @@ const publicWriteLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many requests. Please try again later.' },
 });
-
 function asyncRoute(handler: (request: Request, response: Response) => Promise<void>): RequestHandler {
   return (request, response, next: NextFunction) => {
     handler(request, response).catch(next);
@@ -219,7 +226,25 @@ app.get('/api/admin/workbook-template', requireAuth, requireRoles('official'), a
   response.send(Buffer.from(buffer));
 }));
 
-app.get('/api/admin/data-export', requireAuth, requireRoles('official'), asyncRoute(async (_request, response) => {
+app.get('/api/admin/dashboard-stats', requireAuth, requireRoles('official'), asyncRoute(async (_request, response) => {
+  const { rows } = await pool.query(
+    `SELECT
+       (SELECT count(*) FROM applications) AS applications,
+       (SELECT count(*) FROM feedback WHERE status <> 'resolved') AS open_helpdesk,
+       (SELECT count(*) FROM mock_exam_attempts) AS mock_exam_attempts,
+       (SELECT count(*) FROM published_results WHERE is_published = true) AS published_results`,
+  );
+  response.json({
+    stats: {
+      applications: Number(rows[0].applications),
+      openHelpdesk: Number(rows[0].open_helpdesk),
+      mockExamAttempts: Number(rows[0].mock_exam_attempts),
+      publishedResults: Number(rows[0].published_results),
+    },
+  });
+}));
+
+app.get('/api/admin/data-export', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (_request, response) => {
   const workbook = new ExcelJS.Workbook();
   const [
     users, applications, exams, admitCards, checkins, feedback, attempts, results, answerKeys, onlineQuestions, onlineAttempts, notices,
@@ -874,23 +899,79 @@ app.get('/api/admin/institutes', requireAuth, requireRoles('official'), asyncRou
 }));
 
 app.patch('/api/admin/institutes/:id', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
-  const parsed = z.object({ status: z.enum(['approved', 'rejected']) }).safeParse(request.body);
+  const parsed = z.object({
+    status: z.enum(['approved', 'rejected']),
+    reason: z.string().trim().min(10).max(1000),
+  }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
     return;
   }
-  const { rows } = await pool.query(
-    `UPDATE users SET account_status = $2
-     WHERE id = $1 AND role = 'center' AND account_status = 'pending'
-     RETURNING id, login_id, display_name, contact_email, registration_number,
-               registered_address, website, account_status, created_at`,
-    [request.params.id, parsed.data.status],
-  );
-  if (!rows[0]) {
-    response.status(404).json({ error: 'Pending institute request not found.' });
-    return;
+  const reviewer = getUser(request);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: currentRows } = await client.query(
+      `SELECT id, account_status FROM users
+       WHERE id = $1 AND role = 'center' FOR UPDATE`,
+      [request.params.id],
+    );
+    const current = currentRows[0];
+    if (!current || current.account_status !== 'pending') {
+      await client.query('ROLLBACK');
+      response.status(404).json({ error: 'Pending institute request not found.' });
+      return;
+    }
+
+    const { rows } = await client.query(
+      `UPDATE users SET account_status = $2
+       WHERE id = $1 AND role = 'center' AND account_status = 'pending'
+       RETURNING id, login_id, display_name, contact_email, registration_number,
+                 registered_address, website, account_status, created_at`,
+      [request.params.id, parsed.data.status],
+    );
+    if (!rows[0]) {
+      await client.query('ROLLBACK');
+      response.status(404).json({ error: 'Pending institute request not found.' });
+      return;
+    }
+    await client.query(
+      `INSERT INTO institute_status_history
+       (id, institution_id, previous_status, new_status, reviewer_user_id, decision_reason)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [randomUUID(), current.id, current.account_status, parsed.data.status, reviewer?.id, parsed.data.reason],
+    );
+    const { rows: submissionSchemaRows } = await client.query(
+      `SELECT to_regclass('institution_submission_capabilities') AS capabilities_table,
+              to_regclass('institution_submission_cycles') AS cycles_table`,
+    );
+    const hasCapabilities = Boolean(submissionSchemaRows[0]?.capabilities_table);
+    const hasCycles = Boolean(submissionSchemaRows[0]?.cycles_table);
+    if (hasCapabilities !== hasCycles) {
+      throw new Error('Institution submission schema is only partially installed.');
+    }
+    if (hasCapabilities && hasCycles) {
+      await client.query(
+        `UPDATE institution_submission_capabilities
+         SET revoked_at = COALESCE(revoked_at, now())
+         WHERE institution_id = $1 AND revoked_at IS NULL`,
+        [current.id],
+      );
+      await client.query(
+        `UPDATE institution_submission_cycles
+         SET status = 'closed', closed_at = COALESCE(closed_at, now())
+         WHERE institution_id = $1 AND status = 'open'`,
+        [current.id],
+      );
+    }
+    await client.query('COMMIT');
+    response.json({ institute: rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-  response.json({ institute: rows[0] });
 }));
 
 app.get('/api/institute-forms', asyncRoute(async (_request, response) => {
@@ -908,44 +989,9 @@ app.get('/api/institute-forms', asyncRoute(async (_request, response) => {
 
 app.get('/api/center/workspace', requireAuth, requireRoles('center'), asyncRoute(async (request, response) => {
   const user = getUser(request);
-  const [profile, forms, profileChanges, entries, withdrawals, balance] = await Promise.all([
-    pool.query(
-      `SELECT display_name, contact_email, registration_number, registered_address, website
-       FROM users WHERE id = $1 AND role = 'center'`,
-      [user?.id],
-    ),
-    pool.query(
-      `SELECT id, form_type, title, description, eligibility, application_deadline,
-              external_url, status, created_at
-       FROM institute_forms WHERE institute_id = $1 ORDER BY created_at DESC LIMIT 200`,
-      [user?.id],
-    ),
-    pool.query(
-      `SELECT id, display_name, contact_email, registration_number, registered_address,
-              website, status, created_at
-       FROM institute_profile_changes WHERE institute_id = $1 ORDER BY created_at DESC LIMIT 100`,
-      [user?.id],
-    ),
-    pool.query(
-      `SELECT id, entry_type, amount_paise, description, payment_reference,
-              transfer_reference, created_at
-       FROM institute_wallet_entries WHERE institute_id = $1 ORDER BY created_at DESC LIMIT 200`,
-      [user?.id],
-    ),
-    pool.query(
-      `SELECT id, amount_paise, status, transfer_reference, created_at, reviewed_at
-       FROM institute_withdrawals WHERE institute_id = $1 ORDER BY created_at DESC LIMIT 100`,
-      [user?.id],
-    ),
-    pool.query(
-      `SELECT
-         COALESCE((SELECT SUM(CASE WHEN entry_type = 'credit' THEN amount_paise ELSE -amount_paise END)
-                   FROM institute_wallet_entries WHERE institute_id = $1), 0)::text AS balance_paise,
-         COALESCE((SELECT SUM(amount_paise) FROM institute_withdrawals
-                   WHERE institute_id = $1 AND status IN ('pending', 'approved')), 0)::text AS reserved_paise`,
-      [user?.id],
-    ),
-  ]);
+  const [profile, forms, profileChanges, entries, withdrawals, balance] = await Promise.all(
+    centerWorkspaceQueries(user!.id).map(({ text, values }) => pool.query(text, values)),
+  );
   const wallet = balance.rows[0];
   response.json({
     profile: profile.rows[0],
@@ -1322,7 +1368,7 @@ app.patch('/api/admin/exams/:id', requireAuth, requireRoles('official'), asyncRo
 const accountRegistrationSchema = z.object({
   loginId: z.string().trim().min(4).max(50).regex(/^[A-Za-z0-9._-]+$/),
   name: z.string().trim().min(2).max(120),
-  password: z.string().min(12).max(128),
+  password: registrationPasswordSchema,
 });
 
 app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response) => {
@@ -1345,11 +1391,17 @@ app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response)
     return;
   }
   const token = newSessionToken();
-  await pool.query(
-    `INSERT INTO auth_sessions (token_hash, user_id, expires_at)
-     VALUES ($1, $2, now() + ($3 * interval '1 second'))`,
-    [hashSessionToken(token), rows[0].id, sessionSeconds],
-  );
+  try {
+    await pool.query(
+      `INSERT INTO auth_sessions (token_hash, user_id, expires_at)
+       VALUES ($1, $2, now() + ($3 * interval '1 second'))`,
+      [hashSessionToken(token), rows[0].id, sessionSeconds],
+    );
+  } catch {
+    // Session row could not be persisted — do not issue a cookie.
+    response.status(503).json({ error: 'Account created but session could not be started. Please sign in.' });
+    return;
+  }
   setSessionCookie(response, token);
   response.status(201).json({
     user: { id: rows[0].id, loginId: rows[0].login_id, name: rows[0].display_name, role: rows[0].role },
@@ -1369,23 +1421,163 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
   }
   const { loginId, name, password, contactEmail, registrationNumber, registeredAddress, website } = parsed.data;
   const passwordHash = await bcrypt.hash(password, 12);
-  const { rows } = await pool.query(
-    `INSERT INTO users
-     (id, login_id, display_name, role, password_hash, contact_email,
-      registration_number, registered_address, website, account_status)
-     VALUES ($1, $2, $3, 'center', $4, $5, $6, $7, $8, 'pending')
-     ON CONFLICT (login_id) DO NOTHING
-     RETURNING id`,
-    [randomUUID(), loginId.toUpperCase(), name, passwordHash, contactEmail.toLowerCase(),
-      registrationNumber, registeredAddress, website || null],
-  );
-  if (!rows[0]) {
-    response.status(409).json({ error: 'That institute login ID is already in use. Choose another.' });
-    return;
+  const client = await pool.connect();
+  let issue: Awaited<ReturnType<typeof issueSubmissionCapability>> | undefined;
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO users
+       (id, login_id, display_name, role, password_hash, contact_email,
+        registration_number, registered_address, website, account_status)
+       VALUES ($1, $2, $3, 'center', $4, $5, $6, $7, $8, 'pending')
+       ON CONFLICT (login_id) DO NOTHING
+       RETURNING id`,
+      [randomUUID(), loginId.toUpperCase(), name, passwordHash, contactEmail.toLowerCase(),
+        registrationNumber, registeredAddress, website || null],
+    );
+    if (!rows[0]) {
+      await client.query('ROLLBACK');
+      response.status(409).json({ error: 'That institute login ID is already in use. Choose another.' });
+      return;
+    }
+    const institutionId = String(rows[0].id);
+    const cycleId = await createSubmissionCycle(client, {
+      institutionId,
+      submissionVersion: 1,
+      sourceType: 'initial_registration',
+    });
+    issue = await issueSubmissionCapability(client, institutionId, cycleId);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '42P01') {
+      response.status(503).json({
+        error: 'Institution document submission is not configured. Review and apply the separate submission migration before registering institutions.',
+      });
+      return;
+    }
+    throw error;
+  } finally {
+    client.release();
   }
+  if (issue) setInstitutionSubmissionCookie(response, issue);
   response.status(201).json({
     message: 'Institute request submitted. Super Admin will verify the registration details before approval.',
   });
+}));
+
+app.post('/api/center/resubmit', authLimiter, asyncRoute(async (request, response) => {
+  const parsed = accountRegistrationSchema.extend({
+    contactEmail: z.string().trim().email().max(254),
+    registrationNumber: z.string().trim().min(3).max(100),
+    registeredAddress: z.string().trim().min(10).max(500),
+    website: z.string().trim().max(200).optional().or(z.literal('')),
+  }).safeParse(request.body);
+  if (!parsed.success) {
+    sendValidationError(response, parsed.error);
+    return;
+  }
+  const {
+    loginId, name, password, contactEmail, registrationNumber, registeredAddress, website,
+  } = parsed.data;
+  const { rows: accountRows } = await pool.query(
+    `SELECT id, password_hash FROM users WHERE login_id = $1 AND role = 'center'`,
+    [loginId.toUpperCase()],
+  );
+  const account = accountRows[0];
+  if (!account || !(await bcrypt.compare(password, account.password_hash))) {
+    response.status(401).json({ error: 'Invalid institute login ID or password.' });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: lockedRows } = await client.query(
+      `SELECT id, account_status FROM users
+       WHERE id = $1 AND role = 'center' FOR UPDATE`,
+      [account.id],
+    );
+    const lockedAccount = lockedRows[0];
+    if (!lockedAccount || lockedAccount.account_status !== 'rejected') {
+      await client.query('ROLLBACK');
+      response.status(409).json({ error: 'Only a rejected institute application can be resubmitted.' });
+      return;
+    }
+
+    const { rows: versionRows } = await client.query(
+      `SELECT COALESCE(MAX(submission_version), 0) + 1 AS next_version
+       FROM institute_resubmissions WHERE institution_id = $1`,
+      [account.id],
+    );
+    const version = Number(versionRows[0].next_version);
+    const submissionReference = randomUUID();
+    const submittedData = {
+      displayName: name,
+      contactEmail: contactEmail.toLowerCase(),
+      registrationNumber,
+      registeredAddress,
+      website: website || null,
+    };
+    const { rows: updatedRows } = await client.query(
+      `UPDATE users
+       SET display_name = $2, contact_email = $3, registration_number = $4,
+           registered_address = $5, website = $6, account_status = 'pending'
+       WHERE id = $1 AND role = 'center' AND account_status = 'rejected'
+       RETURNING id, login_id, display_name, contact_email, registration_number,
+                 registered_address, website, account_status, created_at`,
+      [account.id, name, contactEmail.toLowerCase(), registrationNumber, registeredAddress, website || null],
+    );
+    if (!updatedRows[0]) {
+      await client.query('ROLLBACK');
+      response.status(409).json({ error: 'Only a rejected institute application can be resubmitted.' });
+      return;
+    }
+    await client.query(
+      `INSERT INTO institute_resubmissions
+       (id, institution_id, submission_version, submission_reference, submitted_data,
+        previous_status, new_status)
+       VALUES ($1, $2, $3, $4, $5::jsonb, 'rejected', 'pending')`,
+      [randomUUID(), account.id, version, submissionReference, JSON.stringify(submittedData)],
+    );
+    await client.query(
+      `UPDATE institution_submission_cycles
+       SET status = 'closed', closed_at = now()
+       WHERE institution_id = $1 AND status = 'open'`,
+      [account.id],
+    );
+    await client.query(
+      `UPDATE institution_submission_capabilities
+       SET revoked_at = COALESCE(revoked_at, now())
+       WHERE institution_id = $1 AND revoked_at IS NULL`,
+      [account.id],
+    );
+    const cycleId = await createSubmissionCycle(client, {
+      institutionId: String(account.id),
+      submissionVersion: version + 1,
+      sourceType: 'resubmission',
+      sourceReference: submissionReference,
+    });
+    const capabilityIssue = await issueSubmissionCapability(client, String(account.id), cycleId);
+    await client.query('COMMIT');
+    setInstitutionSubmissionCookie(response, capabilityIssue);
+    response.status(200).json({
+      message: 'Corrected institute details submitted for review. Portal access remains unavailable until approval.',
+      submissionReference,
+      submissionVersion: version,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '42P01') {
+      response.status(503).json({
+        error: 'Institution document submission is not configured. Review and apply the separate submission migration before resubmitting.',
+      });
+      return;
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }));
 
 app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) => {
@@ -1402,7 +1594,7 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
 
   const { loginId, password, role } = parsed.data;
   const { rows } = await pool.query(
-    'SELECT id, login_id, display_name, role, password_hash, account_status FROM users WHERE login_id = $1 AND role = $2',
+    'SELECT id, login_id, display_name, role, password_hash, account_status, is_super_admin FROM users WHERE login_id = $1 AND role = $2',
     [loginId.toUpperCase(), role],
   );
   const user = rows[0];
@@ -1421,20 +1613,40 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
 
   const token = newSessionToken();
   const tokenHash = hashSessionToken(token);
-  await pool.query(
-    `INSERT INTO auth_sessions (token_hash, user_id, expires_at)
-     VALUES ($1, $2, now() + ($3 * interval '1 second'))`,
-    [tokenHash, user.id, sessionSeconds],
-  );
+  try {
+    await pool.query(
+      `INSERT INTO auth_sessions (token_hash, user_id, expires_at)
+       VALUES ($1, $2, now() + ($3 * interval '1 second'))`,
+      [tokenHash, user.id, sessionSeconds],
+    );
+  } catch {
+    // Session row could not be persisted — do not issue a cookie.
+    response.status(503).json({ error: 'Sign in failed: session could not be created. Please try again.' });
+    return;
+  }
   setSessionCookie(response, token);
   response.json({
-    user: { id: user.id, loginId: user.login_id, name: user.display_name, role: user.role },
+    user: {
+      id: user.id,
+      loginId: user.login_id,
+      name: user.display_name,
+      role: user.role,
+      isSuperAdmin: user.is_super_admin === true,
+    },
   });
 }));
 
 app.get('/api/auth/me', requireAuth, asyncRoute(async (request, response) => {
   const user = getUser(request);
-  response.json({ user: { id: user?.id, loginId: user?.loginId, name: user?.name, role: user?.role } });
+  response.json({
+    user: {
+      id: user?.id,
+      loginId: user?.loginId,
+      name: user?.name,
+      role: user?.role,
+      isSuperAdmin: user?.isSuperAdmin ?? false,
+    },
+  });
 }));
 
 app.post('/api/auth/logout', requireAuth, asyncRoute(async (request, response) => {
@@ -1535,57 +1747,108 @@ app.post('/api/applications', requireAuth, requireRoles('candidate'), publicWrit
 
   const input = parsed.data;
   const user = getUser(request);
-  const existingApplication = await pool.query(
-    'SELECT application_number FROM applications WHERE user_id = $1 AND exam_code = $2',
-    [user?.id, input.examCode.toUpperCase()],
-  );
-  if (existingApplication.rows[0]) {
-    response.status(409).json({ error: 'You have already submitted an application for this exam.' });
-    return;
-  }
-  const exam = await pool.query(
-    `SELECT code, time_zone,
-            extract(year FROM now() AT TIME ZONE time_zone)::int AS application_year
-     FROM exams
-     WHERE code = $1 AND is_published = true
-       AND (now() AT TIME ZONE time_zone)::date BETWEEN registration_start AND registration_end`,
-    [input.examCode.toUpperCase()],
-  );
-  if (!exam.rows[0]) {
-    response.status(400).json({ error: 'Applications are not open for this exam.' });
-    return;
-  }
-  const applicationId = randomUUID();
-  let applicationNumber = '';
-  let rows: Record<string, unknown>[] = [];
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    applicationNumber = `APP-${exam.rows[0].application_year}-${randomInt(100000, 1_000_000)}`;
-    const result = await pool.query(
-      `INSERT INTO applications
-       (id, user_id, application_number, exam_code, candidate_name, father_name, date_of_birth, gender, category, email, phone,
-        first_city_preference, second_city_preference, language_medium)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       ON CONFLICT DO NOTHING RETURNING *`,
-      [applicationId, user?.id, applicationNumber, input.examCode.toUpperCase(), input.candidateName,
-        input.fatherName, input.dateOfBirth, input.gender, input.category, input.email.toLowerCase(),
-        input.phone, input.firstCityPreference, input.secondCityPreference, input.languageMedium],
+  const examCode = input.examCode.toUpperCase();
+  const client = await pool.connect();
+  let transactionOpen = false;
+  try {
+    await client.query('BEGIN');
+    transactionOpen = true;
+
+    const existingApplication = await client.query(
+      'SELECT application_number FROM applications WHERE user_id = $1 AND exam_code = $2',
+      [user?.id, examCode],
     );
-    rows = result.rows;
-    if (rows[0]) break;
+    if (existingApplication.rows[0]) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      response.status(409).json({ error: 'You have already submitted an application for this exam.' });
+      return;
+    }
+
+    const exam = await client.query(
+      'SELECT code FROM exams WHERE code = $1 FOR SHARE',
+      [examCode],
+    );
+    if (!exam.rows[0]) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      response.status(400).json({ error: 'Applications are not open for this exam.' });
+      return;
+    }
+
+    const applicationId = randomUUID();
+    let rows: Record<string, unknown>[] = [];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const result = await client.query(
+        `WITH acceptance_clock AS MATERIALIZED (
+           SELECT clock_timestamp() AS accepted_at
+         )
+         INSERT INTO applications
+         (id, user_id, application_number, exam_code, candidate_name, father_name, date_of_birth, gender, category, email, phone,
+          first_city_preference, second_city_preference, language_medium)
+         SELECT $1, $2,
+                'APP-' || extract(year FROM acceptance_clock.accepted_at AT TIME ZONE e.time_zone)::int::text || '-' || $3::text,
+                e.code, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+         FROM exams e CROSS JOIN acceptance_clock
+         WHERE e.code = $4 AND e.is_published = true
+           AND (acceptance_clock.accepted_at AT TIME ZONE e.time_zone)::date
+             BETWEEN e.registration_start AND e.registration_end
+         ON CONFLICT DO NOTHING RETURNING *`,
+        [applicationId, user?.id, randomInt(100000, 1_000_000), examCode, input.candidateName,
+          input.fatherName, input.dateOfBirth, input.gender, input.category, input.email.toLowerCase(),
+          input.phone, input.firstCityPreference, input.secondCityPreference, input.languageMedium],
+      );
+      rows = result.rows;
+      if (rows[0]) break;
+
+      const duplicate = await client.query(
+        'SELECT application_number FROM applications WHERE user_id = $1 AND exam_code = $2',
+        [user?.id, examCode],
+      );
+      if (duplicate.rows[0]) {
+        await client.query('ROLLBACK');
+        transactionOpen = false;
+        response.status(409).json({ error: 'You have already submitted an application for this exam.' });
+        return;
+      }
+
+      const stillOpen = await client.query(
+        `SELECT is_published
+           AND (clock_timestamp() AT TIME ZONE time_zone)::date BETWEEN registration_start AND registration_end AS is_open
+         FROM exams WHERE code = $1`,
+        [examCode],
+      );
+      if (!stillOpen.rows[0]?.is_open) {
+        await client.query('ROLLBACK');
+        transactionOpen = false;
+        response.status(400).json({ error: 'Applications are not open for this exam.' });
+        return;
+      }
+    }
+    if (!rows[0]) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      response.status(409).json({ error: 'An application for this exam may already exist on your account.' });
+      return;
+    }
+
+    await client.query('COMMIT');
+    transactionOpen = false;
+    response.status(201).json({
+      application: {
+        id: rows[0].id,
+        applicationNumber: rows[0].application_number,
+        examCode: rows[0].exam_code,
+        status: rows[0].status,
+        createdAt: rows[0].created_at,
+      },
+    });
+  } catch (error) {
+    if (transactionOpen) await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-  if (!rows[0]) {
-    response.status(409).json({ error: 'An application for this exam may already exist on your account.' });
-    return;
-  }
-  response.status(201).json({
-    application: {
-      id: rows[0].id,
-      applicationNumber: rows[0].application_number,
-      examCode: rows[0].exam_code,
-      status: rows[0].status,
-      createdAt: rows[0].created_at,
-    },
-  });
 }));
 
 app.get('/api/admin/applications', requireAuth, requireRoles('official'), asyncRoute(async (_request, response) => {
@@ -1618,35 +1881,50 @@ app.patch('/api/admin/applications/:id', requireAuth, requireRoles('official'), 
   response.json({ application: rows[0] });
 }));
 
+app.post('/api/admin/applications/:id/verify-ownership', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+  const parsed = z.object({
+    applicationNumber: z.string().trim().min(4).max(100),
+    dateOfBirth: z.string().date(),
+    candidateLoginId: z.string().trim().min(4).max(50).regex(/^[A-Za-z0-9._-]+$/),
+    verificationMethod: z.enum([
+      'identity_document_review',
+      'registered_contact_confirmation',
+      'institution_confirmation',
+    ]),
+  }).safeParse(request.body);
+  if (!parsed.success) {
+    sendValidationError(response, parsed.error);
+    return;
+  }
+
+  const verifier = getUser(request);
+  const query = linkLegacyApplicationQuery({
+    applicationId: request.params.id,
+    ...parsed.data,
+    verifierId: verifier!.id,
+  });
+  const { rows } = await pool.query(query.text, query.values);
+  if (!rows[0]) {
+    response.status(404).json({
+      error: 'Legacy application was not found, is already linked, or candidate verification did not match.',
+    });
+    return;
+  }
+  response.json({ application: rows[0] });
+}));
+
 app.get('/api/candidate/portal', requireAuth, requireRoles('candidate'), asyncRoute(async (request, response) => {
   const user = getUser(request);
-  const { rows } = await pool.query(
-    `SELECT a.application_number, a.exam_code, a.candidate_name, a.status, a.created_at,
-            c.roll_number, c.exam_date, c.center_name, c.center_address
-     FROM applications a
-     LEFT JOIN admit_cards c ON c.application_id = a.id
-     WHERE a.user_id = $1 OR (a.user_id IS NULL AND (a.application_number = $2 OR c.roll_number = $2))
-     ORDER BY a.created_at DESC`,
-    [user?.id, user?.loginId.toUpperCase()],
-  );
+  const applicationsQuery = candidateApplicationsQuery(user!.id);
+  const { rows } = await pool.query(applicationsQuery.text, applicationsQuery.values);
   const attempts = await pool.query(
     `SELECT id, total_questions, attempted, correct, incorrect, unattempted,
             total_score, max_score, percentage, submitted_at
      FROM mock_exam_attempts WHERE user_id = $1 ORDER BY submitted_at DESC LIMIT 20`,
     [user?.id],
   );
-  const results = await pool.query(
-    `SELECT r.application_number, r.roll_number, r.exam_code, r.published_at
-     FROM published_results r
-     WHERE r.application_number IN (SELECT a.application_number FROM applications a WHERE a.user_id = $1)
-        OR r.application_number = $2 OR r.roll_number = $2
-        OR r.application_number IN (
-          SELECT a.application_number FROM applications a
-          JOIN admit_cards c ON c.application_id = a.id WHERE c.roll_number = $2
-        )
-     ORDER BY r.published_at DESC`,
-    [user?.id, user?.loginId.toUpperCase()],
-  );
+  const resultsQuery = candidateResultsQuery(user!.id);
+  const results = await pool.query(resultsQuery.text, resultsQuery.values);
   response.json({ applications: rows, attempts: attempts.rows, results: results.rows });
 }));
 
@@ -1694,16 +1972,8 @@ app.put('/api/admin/applications/:id/admit-card', requireAuth, requireRoles('off
 
 app.get('/api/center/checkins', requireAuth, requireRoles('center'), asyncRoute(async (request, response) => {
   const user = getUser(request);
-  const { rows } = await pool.query(
-    `SELECT c.id, c.status, c.note, c.updated_at, a.application_number, a.candidate_name,
-            a.exam_code, card.roll_number
-     FROM center_checkins c
-     JOIN applications a ON a.id = c.application_id
-     JOIN admit_cards card ON card.application_id = a.id
-     WHERE c.center_code = $1
-     ORDER BY c.updated_at DESC LIMIT 500`,
-    [user?.loginId.toUpperCase()],
-  );
+  const checkinsQuery = centerCheckinsQuery(user!.loginId.toUpperCase());
+  const { rows } = await pool.query(checkinsQuery.text, checkinsQuery.values);
   response.json({ checkins: rows });
 }));
 
@@ -1742,30 +2012,27 @@ app.post('/api/center/checkins', requireAuth, requireRoles('center'), asyncRoute
   response.status(200).json({ checkin: rows[0] });
 }));
 
-app.post('/api/admit-cards/lookup', publicWriteLimiter, asyncRoute(async (request, response) => {
+const candidateAdmitCardLookupHandler = asyncRoute(async (request, response) => {
   const parsed = z.object({
     applicationNumber: z.string().trim().min(4).max(100),
-    dateOfBirth: z.string().date(),
     examCode: z.string().trim().min(2).max(30),
   }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
     return;
   }
-  const { applicationNumber, dateOfBirth, examCode } = parsed.data;
-  const { rows } = await pool.query(
-    `SELECT a.application_number, a.candidate_name, a.father_name, a.date_of_birth,
-            a.gender, a.category, a.exam_code,
-            c.roll_number, c.exam_date, c.reporting_time, c.gate_closing_time,
-            c.exam_timing, c.center_code, c.center_name, c.center_address
-     FROM applications a JOIN admit_cards c ON c.application_id = a.id
-     WHERE a.application_number = $1 AND a.date_of_birth = $2 AND a.exam_code = $3`,
-    [applicationNumber.toUpperCase(), dateOfBirth, examCode.toUpperCase()],
+  const user = getUser(request);
+  const query = candidateAdmitCardQuery(
+    user!.id,
+    parsed.data.applicationNumber.toUpperCase(),
+    parsed.data.examCode.toUpperCase(),
   );
+  const { rows } = await pool.query(query.text, query.values);
   if (!rows[0]) {
-    response.status(404).json({ error: 'No published admit card matches those details.' });
+    response.status(404).json({ error: 'No admit card is available for that application on your account.' });
     return;
   }
+  response.set('Cache-Control', 'no-store');
   response.json({
     admitCard: {
       applicationNumber: rows[0].application_number,
@@ -1787,7 +2054,14 @@ app.post('/api/admit-cards/lookup', publicWriteLimiter, asyncRoute(async (reques
       photoUrl: '',
     },
   });
-}));
+});
+
+app.post(
+  ['/api/candidate/admit-cards/lookup', '/api/admit-cards/lookup'],
+  requireAuth,
+  requireRoles('candidate'),
+  candidateAdmitCardLookupHandler,
+);
 
 const scorecardSchema = z.object({
   rollNumber: z.string().trim().min(3).max(50),
@@ -1899,7 +2173,7 @@ app.get('/api/admin/results', requireAuth, requireRoles('official'), asyncRoute(
   response.json({ results: rows });
 }));
 
-app.post('/api/results/lookup', publicWriteLimiter, asyncRoute(async (request, response) => {
+const candidateResultLookupHandler = asyncRoute(async (request, response) => {
   const parsed = z.object({
     identifier: z.string().trim().min(3).max(100),
     dateOfBirth: z.string().date(),
@@ -1910,19 +2184,28 @@ app.post('/api/results/lookup', publicWriteLimiter, asyncRoute(async (request, r
     return;
   }
   const { identifier, dateOfBirth, examCode } = parsed.data;
-  const { rows } = await pool.query(
-    `SELECT scorecard FROM published_results
-     WHERE (roll_number = $1 OR application_number = $1)
-       AND date_of_birth = $2 AND exam_code = $3 AND is_published = true
-     LIMIT 1`,
-    [identifier.toUpperCase(), dateOfBirth, examCode.toUpperCase()],
+  const user = getUser(request);
+  const query = candidateResultLookupQuery(
+    user!.id,
+    identifier.toUpperCase(),
+    dateOfBirth,
+    examCode.toUpperCase(),
   );
+  const { rows } = await pool.query(query.text, query.values);
   if (!rows[0]) {
-    response.status(404).json({ error: 'No published result matches those details.' });
+    response.status(404).json({ error: 'No published result matches those details on your account.' });
     return;
   }
+  response.set('Cache-Control', 'no-store');
   response.json({ scorecard: rows[0].scorecard });
-}));
+});
+
+app.post(
+  ['/api/candidate/results/lookup', '/api/results/lookup'],
+  requireAuth,
+  requireRoles('candidate'),
+  candidateResultLookupHandler,
+);
 
 app.post('/api/mock-exams/submit', optionalAuth, publicWriteLimiter, asyncRoute(async (request, response) => {
   const parsed = z.object({
@@ -1955,12 +2238,8 @@ app.post('/api/mock-exams/submit', optionalAuth, publicWriteLimiter, asyncRoute(
 
 app.get('/api/mock-exams/mine', requireAuth, requireRoles('candidate'), asyncRoute(async (request, response) => {
   const user = getUser(request);
-  const { rows } = await pool.query(
-    `SELECT id, total_questions, attempted, correct, incorrect, unattempted, total_score,
-            max_score, percentage, section_scores, submitted_at
-     FROM mock_exam_attempts WHERE user_id = $1 ORDER BY submitted_at DESC LIMIT 100`,
-    [user?.id],
-  );
+  const query = candidatePracticeHistoryQuery(user!.id);
+  const { rows } = await pool.query(query.text, query.values);
   response.json({ attempts: rows });
 }));
 
@@ -1976,6 +2255,8 @@ app.get('/api/admin/mock-exams/attempts', requireAuth, requireRoles('official'),
 
 const serverDirectory = fileURLToPath(new URL('.', import.meta.url));
 const builtClient = resolve(serverDirectory, '../dist');
+app.use('/api', createInstitutionDocumentsRouter());
+app.use('/api/institution-document-submission', createInstitutionSubmissionRouter());
 if (existsSync(builtClient)) {
   app.use(express.static(builtClient));
   app.get('*', (request, response, next) => {
@@ -2016,8 +2297,10 @@ async function startApi(): Promise<void> {
   }
 }
 
-void startApi().catch(async (error: unknown) => {
-  console.error('API startup failed. Check DATABASE_URL, database availability, and network access:', error);
-  await pool.end();
-  process.exitCode = 1;
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void startApi().catch(async (error: unknown) => {
+    console.error('API startup failed. Check DATABASE_URL, database availability, and network access:', error);
+    await pool.end();
+    process.exitCode = 1;
+  });
+}

@@ -4,5 +4,10 @@ dist/
 coverage/
 .DS_Store
 *.log
+*.dump
+.dump.
+backup/
+backups/
 .env*
 !.env.example
+.local-dev/

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { ExamItem } from '../data/portalData';
 import { BrandLogo } from './BrandLogo';
+import { useLanguage } from '../utils/languageContext';
 
 interface StickyNavbarProps {
   onOpenSearch: () => void;
@@ -53,6 +54,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
   activeNavTab,
   setActiveNavTab,
 }) => {
+  const { t } = useLanguage();
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -74,6 +76,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
   const mobileLinks: { label: string; activeTab?: string; onClick: () => void }[] = [
     { label: 'Home', activeTab: 'Home', onClick: () => {
       setActiveNavTab('Home');
+      onSelectExamFilter(undefined);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } },
     { label: 'Examinations', activeTab: 'Examinations', onClick: () => {
@@ -87,17 +90,18 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
     { label: 'Admit Card', onClick: onOpenAdmitCard },
     { label: 'Practice Exam', onClick: onOpenMockExam },
     { label: 'Answer Keys', onClick: onOpenAnswerKeyPortal },
+    { label: 'Center Locator', onClick: onOpenCenterLocator },
     { label: 'Results', activeTab: 'Results', onClick: () => {
       setActiveNavTab('Results');
       onOpenResultsPortal();
     } },
     { label: 'Institute', activeTab: 'Institute Zone', onClick: onOpenInstituteDashboard },
     { label: 'Admin', activeTab: 'Institute Zone', onClick: onOpenAiProctoring },
-    { label: 'Contact', activeTab: 'Contact Us', onClick: () => {
+    { label: 'Contact Us', activeTab: 'Contact Us', onClick: () => {
       setActiveNavTab('Contact Us');
       document.getElementById('footer-contact')?.scrollIntoView({ behavior: 'smooth' });
     } },
-    { label: 'About', activeTab: 'About Us', onClick: () => {
+    { label: 'About Us', activeTab: 'About Us', onClick: () => {
       setActiveNavTab('About Us');
       document.getElementById('about-eltnoy')?.scrollIntoView({ behavior: 'smooth' });
     } },
@@ -115,7 +119,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               className="flex shrink-0 items-center rounded-lg p-0.5 text-left focus-visible:outline-emerald-600"
-              aria-label="ELTNOY Examination Portal Home"
+              aria-label={`ELTNOY ${t('Examination Portal Home')}`}
             >
               <BrandLogo />
             </button>
@@ -126,7 +130,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                 className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-emerald-50 hover:text-emerald-800 xl:px-2.5 xl:text-xs"
               >
                 <CalendarDays className="h-4 w-4 text-emerald-700" />
-                Exam Calendar
+                {t('Exam Calendar')}
               </button>
               <button
                 type="button"
@@ -134,7 +138,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                 className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-amber-50 hover:text-amber-800 xl:px-2.5 xl:text-xs"
               >
                 <FileCheck className="h-4 w-4 text-amber-600" />
-                Latest Notices
+                {t('Latest Notices')}
               </button>
               <button
                 type="button"
@@ -142,7 +146,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                 className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-sky-50 hover:text-sky-800 xl:px-2.5 xl:text-xs"
               >
                 <GraduationCap className="h-4 w-4 text-sky-700" />
-                Candidate Services
+                {t('Candidate Services')}
               </button>
             </div>
           </div>
@@ -151,21 +155,21 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               type="button"
               onClick={onOpenSearch}
               className="flex h-10 w-10 items-center justify-center rounded-full text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 sm:h-auto sm:w-56 sm:justify-start sm:gap-2 sm:rounded-lg sm:border sm:border-slate-300 sm:bg-slate-50 sm:px-3 sm:py-2 sm:text-left"
-              title="Search (Ctrl+K)"
-              aria-label="Search exams and portal services"
+              title={t('Search (Ctrl+K)')}
+              aria-label={t('Search exams and portal services')}
             >
               <Search className="h-5 w-5 shrink-0 text-slate-500" />
-              <span className="hidden truncate text-xs text-slate-500 sm:inline">Search exams and services</span>
+              <span className="hidden truncate text-xs text-slate-500 sm:inline">{t('Search exams and services')}</span>
               <span className="ml-auto hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-400 md:inline">Ctrl K</span>
             </button>
             <button
               type="button"
               onClick={onOpenLogin}
               className="flex items-center gap-1.5 rounded-lg bg-[#16A34A] px-3 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-[#15803D] sm:px-4 sm:text-sm"
-              aria-label={isAuthenticated ? 'Open dashboard' : 'Login'}
+              aria-label={t(isAuthenticated ? 'Open dashboard' : 'Login')}
             >
               <User className="h-4 w-4 stroke-[2.2]" />
-              <span className="hidden sm:inline">{isAuthenticated ? 'My Dashboard' : 'Login'}</span>
+              <span className="hidden sm:inline">{t(isAuthenticated ? 'My Dashboard' : 'Login')}</span>
             </button>
           </div>
         </div>
@@ -192,7 +196,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Home
+                {t('Home')}
               </button>
               {activeNavTab === 'Home' && (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#16A34A] rounded-full" />
@@ -210,7 +214,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                 }`}
                 aria-expanded={activeDropdown === 'exams'}
               >
-                <span>Examinations</span>
+                <span>{t('Examinations')}</span>
                 <ChevronDown className="w-3.5 h-3.5 opacity-70" />
               </button>
 
@@ -224,10 +228,10 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     }}
                     className="w-full border-b border-slate-100 px-3 py-2 text-left text-xs font-bold text-emerald-800 hover:bg-emerald-50"
                   >
-                    View exam calendar and application windows →
+                    {t('View exam calendar and application windows →')}
                   </button>
                   <div className="px-3 py-1.5 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                    Published exam forms
+                    {t('Published exam forms')}
                   </div>
                   {examinations.length ? examinations.map((exam) => (
                     <button
@@ -239,9 +243,9 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                       className="w-full text-left px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 hover:text-[#16A34A] flex flex-col"
                     >
                       <span className="font-semibold text-slate-900">{exam.name}</span>
-                      <span className="text-[11px] text-slate-500">{exam.code} · Apply until {exam.regEnd}</span>
+                      <span className="text-[11px] text-slate-500">{exam.code} · {t('Apply until')} {exam.regEnd}</span>
                     </button>
-                  )) : <p className="px-3 py-2 text-xs text-slate-500">No exams published yet.</p>}
+                  )) : <p className="px-3 py-2 text-xs text-slate-500">{t('No exams published yet.')}</p>}
                 </div>
               )}
             </div>
@@ -257,7 +261,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                   activeNavTab === 'Public Notices' ? 'font-bold text-slate-900' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Public Notices
+                {t('Public Notices')}
               </button>
               {activeNavTab === 'Public Notices' && <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full bg-[#16A34A]" />}
             </div>
@@ -273,7 +277,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                 }`}
                 aria-expanded={activeDropdown === 'student'}
               >
-                <span>Student Zone</span>
+                <span>{t('Student Zone')}</span>
                 <ChevronDown className="w-3.5 h-3.5 opacity-70" />
               </button>
 
@@ -287,7 +291,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-[#16A34A] flex items-center gap-2.5"
                   >
                     <FileCheck className="w-4 h-4 text-[#16A34A]" />
-                    <span className="font-semibold">Download Admit Card</span>
+                    <span className="font-semibold">{t('Download Admit Card')}</span>
                   </button>
                   <button
                     onClick={() => {
@@ -297,7 +301,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-blue-700 flex items-center gap-2.5"
                   >
                     <GraduationCap className="w-4 h-4 text-blue-600" />
-                    <span className="font-semibold">Online CBT Practice Exam</span>
+                    <span className="font-semibold">{t('Online CBT Practice Exam')}</span>
                   </button>
                   <button
                     onClick={() => {
@@ -307,7 +311,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-purple-700 flex items-center gap-2.5"
                   >
                     <Award className="w-4 h-4 text-purple-600" />
-                    <span className="font-semibold">Answer Keys &amp; Objections</span>
+                    <span className="font-semibold">{t('Answer Keys & Objections')}</span>
                   </button>
                   <button
                     onClick={() => {
@@ -317,7 +321,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-emerald-700 flex items-center gap-2.5"
                   >
                     <Award className="w-4 h-4 text-emerald-600" />
-                    <span className="font-semibold">Candidate Result &amp; Rank Card</span>
+                    <span className="font-semibold">{t('Candidate Result & Rank Card')}</span>
                   </button>
                 </div>
               )}
@@ -334,7 +338,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                 }`}
                 aria-expanded={activeDropdown === 'institute'}
               >
-                <span>Institute Zone</span>
+                <span>{t('Institute Zone')}</span>
                 <ChevronDown className="w-3.5 h-3.5 opacity-70" />
               </button>
 
@@ -349,9 +353,9 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                   >
                     <div className="font-semibold flex items-center gap-2">
                       <Building2 className="w-4 h-4 text-[#16A34A]" />
-                      <span>Institute Administration Dashboard</span>
+                      <span>{t('Institute Administration Dashboard')}</span>
                     </div>
-                    <div className="text-[11px] text-slate-500 pl-6">Slots, Biometrics &amp; Proctors</div>
+                    <div className="text-[11px] text-slate-500 pl-6">{t('Slots, Biometrics & Proctors')}</div>
                   </button>
                   <button
                     onClick={() => {
@@ -362,9 +366,9 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                   >
                     <div className="font-semibold flex items-center gap-2">
                       <Award className="w-4 h-4 text-rose-600" />
-                      <span>Official Administration Dashboard</span>
+                      <span>{t('Official Administration Dashboard')}</span>
                     </div>
-                    <div className="text-[11px] text-slate-500 pl-6">Applications, support tickets and results</div>
+                    <div className="text-[11px] text-slate-500 pl-6">{t('Applications, support tickets and results')}</div>
                   </button>
                 </div>
               )}
@@ -383,7 +387,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Results
+                {t('Results')}
               </button>
               {activeNavTab === 'Results' && (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#16A34A] rounded-full" />
@@ -404,7 +408,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Contact Us
+                {t('Contact Us')}
               </button>
               {activeNavTab === 'Contact Us' && (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#16A34A] rounded-full" />
@@ -425,7 +429,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                About Us
+                {t('About Us')}
               </button>
               {activeNavTab === 'About Us' && (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#16A34A] rounded-full" />
@@ -434,8 +438,9 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
           </nav>
 
         </div>
-        <nav aria-label="Mobile quick navigation" className="lg:hidden -mx-4 overflow-x-auto border-t border-slate-100 px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="flex w-max min-w-full items-center gap-2">
+        </div>
+        <nav aria-label={t('Mobile quick navigation')} className="lg:hidden -mx-4 border-t border-slate-100 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
             {mobileLinks.map((item) => (
               <button
                 key={item.label}
@@ -448,12 +453,11 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                     : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-200 hover:bg-emerald-50'
                 }`}
               >
-                {item.label}
+                {t(item.label)}
               </button>
             ))}
           </div>
         </nav>
-      </div>
       </div>
     </header>
   );

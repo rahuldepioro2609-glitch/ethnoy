@@ -25,7 +25,8 @@ import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-
 import { ApiError, apiRequest } from './api';
 import { PortalRole, RoleDashboard, RoleLoginPage } from './components/RolePortal';
 import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './utils/examSchedule';
-import { getSavedLanguage, LANGUAGE_LOCALES, Language } from './utils/languageLogic';
+import { LANGUAGE_LOCALES, Language } from './utils/languageLogic';
+import { useLanguage } from './utils/languageContext';
 
 function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
   const examDate = String(exam.examDate).slice(0, 10);
@@ -77,9 +78,7 @@ export default function App() {
   const [pathname, setPathname] = useState(window.location.pathname);
   const [fontSizeLevel, setFontSizeLevel] = useState<number>(0);
   const [highContrast, setHighContrast] = useState<boolean>(false);
-  const [language, setLanguage] = useState<Language>(() => (
-    typeof window === 'undefined' ? 'English' : getSavedLanguage(window.localStorage.getItem('portal-language'))
-  ));
+  const { language, t } = useLanguage();
   const [activeNavTab, setActiveNavTab] = useState<string>('Home');
 
   // Active Modals
@@ -100,7 +99,7 @@ export default function App() {
   const [noticeLoadError, setNoticeLoadError] = useState<string | null>(null);
 
   // User state
-  const [loggedInUser, setLoggedInUser] = useState<{ name: string; role: string; id: string; accountRole: PortalRole } | null>(null);
+  const [loggedInUser, setLoggedInUser] = useState<{ name: string; role: string; id: string; accountRole: PortalRole; isSuperAdmin: boolean } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [systemAlert, setSystemAlert] = useState<string | null>(null);
 
@@ -196,7 +195,7 @@ export default function App() {
 
   useEffect(() => {
     apiRequest<{
-      user: { loginId: string; name: string; role: 'candidate' | 'center' | 'official' };
+      user: { loginId: string; name: string; role: 'candidate' | 'center' | 'official'; isSuperAdmin: boolean };
     }>('/api/auth/me')
       .then(({ user }) => {
         const roleLabels = {
@@ -204,7 +203,13 @@ export default function App() {
           center: 'Test Center Admin',
           official: 'Assessment Official',
         };
-        setLoggedInUser({ name: user.name, role: roleLabels[user.role], id: user.loginId, accountRole: user.role });
+        setLoggedInUser({
+          name: user.name,
+          role: roleLabels[user.role],
+          id: user.loginId,
+          accountRole: user.role,
+          isSuperAdmin: user.isSuperAdmin,
+        });
       })
       .catch((error: unknown) => {
         if (!(error instanceof ApiError && error.status === 401)) {
@@ -336,7 +341,7 @@ export default function App() {
     }
   }, [authLoading, loggedInUser, pathname]);
 
-  const handlePortalLogin = (user: { name: string; id: string; role: PortalRole }) => {
+  const handlePortalLogin = (user: { name: string; id: string; role: PortalRole; isSuperAdmin: boolean }) => {
     const roleLabels: Record<PortalRole, string> = {
       candidate: 'Registered Candidate',
       center: 'Test Center Admin',
@@ -365,7 +370,12 @@ export default function App() {
     }
     return (
       <RoleDashboard
-        user={{ name: loggedInUser.name, id: loggedInUser.id, role: loggedInUser.accountRole }}
+        user={{
+          name: loggedInUser.name,
+          id: loggedInUser.id,
+          role: loggedInUser.accountRole,
+          isSuperAdmin: loggedInUser.isSuperAdmin,
+        }}
         onLogout={handleLogout}
         onHome={() => navigate('/')}
         onOpenAdmitCard={() => {
@@ -393,7 +403,6 @@ export default function App() {
         highContrast={highContrast}
         onToggleHighContrast={() => setHighContrast((prev) => !prev)}
         onOpenGrievance={handleOpenGrievance}
-        onLanguageChange={setLanguage}
       />
 
       {/* Sticky Navbar: ELTNOY Logo, navigation links, search, and account action */}
@@ -416,14 +425,14 @@ export default function App() {
       />
 
       <div role="note" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-950">
-        Preview environment: exam schedules, center details, and answer keys may contain sample content. Verify all information before accepting public applications.
+        {t('Preview environment: exam schedules, center details, and answer keys may contain sample content. Verify all information before accepting public applications.')}
       </div>
 
       <section aria-label="Latest portal updates" className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-[1440px] flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:gap-3 sm:px-6 lg:px-8">
           <div className="flex shrink-0 items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-[#0B2E59]">
             <BellRing className="h-4 w-4 text-amber-600" />
-            <span>Latest updates</span>
+            <span>{t('Latest updates')}</span>
           </div>
           <div className="min-w-0 flex-1 overflow-hidden">
             {portalNotices.length ? <div className="portal-news-track flex w-max items-center gap-6 py-1">
@@ -438,14 +447,14 @@ export default function App() {
                 <span className="mr-1.5 text-emerald-700">•</span>{notice.title}
               </button>
             ))}
-            </div> : <p role={noticeLoadError ? 'alert' : 'status'} className="py-1 text-xs text-slate-500">{noticeLoadError ? `Notices could not be loaded: ${noticeLoadError}` : 'No updates have been published yet.'}</p>}
+            </div> : <p role={noticeLoadError ? 'alert' : 'status'} className="py-1 text-xs text-slate-500">{noticeLoadError ? `Notices could not be loaded: ${noticeLoadError}` : t('No updates have been published yet.')}</p>}
           </div>
           <button
             type="button"
             onClick={() => document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' })}
             className="hidden shrink-0 items-center gap-1 text-xs font-bold text-emerald-800 hover:text-emerald-600 sm:inline-flex"
           >
-            <CalendarDays className="h-4 w-4" /> Exam calendar
+            <CalendarDays className="h-4 w-4" /> {t('Exam calendar')}
           </button>
         </div>
       </section>
@@ -480,7 +489,7 @@ export default function App() {
               aria-label="Sign out"
             >
               <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Sign out</span>
+              <span className="hidden sm:inline">{t('Sign out')}</span>
             </button>
           </div>
         </div>
