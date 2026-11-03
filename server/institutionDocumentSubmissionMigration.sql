@@ -1,6 +1,12 @@
-BEGIN;
+-- Milestone 2: institution submission cycles and capabilities.
+-- Depends on schema.sql (users) and institutionDocumentsMigration.sql
+-- (institution_documents). Run by `npm run db:migrate` (server/migrate.ts) after
+-- both, inside one transaction.
+-- Every statement is guarded so the migration can be re-run safely. It never
+-- changes existing rows: legacy institution_documents rows keep a null
+-- submission_cycle_id, and the column is not backfilled or made NOT NULL.
 
-CREATE TABLE institution_submission_cycles (
+CREATE TABLE IF NOT EXISTS institution_submission_cycles (
   id text PRIMARY KEY,
   institution_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   submission_version integer NOT NULL CHECK (submission_version > 0),
@@ -16,7 +22,7 @@ CREATE TABLE institution_submission_cycles (
   CHECK ((status = 'open' AND closed_at IS NULL) OR (status = 'closed' AND closed_at IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX institution_submission_cycles_one_open_idx
+CREATE UNIQUE INDEX IF NOT EXISTS institution_submission_cycles_one_open_idx
   ON institution_submission_cycles(institution_id)
   WHERE status = 'open';
 
@@ -45,15 +51,17 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS institution_submission_cycles_immutable ON institution_submission_cycles;
 CREATE TRIGGER institution_submission_cycles_immutable
   BEFORE UPDATE OR DELETE ON institution_submission_cycles
   FOR EACH ROW EXECUTE FUNCTION protect_institution_submission_cycles();
 
+DROP TRIGGER IF EXISTS institution_submission_cycles_no_truncate ON institution_submission_cycles;
 CREATE TRIGGER institution_submission_cycles_no_truncate
   BEFORE TRUNCATE ON institution_submission_cycles
   FOR EACH STATEMENT EXECUTE FUNCTION protect_institution_submission_cycles();
 
-CREATE TABLE institution_submission_capabilities (
+CREATE TABLE IF NOT EXISTS institution_submission_capabilities (
   id text PRIMARY KEY,
   institution_id text NOT NULL,
   submission_cycle_id text NOT NULL,
@@ -67,11 +75,11 @@ CREATE TABLE institution_submission_capabilities (
   CHECK (expires_at > created_at)
 );
 
-CREATE INDEX institution_submission_capabilities_active_idx
+CREATE INDEX IF NOT EXISTS institution_submission_capabilities_active_idx
   ON institution_submission_capabilities(institution_id, expires_at DESC)
   WHERE revoked_at IS NULL;
 
-CREATE UNIQUE INDEX institution_submission_capabilities_one_unrevoked_idx
+CREATE UNIQUE INDEX IF NOT EXISTS institution_submission_capabilities_one_unrevoked_idx
   ON institution_submission_capabilities(institution_id)
   WHERE revoked_at IS NULL;
 
@@ -96,24 +104,35 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS institution_submission_capabilities_immutable ON institution_submission_capabilities;
 CREATE TRIGGER institution_submission_capabilities_immutable
   BEFORE UPDATE OR DELETE ON institution_submission_capabilities
   FOR EACH ROW EXECUTE FUNCTION protect_institution_submission_capabilities();
 
+DROP TRIGGER IF EXISTS institution_submission_capabilities_no_truncate ON institution_submission_capabilities;
 CREATE TRIGGER institution_submission_capabilities_no_truncate
   BEFORE TRUNCATE ON institution_submission_capabilities
   FOR EACH STATEMENT EXECUTE FUNCTION protect_institution_submission_capabilities();
 
 ALTER TABLE institution_documents
-  ADD COLUMN submission_cycle_id text;
+  ADD COLUMN IF NOT EXISTS submission_cycle_id text;
 
-ALTER TABLE institution_documents
-  ADD CONSTRAINT institution_documents_submission_cycle_fk
-  FOREIGN KEY (submission_cycle_id, institution_id)
-  REFERENCES institution_submission_cycles(id, institution_id)
-  ON DELETE RESTRICT;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'institution_documents_submission_cycle_fk'
+      AND conrelid = to_regclass('institution_documents')
+  ) THEN
+    ALTER TABLE institution_documents
+      ADD CONSTRAINT institution_documents_submission_cycle_fk
+      FOREIGN KEY (submission_cycle_id, institution_id)
+      REFERENCES institution_submission_cycles(id, institution_id)
+      ON DELETE RESTRICT;
+  END IF;
+END $$;
 
-CREATE INDEX institution_documents_submission_cycle_idx
+CREATE INDEX IF NOT EXISTS institution_documents_submission_cycle_idx
   ON institution_documents(submission_cycle_id, category);
 
 CREATE OR REPLACE FUNCTION require_cycle_for_new_institution_document()
@@ -126,8 +145,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS institution_documents_require_cycle_on_insert ON institution_documents;
 CREATE TRIGGER institution_documents_require_cycle_on_insert
   BEFORE INSERT ON institution_documents
   FOR EACH ROW EXECUTE FUNCTION require_cycle_for_new_institution_document();
-
-COMMIT;

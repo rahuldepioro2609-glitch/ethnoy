@@ -221,7 +221,7 @@ test('exposes exactly the five client-confirmed institution document categories'
 
 test('Milestone 2 preserves legacy null cycles and requires cycles for new document rows', async () => {
   const migration = await readFile(new URL('./institutionDocumentSubmissionMigration.sql', import.meta.url), 'utf8');
-  assert.match(migration, /ALTER TABLE institution_documents\s+ADD COLUMN submission_cycle_id text;/);
+  assert.match(migration, /ALTER TABLE institution_documents\s+ADD COLUMN (?:IF NOT EXISTS )?submission_cycle_id text;/);
   assert.match(migration, /FOREIGN KEY \(submission_cycle_id, institution_id\)\s+REFERENCES institution_submission_cycles\(id, institution_id\)/);
   assert.match(migration, /IF NEW\.submission_cycle_id IS NULL THEN\s+RAISE EXCEPTION/);
   assert.match(migration, /CREATE TRIGGER institution_documents_require_cycle_on_insert\s+BEFORE INSERT ON institution_documents/);

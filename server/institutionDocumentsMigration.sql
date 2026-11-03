@@ -1,6 +1,10 @@
-BEGIN;
+-- Milestone 1: institution document foundation.
+-- Run by `npm run db:migrate` (server/migrate.ts) after schema.sql and before
+-- institutionDocumentSubmissionMigration.sql, inside one transaction.
+-- Every statement is guarded so the migration can be re-run safely. It creates
+-- new objects only and never changes existing rows.
 
-CREATE TABLE institution_documents (
+CREATE TABLE IF NOT EXISTS institution_documents (
   id text PRIMARY KEY,
   institution_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   category text NOT NULL CHECK (category IN (
@@ -14,10 +18,10 @@ CREATE TABLE institution_documents (
   UNIQUE (id, institution_id, category)
 );
 
-CREATE INDEX institution_documents_institution_category_idx
+CREATE INDEX IF NOT EXISTS institution_documents_institution_category_idx
   ON institution_documents(institution_id, category, created_at DESC);
 
-CREATE TABLE institution_document_versions (
+CREATE TABLE IF NOT EXISTS institution_document_versions (
   id text PRIMARY KEY,
   document_id text NOT NULL,
   institution_id text NOT NULL,
@@ -38,7 +42,7 @@ CREATE TABLE institution_document_versions (
     ON DELETE RESTRICT
 );
 
-CREATE INDEX institution_document_versions_institution_idx
+CREATE INDEX IF NOT EXISTS institution_document_versions_institution_idx
   ON institution_document_versions(institution_id, uploaded_at DESC);
 
 CREATE OR REPLACE FUNCTION reject_institution_document_version_mutation()
@@ -48,15 +52,17 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS institution_document_versions_append_only ON institution_document_versions;
 CREATE TRIGGER institution_document_versions_append_only
   BEFORE UPDATE OR DELETE ON institution_document_versions
   FOR EACH ROW EXECUTE FUNCTION reject_institution_document_version_mutation();
 
+DROP TRIGGER IF EXISTS institution_document_versions_no_truncate ON institution_document_versions;
 CREATE TRIGGER institution_document_versions_no_truncate
   BEFORE TRUNCATE ON institution_document_versions
   FOR EACH STATEMENT EXECUTE FUNCTION reject_institution_document_version_mutation();
 
-CREATE TABLE institution_document_review_history (
+CREATE TABLE IF NOT EXISTS institution_document_review_history (
   id text PRIMARY KEY,
   version_id text NOT NULL,
   institution_id text NOT NULL,
@@ -69,7 +75,7 @@ CREATE TABLE institution_document_review_history (
     ON DELETE RESTRICT
 );
 
-CREATE INDEX institution_document_review_history_version_idx
+CREATE INDEX IF NOT EXISTS institution_document_review_history_version_idx
   ON institution_document_review_history(version_id, reviewed_at DESC);
 
 CREATE OR REPLACE FUNCTION reject_institution_document_review_mutation()
@@ -79,12 +85,12 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS institution_document_review_history_append_only ON institution_document_review_history;
 CREATE TRIGGER institution_document_review_history_append_only
   BEFORE UPDATE OR DELETE ON institution_document_review_history
   FOR EACH ROW EXECUTE FUNCTION reject_institution_document_review_mutation();
 
+DROP TRIGGER IF EXISTS institution_document_review_history_no_truncate ON institution_document_review_history;
 CREATE TRIGGER institution_document_review_history_no_truncate
   BEFORE TRUNCATE ON institution_document_review_history
   FOR EACH STATEMENT EXECUTE FUNCTION reject_institution_document_review_mutation();
-
-COMMIT;
