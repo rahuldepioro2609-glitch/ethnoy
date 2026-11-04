@@ -18,6 +18,10 @@ services:
       POSTGRES_CA_FILE: ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE in .env.production}
       POSTGRES_TLS_DIR: ${POSTGRES_TLS_DIR:?Set POSTGRES_TLS_DIR in .env.production}
       TLS_CERT_DIR: ${TLS_CERT_DIR:?Set TLS_CERT_DIR in .env.production}
+      # Optional. Unset or empty keeps automatic online-exam recovery disabled. When set, it must be
+      # an ISO-8601 time with an explicit offset (for example 2026-11-05T09:00:00Z); an invalid value
+      # stops the API at startup. Attempts that expired before it are never scored automatically.
+      ONLINE_EXAM_RECOVERY_SINCE: ${ONLINE_EXAM_RECOVERY_SINCE:-}
     command:
       - sh
       - -ec

@@ -147,6 +147,18 @@ This repository has not been load-tested and must not be advertised as proven fo
 
 Before a public launch, use the client-owned Ubuntu deployment with HTTPS, a self-managed PostgreSQL server restricted to private access, encrypted backups, monitoring operated on approved client infrastructure, and a tested rollback plan. Size the application and database connection pools together and run a representative load test against a private staging environment. If scaling to multiple API instances, move rate-limit state to an approved shared store and configure health checks and alerts. Establish the expected peak concurrency and load-test target first; do not increase the database pool size without checking the database's connection limit.
 
+## Online exam expiry and automatic recovery
+
+Online exam answers are accepted until the attempt's `expires_at` (database clock). A final submit is still accepted for 30 seconds after expiry. After that, an unsubmitted attempt can be scored automatically from its last saved answers.
+
+Automatic recovery is controlled by one optional setting, `ONLINE_EXAM_RECOVERY_SINCE`, which Docker Compose passes to the `app` service:
+
+- Unset or empty (the default): recovery is disabled. Expired, unsubmitted attempts stay unscored and are shown as expired.
+- Set: an ISO-8601 date and time from the year 2000 onward with an explicit offset between -12:00 and +14:00, for example `2026-11-05T09:00:00Z`, no more than 5 minutes in the future. Attempts that expired at or after this time are scored from their saved answers by a sweep at startup and every 60 seconds (at most 50 attempts per sweep). Attempts that expired earlier are never scored automatically. Use the start of the release's maintenance window, in UTC.
+- Invalid: the API logs the setting name and rule (never the value) and does not start.
+
+The other online-exam settings keep their built-in defaults in the Compose deployment (30-second grace, 60-second sweep interval, batch of 50, 5-second lock timeout).
+
 ## Institution document foundation
 
 The document foundation supports only these confirmed categories: Registration Certificate, PAN Card, Address Proof, Affiliation / Recognition Certificate, and Authorized Person’s ID Proof. It creates no document records for existing institutions.

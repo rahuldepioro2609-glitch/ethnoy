@@ -30,6 +30,7 @@ import { OnlineExamRunner } from './OnlineExamRunner';
 import { BrandLogo } from './BrandLogo';
 import { useLanguage } from '../utils/languageContext';
 import { NO_LINKED_APPLICATIONS_MESSAGE } from '../utils/candidateDashboard';
+import { describeOnlineExamAttempt } from '../utils/onlineExamDashboard';
 import { DashboardSectionLoader, type DashboardSectionStatusMap } from '../utils/dashboardData';
 import { InstitutionDocumentManagement } from './InstitutionDocumentManagement';
 import { PendingInstitutionSubmission } from './PendingInstitutionSubmission';
@@ -1435,17 +1436,15 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                   {list('onlineExams').length ? (
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {list('onlineExams').map((exam) => {
-                        const attempt = exam.attempt as Record<string, unknown> | null;
-                        const hasAttempt = Boolean(attempt);
-                        const submitted = Boolean(attempt?.submitted_at);
-                        const isActive = hasAttempt && !submitted && new Date(String(attempt?.expires_at)).getTime() > Date.now();
+                        // Uses the server-computed attempt.state (falls back to the previous logic if absent).
+                        const card = describeOnlineExamAttempt(exam.attempt as Record<string, unknown> | null, Date.now());
+                        const toneClass = { success: 'text-emerald-800', warning: 'text-amber-800', danger: 'text-rose-800', active: 'text-blue-800', neutral: 'text-slate-600' }[card.tone];
                         return (
                           <article key={String(exam.exam_code)} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                             <h3 className="font-bold text-slate-900">{String(exam.exam_name)}</h3>
                             <p className="mt-1 text-xs text-slate-500">{String(exam.exam_code)} · {String(exam.question_count)} questions · {String(exam.duration_minutes)} minutes</p>
-                            {submitted && <p className="mt-2 text-sm text-emerald-800">Attempt completed. Score: {String((attempt?.score as Record<string, unknown> | undefined)?.totalScore ?? 'Submitted')}</p>}
-                            {!submitted && hasAttempt && !isActive && <p className="mt-2 text-sm text-amber-800">Attempt expired.</p>}
-                            <button type="button" disabled={hasAttempt && !isActive} onClick={() => setActiveOnlineExam({ code: String(exam.exam_code), name: String(exam.exam_name) })} className="mt-3 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">{isActive ? 'Resume exam' : hasAttempt ? 'Attempt used' : 'Start exam'}</button>
+                            {card.statusText && <p className={`mt-2 text-sm ${toneClass}`}>{card.statusText}</p>}
+                            <button type="button" disabled={!card.canOpen} onClick={() => setActiveOnlineExam({ code: String(exam.exam_code), name: String(exam.exam_name) })} className="mt-3 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">{card.buttonLabel}</button>
                           </article>
                         );
                       })}

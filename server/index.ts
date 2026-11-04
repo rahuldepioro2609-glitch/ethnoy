@@ -23,6 +23,22 @@ import {
 } from './authorizationQueries.js';
 import { pool } from './db.js';
 import { scoreMockResponses } from './mockScoring.js';
+import {
+  finalizeAttempt,
+  type FinalizeOutcome,
+  type OnlineExamConfig,
+  OnlineExamInvariantError,
+  readOnlineExamConfig,
+  saveAttemptResponses,
+  type SaveResponsesOutcome,
+} from './onlineExamFinalization.js';
+import {
+  attemptStateParams,
+  createGracefulShutdown,
+  ONLINE_EXAM_RECOVERY_SQL,
+  startApiWithOnlineExamRecovery,
+  startOnlineExamRecovery,
+} from './onlineExamRecovery.js';
 import { DEFAULT_EXAM_TIME_ZONE, isValidTimeZone } from '../src/utils/examSchedule.js';
 import { createInstitutionDocumentsRouter } from './institutionDocuments.js';
 import {
@@ -669,10 +685,11 @@ app.get('/api/online-exams', requireAuth, requireRoles('candidate'), asyncRoute(
      GROUP BY q.exam_code ORDER BY q.exam_code`,
     [user?.id],
   );
+  // Same five attempt columns as before, plus a database-clock `state`
+  // (see OnlineExamAttemptState in onlineExamRecovery.ts).
   const attempts = await pool.query(
-    `SELECT exam_code, started_at, expires_at, submitted_at, score
-     FROM online_exam_attempts WHERE user_id = $1`,
-    [user?.id],
+    ONLINE_EXAM_RECOVERY_SQL.attemptStates,
+    attemptStateParams(user?.id, getOnlineExamDisplayConfig()),
   );
   response.json({
     exams: rows.map((exam) => ({
@@ -758,108 +775,246 @@ app.post('/api/online-exams/:examCode/start', requireAuth, requireRoles('candida
   });
 }));
 
-app.patch('/api/online-exams/:examCode/attempt', requireAuth, requireRoles('candidate'), asyncRoute(async (request, response) => {
-  const parsed = z.object({
-    attemptId: z.string().uuid(),
-    responses: z.record(z.string(), z.enum(['A', 'B', 'C', 'D'])),
-  }).safeParse(request.body);
-  if (!parsed.success) {
-    sendValidationError(response, parsed.error);
-    return;
-  }
-  const user = getUser(request);
-  const examCode = request.params.examCode.toUpperCase();
-  const { rows: questions } = await pool.query(
-    'SELECT question_number FROM online_exam_questions WHERE exam_code = $1',
-    [examCode],
-  );
-  const questionNumbers = new Set(questions.map((question) => String(question.question_number)));
-  const responses = Object.fromEntries(
-    Object.entries(parsed.data.responses).filter(([questionNumber]) => questionNumbers.has(questionNumber)),
-  );
-  const { rowCount } = await pool.query(
-    `UPDATE online_exam_attempts SET responses = $4
-     WHERE id = $1 AND user_id = $2 AND exam_code = $3
-       AND submitted_at IS NULL AND expires_at > now()`,
-    [parsed.data.attemptId, user?.id, examCode, responses],
-  );
-  if (!rowCount) {
-    response.status(409).json({ error: 'This exam attempt is missing, expired, or already submitted.' });
-    return;
-  }
-  response.json({ saved: true });
-}));
+// ---------------------------------------------------------------------------
+// Online exam autosave and submit (P0-4). Both delegate to onlineExamFinalization.ts,
+// which locks the attempt row, reads the database clock after the lock, and decides
+// and writes inside one transaction.
+//
+// Shared rules for both routes:
+// - Authentication and the candidate role are required (401 / 403 from the middleware).
+// - The body is validated with Zod before any database access (400). Only `attemptId`
+//   and `responses` are read from it; unknown fields are dropped.
+// - The candidate is always the signed-in session user, never a value from the body.
+// - The exam code comes from the URL, upper-cased as before.
+// - An intentionally empty `{}` is a valid answer set: it is saved (autosave) or scored
+//   as no answers (submit), and it REPLACES any previously saved answers.
+// - A non-empty answer set in which every entry is unknown to this exam is refused
+//   with 400 `invalid_responses`, and the saved answers are left unchanged.
+// - Failures never claim success. Errors are logged as safe structured lines without
+//   answers, scores, user identifiers, session tokens or database error details.
+// ---------------------------------------------------------------------------
 
-app.post('/api/online-exams/:examCode/submit', requireAuth, requireRoles('candidate'), asyncRoute(async (request, response) => {
-  const parsed = z.object({
-    attemptId: z.string().uuid(),
-    responses: z.record(z.string(), z.enum(['A', 'B', 'C', 'D'])),
-  }).safeParse(request.body);
+const onlineExamResponsesBodySchema = z.object({
+  attemptId: z.string().uuid(),
+  responses: z.record(z.string(), z.enum(['A', 'B', 'C', 'D'])),
+});
+
+// Settings are read once, on first use by these routes. Failing fast at process
+// startup is wired separately (P0-4 Phase 5).
+let onlineExamConfig: OnlineExamConfig | undefined;
+function getOnlineExamConfig(): OnlineExamConfig {
+  onlineExamConfig ??= readOnlineExamConfig();
+  return onlineExamConfig;
+}
+
+// For the attempt list only: if a setting is invalid, show states as if automatic recovery
+// were off (the recovery scheduler is also off then) instead of failing the dashboard.
+const ONLINE_EXAM_DISPLAY_FALLBACK_CONFIG = readOnlineExamConfig({});
+function getOnlineExamDisplayConfig(): OnlineExamConfig {
+  try {
+    return getOnlineExamConfig();
+  } catch {
+    return ONLINE_EXAM_DISPLAY_FALLBACK_CONFIG;
+  }
+}
+
+type OnlineExamOperation = 'submit' | 'autosave';
+
+/** pg-pool raises exactly this message when no connection frees up within connectionTimeoutMillis. */
+function isPoolConnectTimeout(error: unknown): boolean {
+  return error instanceof Error && error.message === 'timeout exceeded when trying to connect';
+}
+
+function sendOnlineExamBusy(
+  response: Response,
+  operation: OnlineExamOperation,
+  attemptId: string,
+  cause: 'lock_timeout' | 'pool_timeout',
+): void {
+  console.warn(JSON.stringify({ event: 'online_exam.busy', operation, attemptId, cause }));
+  response.set('Retry-After', '1');
+  response.status(503).json({
+    error: 'The exam service is busy. Your request was not applied. Please try again in a moment.',
+    code: 'busy',
+    retryable: true,
+  });
+}
+
+/** 500 with a generic message. Logs only the error class, invariant reason and SQLSTATE. */
+function sendOnlineExamFailure(
+  response: Response,
+  operation: OnlineExamOperation,
+  attemptId: string,
+  error: unknown,
+): void {
+  const sqlState = typeof error === 'object' && error !== null && 'code' in error ? (error as { code: unknown }).code : undefined;
+  console.error(JSON.stringify({
+    event: 'online_exam.request_failed',
+    operation,
+    attemptId,
+    errorClass: error instanceof Error ? error.name : typeof error,
+    invariant: error instanceof OnlineExamInvariantError ? error.reason : undefined,
+    sqlState: typeof sqlState === 'string' && /^[0-9A-Z]{5}$/.test(sqlState) ? sqlState : undefined,
+  }));
+  response.status(500).json({ error: 'An unexpected server error occurred.' });
+}
+
+function handleOnlineExamError(
+  response: Response,
+  operation: OnlineExamOperation,
+  attemptId: string,
+  error: unknown,
+): void {
+  if (isPoolConnectTimeout(error)) {
+    sendOnlineExamBusy(response, operation, attemptId, 'pool_timeout');
+    return;
+  }
+  sendOnlineExamFailure(response, operation, attemptId, error);
+}
+
+function sendInvalidResponses(response: Response, reason: 'malformed' | 'no_valid_answers'): void {
+  response.status(400).json({
+    error: reason === 'no_valid_answers'
+      ? 'None of the submitted answers belong to this exam. Your saved answers were not changed.'
+      : 'Invalid request.',
+    code: 'invalid_responses',
+    reason,
+  });
+}
+
+const ATTEMPT_NOT_FOUND = { error: 'This exam attempt was not found.', code: 'attempt_not_found' } as const;
+
+// Autosave. HTTP mapping of SaveResponsesOutcome:
+//   200 saved              { saved: true, savedAt }   savedAt = database decision time
+//   400 Zod failure        { error, details }          (unchanged validation response)
+//   400 invalid_responses  { error, code, reason }     nothing written
+//   404 missing            { error, code }             no attempt with this id for this candidate and exam
+//   409 finalized          { error, code }             already submitted; never overwritten
+//   409 answering_closed   { error, code }             at or after expires_at; nothing written
+//   503 busy / pool full   { error, code, retryable }  Retry-After: 1; nothing written
+//   500 anything else      { error }                   generic message; safe log only
+app.patch('/api/online-exams/:examCode/attempt', requireAuth, requireRoles('candidate'), asyncRoute(async (request, response) => {
+  const parsed = onlineExamResponsesBodySchema.safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
     return;
   }
   const user = getUser(request);
-  const examCode = request.params.examCode.toUpperCase();
-  const attempt = await pool.query(
-    `SELECT id FROM online_exam_attempts
-     WHERE id = $1 AND user_id = $2 AND exam_code = $3
-       AND submitted_at IS NULL AND expires_at > now()`,
-    [parsed.data.attemptId, user?.id, examCode],
-  );
-  if (!attempt.rows[0]) {
-    response.status(409).json({ error: 'This exam attempt is missing, expired, or already submitted.' });
+  if (!user) {
+    response.status(401).json({ error: 'Sign in is required.' });
     return;
   }
-  const { rows: questions } = await pool.query(
-    `SELECT question_number, correct_option, points, section
-     FROM online_exam_questions WHERE exam_code = $1`,
-    [examCode],
-  );
-  const questionNumbers = new Set(questions.map((question) => String(question.question_number)));
-  const responses = Object.fromEntries(
-    Object.entries(parsed.data.responses).filter(([questionNumber]) => questionNumbers.has(questionNumber)),
-  );
-  let correct = 0;
-  let totalScore = 0;
-  let maxScore = 0;
-  const sectionScores: Record<string, { correct: number; total: number; score: number; maxScore: number }> = {};
-  for (const question of questions) {
-    const section = String(question.section);
-    sectionScores[section] ??= { correct: 0, total: 0, score: 0, maxScore: 0 };
-    const points = Number(question.points);
-    maxScore += points;
-    sectionScores[section].total += 1;
-    sectionScores[section].maxScore += points;
-    if (responses[String(question.question_number)] === question.correct_option) {
-      correct += 1;
-      totalScore += points;
-      sectionScores[section].correct += 1;
-      sectionScores[section].score += points;
+  const examCode = request.params.examCode.toUpperCase();
+  const config = getOnlineExamConfig();
+  let outcome: SaveResponsesOutcome;
+  try {
+    outcome = await saveAttemptResponses(pool, {
+      attemptId: parsed.data.attemptId,
+      userId: user.id,
+      examCode,
+      responses: parsed.data.responses,
+      config,
+    });
+  } catch (error) {
+    handleOnlineExamError(response, 'autosave', parsed.data.attemptId, error);
+    return;
+  }
+  switch (outcome.kind) {
+    case 'saved':
+      response.json({ saved: true, savedAt: outcome.savedAt });
+      return;
+    case 'invalid_responses':
+      sendInvalidResponses(response, outcome.reason);
+      return;
+    case 'missing':
+      response.status(404).json(ATTEMPT_NOT_FOUND);
+      return;
+    case 'finalized':
+      response.status(409).json({ error: 'This exam has already been submitted. Answers can no longer be changed.', code: 'finalized' });
+      return;
+    case 'answering_closed':
+      response.status(409).json({ error: 'Time is up for this exam. Answers can no longer be changed.', code: 'answering_closed' });
+      return;
+    case 'busy':
+      sendOnlineExamBusy(response, 'autosave', parsed.data.attemptId, 'lock_timeout');
+      return;
+    default: {
+      const unexpected: never = outcome;
+      sendOnlineExamFailure(response, 'autosave', parsed.data.attemptId, new Error(`Unexpected outcome ${String(unexpected)}`));
     }
   }
-  const score = {
-    totalQuestions: questions.length,
-    attempted: Object.keys(responses).length,
-    correct,
-    incorrect: Math.max(0, Object.keys(responses).length - correct),
-    unattempted: Math.max(0, questions.length - Object.keys(responses).length),
-    totalScore,
-    maxScore,
-    percentage: maxScore ? Math.round((totalScore / maxScore) * 100) : 0,
-    sectionScores,
-  };
-  const { rows } = await pool.query(
-    `UPDATE online_exam_attempts SET submitted_at = now(), responses = $3, score = $4
-     WHERE id = $1 AND user_id = $2 AND submitted_at IS NULL AND expires_at > now()
-     RETURNING submitted_at`,
-    [parsed.data.attemptId, user?.id, responses, score],
-  );
-  if (!rows[0]) {
-    response.status(409).json({ error: 'This exam attempt has expired or was already submitted.' });
+}));
+
+// Submit. HTTP mapping of FinalizeOutcome (candidate mode):
+//   200 scored             { submittedAt, score, alreadyScored: false }  committed; score includes `completion`
+//   200 already_scored     { submittedAt, score, alreadyScored: true }   stored score returned unchanged (idempotent)
+//   400 Zod failure        { error, details }                            (unchanged validation response)
+//   400 invalid_responses  { error, code, reason }                       nothing written; saved answers unchanged
+//   404 missing            { error, code }                               no attempt with this id for this candidate and exam
+//   409 expired_unscored   { error, code }                               past expiry + grace and not eligible for automatic scoring
+//   503 busy / pool full   { error, code, retryable }                    Retry-After: 1; nothing written
+//   500 invariant, unexpected outcome or error  { error }                generic message; safe log only
+// `submittedAt` and `score` keep their existing names and meaning; `alreadyScored` is new.
+// A 200 is sent only after finalizeAttempt has committed (or found an already-committed score).
+app.post('/api/online-exams/:examCode/submit', requireAuth, requireRoles('candidate'), asyncRoute(async (request, response) => {
+  const parsed = onlineExamResponsesBodySchema.safeParse(request.body);
+  if (!parsed.success) {
+    sendValidationError(response, parsed.error);
     return;
   }
-  response.json({ submittedAt: rows[0].submitted_at, score });
+  const user = getUser(request);
+  if (!user) {
+    response.status(401).json({ error: 'Sign in is required.' });
+    return;
+  }
+  const examCode = request.params.examCode.toUpperCase();
+  const config = getOnlineExamConfig();
+  let outcome: FinalizeOutcome;
+  try {
+    outcome = await finalizeAttempt(pool, {
+      mode: 'candidate',
+      attemptId: parsed.data.attemptId,
+      userId: user.id,
+      examCode,
+      submittedResponses: parsed.data.responses,
+      config,
+    });
+  } catch (error) {
+    handleOnlineExamError(response, 'submit', parsed.data.attemptId, error);
+    return;
+  }
+  switch (outcome.kind) {
+    case 'scored':
+      response.json({ submittedAt: outcome.submittedAt, score: outcome.score, alreadyScored: false });
+      return;
+    case 'already_scored':
+      response.json({ submittedAt: outcome.submittedAt, score: outcome.score, alreadyScored: true });
+      return;
+    case 'invalid_responses':
+      sendInvalidResponses(response, outcome.reason);
+      return;
+    case 'missing':
+      response.status(404).json(ATTEMPT_NOT_FOUND);
+      return;
+    case 'expired_unscored':
+      response.status(409).json({
+        error: 'This exam attempt has expired and was not scored automatically. Please contact the exam office.',
+        code: 'expired_unscored',
+      });
+      return;
+    case 'busy':
+      sendOnlineExamBusy(response, 'submit', parsed.data.attemptId, 'lock_timeout');
+      return;
+    case 'not_eligible':
+    case 'skipped':
+      // Recovery-only outcomes; candidate mode never produces them.
+      sendOnlineExamFailure(response, 'submit', parsed.data.attemptId, new Error(`Unexpected outcome ${outcome.kind}`));
+      return;
+    default: {
+      const unexpected: never = outcome;
+      sendOnlineExamFailure(response, 'submit', parsed.data.attemptId, new Error(`Unexpected outcome ${String(unexpected)}`));
+    }
+  }
 }));
 
 
@@ -2283,16 +2438,43 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
 });
 
 async function startApi(): Promise<void> {
-  await pool.query('SELECT 1');
-  const server = app.listen(port, '0.0.0.0', () => {
-    console.log(`ELTNOY API listening on port ${port}.`);
+  // Online-exam settings are validated once, before the database check and before listen().
+  // Invalid settings stop startup (exit code 1); only the setting name and rule are logged.
+  // The validated object is cached by getOnlineExamConfig, so the routes, the attempt list
+  // and the recovery scheduler all use the same settings.
+  // Automatic recovery (P0-4) starts only after the server emits 'listening' (never on a bind
+  // failure) and is disabled, with no timer and no database work, unless
+  // ONLINE_EXAM_RECOVERY_SINCE is set.
+  const started = await startApiWithOnlineExamRecovery({
+    loadOnlineExamConfig: getOnlineExamConfig,
+    checkDatabase: async () => {
+      await pool.query('SELECT 1');
+    },
+    listen: () => app.listen(port, '0.0.0.0', () => {
+      console.log(`ELTNOY API listening on port ${port}.`);
+    }),
+    startRecovery: (config) => startOnlineExamRecovery(pool, () => config),
   });
+  if (!started) {
+    await pool.end();
+    process.exitCode = 1;
+    return;
+  }
+  const { server, recovery: onlineExamRecovery } = started;
 
+  // Idempotent: repeated SIGINT/SIGTERM reuse the first shutdown. Order: stop recovery
+  // (waits for an in-flight sweep), close the server, end the pool, exit.
+  const shutdown = createGracefulShutdown({
+    stopRecovery: () => onlineExamRecovery.stop(),
+    closeServer: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    }),
+    endPool: () => pool.end(),
+    exit: (code) => process.exit(code),
+  });
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
-      server.close(() => {
-        void pool.end().then(() => process.exit(0));
-      });
+      void shutdown(signal);
     });
   }
 }
