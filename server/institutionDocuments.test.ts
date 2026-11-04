@@ -18,6 +18,8 @@ const tokens = {
   center: 'C'.repeat(43),
   otherCenter: 'D'.repeat(43),
   official: 'O'.repeat(43),
+  // P0-3 (A-09): document content and review decisions are Super Admin-only.
+  superAdmin: 'S'.repeat(43),
   candidate: 'A'.repeat(43),
 };
 
@@ -173,10 +175,11 @@ function installAuthenticationRows() {
     const session = Object.entries(tokens).find(([, token]) => hashSessionToken(token) === sessionTokenHash);
     if (!session) return { rows: [] };
     const [roleName] = session;
-    const role = roleName === 'official' ? 'official'
+    const role = roleName === 'official' || roleName === 'superAdmin' ? 'official'
       : roleName === 'candidate' ? 'candidate'
         : 'center';
-    const id = roleName === 'otherCenter' ? 'center-b' : roleName === 'center' ? 'center-a' : roleName;
+    const id = roleName === 'otherCenter' ? 'center-b' : roleName === 'center' ? 'center-a'
+      : roleName === 'superAdmin' ? 'super-admin' : roleName;
     return {
       rows: [{
         id,
@@ -184,7 +187,7 @@ function installAuthenticationRows() {
         display_name: `Synthetic ${role}`,
         role,
         account_status: 'approved',
-        is_super_admin: false,
+        is_super_admin: roleName === 'superAdmin',
       }],
     };
   };
@@ -534,13 +537,13 @@ test('records official remarks as append-only history without inventing a decisi
       method: 'POST',
       path: '/admin/institution-documents/versions/00000000-0000-4000-8000-000000000001/reviews',
       params: { versionId: '00000000-0000-4000-8000-000000000001' },
-      token: tokens.official,
+      token: tokens.superAdmin,
       body: { remarks: 'Synthetic verification note.' },
     });
     assert.equal(result.status, 201);
     const insert = statements.find(({ text }) => text.includes('INSERT INTO institution_document_review_history'));
     assert.ok(insert);
-    assert.equal(insert.values?.[2], 'official');
+    assert.equal(insert.values?.[2], 'super-admin');
     assert.equal(insert.values?.[3], null);
     assert.equal(insert.values?.[4], 'Synthetic verification note.');
   } finally {
@@ -569,11 +572,57 @@ test('does not accept an unconfigured review decision', async () => {
       method: 'POST',
       path: '/admin/institution-document-versions/version/reviews',
       params: { versionId: '00000000-0000-4000-8000-000000000001' },
-      token: tokens.official,
+      token: tokens.superAdmin,
       body: { decisionCode: 'approved', remarks: 'Synthetic review note.' },
     });
     assert.equal(result.status, 400);
     assert.equal(inserted, false);
+  } finally {
+    restoreAuthentication();
+    restoreEnvironment();
+  }
+});
+
+test('ordinary Officials cannot open document content or record reviews, before any database access (A-09, P3-D10)', async () => {
+  const restoreEnvironment = setDocumentEnvironment({});
+  const restoreAuthentication = installAuthenticationRows();
+  const statements: string[] = [];
+  const database = {
+    async query(text: string) {
+      statements.push(text);
+      return { rows: [] };
+    },
+    async connect() {
+      statements.push('connect');
+      throw new Error('unexpected');
+    },
+  };
+  try {
+    const router = createInstitutionDocumentsRouter(database);
+    const versionId = '00000000-0000-4000-8000-000000000001';
+    const content = await invoke(routeHandlers(router, 'get', '/admin/institution-documents/versions/:versionId/content'), {
+      method: 'GET',
+      path: `/admin/institution-documents/versions/${versionId}/content`,
+      params: { versionId },
+      token: tokens.official,
+    });
+    assert.equal(content.status, 403);
+    const review = await invoke(routeHandlers(router, 'post', '/admin/institution-documents/versions/:versionId/reviews'), {
+      method: 'POST',
+      path: `/admin/institution-documents/versions/${versionId}/reviews`,
+      params: { versionId },
+      token: tokens.official,
+      body: { remarks: 'Synthetic review note.' },
+    });
+    assert.equal(review.status, 403);
+    assert.deepEqual(statements, [], 'no document query, file read or connection for a refused request');
+    // The metadata list stays available to ordinary Officials.
+    const list = await invoke(routeHandlers(router, 'get', '/admin/institution-documents'), {
+      method: 'GET',
+      path: '/admin/institution-documents',
+      token: tokens.official,
+    });
+    assert.equal(list.status, 200);
   } finally {
     restoreAuthentication();
     restoreEnvironment();

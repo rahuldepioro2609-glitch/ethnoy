@@ -120,13 +120,51 @@ test('official dashboard totals count only published results and are not list-li
     assert.deepEqual(response.body, {
       stats: {
         applications: 812,
-        openHelpdesk: 7,
+        // P0-3 (A-14, P3-D4): ordinary Officials never receive the helpdesk count.
+        openHelpdesk: null,
         mockExamAttempts: 1201,
         publishedResults: 2,
       },
     });
     assert.match(aggregateSql, /count\(\*\) FROM published_results WHERE is_published = true/i);
     assert.doesNotMatch(aggregateSql, /LIMIT\s+500/i);
+    assert.doesNotMatch(aggregateSql, /FROM feedback/i);
+  } finally {
+    poolWithMock.query = originalQuery;
+  }
+});
+
+test('Super Admin dashboard totals include the open helpdesk count (P3-D4)', async () => {
+  const superAdminToken = 'S'.repeat(43);
+  const handlers = findGetRouteHandlers('/api/admin/dashboard-stats');
+  const poolWithMock = pool as unknown as {
+    query: (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
+  };
+  const originalQuery = poolWithMock.query.bind(pool);
+  let aggregateSql = '';
+  poolWithMock.query = async (text, values = []) => {
+    if (text.includes('FROM auth_sessions s')) {
+      return {
+        rows: values[0] === hashSessionToken(superAdminToken)
+          ? [{
+            id: 'synthetic-super-admin',
+            login_id: 'SYNTHETIC-SUPER-ADMIN',
+            display_name: 'Synthetic Super Admin',
+            role: 'official',
+            account_status: 'approved',
+            is_super_admin: true,
+          }]
+          : [],
+      };
+    }
+    aggregateSql = text;
+    return { rows: [{ applications: '812', open_helpdesk: '7', mock_exam_attempts: '1201', published_results: '2' }] };
+  };
+  try {
+    const response = await invokeGetRoute(handlers, superAdminToken);
+    assert.equal(response.status, 200);
+    assert.equal((response.body as { stats: { openHelpdesk: unknown } }).stats.openHelpdesk, 7);
+    assert.match(aggregateSql, /FROM feedback WHERE status <> 'resolved'/);
   } finally {
     poolWithMock.query = originalQuery;
   }

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../api';
+import { SUPER_ADMIN_ONLY_TEXT } from '../utils/adminPermissions';
 import {
   INSTITUTION_DOCUMENT_CATEGORIES,
   type InstitutionDocumentCategory,
@@ -41,6 +42,14 @@ type DocumentVersion = {
 
 interface InstitutionDocumentManagementProps {
   role: 'center' | 'official';
+  /**
+   * Official view only (A-09, P3-D10): preview and download of document content. Defaults to
+   * false, so an Official view never offers content unless the caller grants it. The backend
+   * enforces the same rule. Center accounts always retrieve their own documents.
+   */
+  canOpenDocuments?: boolean;
+  /** Official view only (A-09): record review remarks and decisions. Defaults to false. */
+  canReviewDocuments?: boolean;
 }
 
 function formatBytes(value: number): string {
@@ -112,8 +121,14 @@ function uploadDocument(
   });
 }
 
-export const InstitutionDocumentManagement: React.FC<InstitutionDocumentManagementProps> = ({ role }) => {
+export const InstitutionDocumentManagement: React.FC<InstitutionDocumentManagementProps> = ({
+  role,
+  canOpenDocuments = false,
+  canReviewDocuments = false,
+}) => {
   const isOfficial = role === 'official';
+  const canOpenContent = isOfficial ? canOpenDocuments : true;
+  const canRecordReviews = isOfficial && canReviewDocuments;
   const policyPath = isOfficial
     ? '/api/admin/institution-documents/policy'
     : '/api/center/documents/policy';
@@ -214,6 +229,7 @@ export const InstitutionDocumentManagement: React.FC<InstitutionDocumentManageme
   };
 
   const retrieve = async (version: DocumentVersion, action: 'preview' | 'download') => {
+    if (!canOpenContent) return;
     setPreviewError(null);
     try {
       const blob = await fetchDocumentBlob(version, isOfficial);
@@ -274,14 +290,14 @@ export const InstitutionDocumentManagement: React.FC<InstitutionDocumentManageme
           </p>
           <p className="text-xs text-slate-500">Uploaded {new Date(version.uploaded_at).toLocaleString()}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        {canOpenContent && <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => void retrieve(version, 'preview')} className="rounded border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
             Preview
           </button>
           <button type="button" onClick={() => void retrieve(version, 'download')} className="rounded border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
             Download
           </button>
-        </div>
+        </div>}
       </div>
 
       <div className="mt-3 border-t border-slate-100 pt-3">
@@ -304,7 +320,7 @@ export const InstitutionDocumentManagement: React.FC<InstitutionDocumentManageme
         ) : <p className="mt-2 text-xs text-slate-500">No reviewer activity recorded.</p>}
       </div>
 
-      {allowReview && (
+      {allowReview && canRecordReviews && (
         <form onSubmit={(event) => { event.preventDefault(); void submitReview(version.version_id); }} className="mt-3 space-y-2 border-t border-slate-100 pt-3">
           <label className="block text-xs font-semibold text-slate-700">
             Configured review decision
@@ -347,6 +363,11 @@ export const InstitutionDocumentManagement: React.FC<InstitutionDocumentManageme
         <p className="mt-1 text-sm text-slate-600">
           Private documents are available only to the owning institution and authorized Officials.
         </p>
+        {isOfficial && (!canOpenContent || !canRecordReviews) && (
+          <p role="note" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            {SUPER_ADMIN_ONLY_TEXT.institutionDocuments}
+          </p>
+        )}
       </div>
 
       {success && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{success}</p>}

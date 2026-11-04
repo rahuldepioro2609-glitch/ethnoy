@@ -5,7 +5,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
-import { type AuthenticatedRequest, requireAuth, requireRoles } from './auth.js';
+import { type AuthenticatedRequest, requireAuth, requireRoles, requireSuperAdmin } from './auth.js';
 import { pool } from './db.js';
 import { INSTITUTION_DOCUMENT_CATEGORIES, type InstitutionDocumentCategory } from '../src/utils/institutionDocuments.js';
 
@@ -603,6 +603,11 @@ export function createInstitutionDocumentsRouter(
   const router = express.Router();
   const centerAccess = [requireAuth, requireRoles('center')];
   const officialAccess = [requireAuth, requireRoles('official')];
+  // P0-3 (A-09, P3-D10): document content (preview and download share one route) and review
+  // decisions are Super Admin-only. Ordinary Officials keep the metadata list and the policy.
+  // P3-D5 (controlled read-only access for institution-approval Officials) is NOT implemented:
+  // it is blocked pending a separately approved mechanism, and no alternative content path exists.
+  const superAdminAccess = [requireAuth, requireRoles('official'), requireSuperAdmin];
 
   router.get('/center/documents/policy', ...centerAccess, (_request, response) => {
     response.set('Cache-Control', 'no-store').json(policyResponse(getInstitutionDocumentPolicy()));
@@ -675,11 +680,11 @@ export function createInstitutionDocumentsRouter(
     });
   }));
 
-  router.get('/admin/institution-documents/versions/:versionId/content', ...officialAccess, asyncRoute(async (request, response) => {
+  router.get('/admin/institution-documents/versions/:versionId/content', ...superAdminAccess, asyncRoute(async (request, response) => {
     await sendDocumentContent(request, response, database);
   }));
 
-  router.post('/admin/institution-documents/versions/:versionId/reviews', ...officialAccess, asyncRoute(async (request, response) => {
+  router.post('/admin/institution-documents/versions/:versionId/reviews', ...superAdminAccess, asyncRoute(async (request, response) => {
     const body = request.body as { decisionCode?: unknown; remarks?: unknown };
     const policy = getInstitutionDocumentPolicy();
     const remarks = typeof body?.remarks === 'string' ? body.remarks.trim() : '';

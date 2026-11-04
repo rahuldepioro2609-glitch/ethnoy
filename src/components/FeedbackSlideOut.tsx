@@ -34,12 +34,13 @@ import {
   filterFeedbackEntries,
 } from '../utils/feedbackLogic';
 import { apiRequest } from '../api';
+import { canAdministerHelpdeskFromSlideOut } from '../utils/adminPermissions';
 
 interface FeedbackSlideOutProps {
   isOpen: boolean;
   onClose: () => void;
   onOpen: () => void;
-  loggedInUser?: { name: string; role: string; id: string } | null;
+  loggedInUser?: { name: string; role: string; id: string; accountRole?: string; isSuperAdmin?: boolean } | null;
 }
 
 export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
@@ -75,7 +76,9 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
   const [historyFilterType, setHistoryFilterType] = useState<string>('all');
   const [historyFilterStatus, setHistoryFilterStatus] = useState<string>('all');
 
-  const isOfficial = loggedInUser?.role === 'Assessment Official';
+  // P0-3 (A-14): the admin ticket view (and its request) is Super Admin-only. Every other user,
+  // including ordinary Officials, sees the submit form only.
+  const isOfficial = canAdministerHelpdeskFromSlideOut(loggedInUser);
 
   useEffect(() => {
     if (!isOfficial) {

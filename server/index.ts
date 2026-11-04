@@ -219,6 +219,71 @@ async function getUploadRows(request: Request, response: Response, sheetName: st
   }
 }
 
+// ---------------------------------------------------------------------------
+// P0-3 publication guards (A-04, A-05, A-16, P3-D11)
+//
+// Ordinary Officials may create and replace DRAFT content only. Super Admins may also correct
+// published content, which always returns it to draft. Every guarded write verifies its row
+// count and rolls back the whole transaction on any miss, so an import is all-or-nothing.
+// ---------------------------------------------------------------------------
+
+function sendPublishedContentForbidden(response: Response, content: 'result' | 'answer key' | 'online exam'): void {
+  response.status(403).json({
+    error: `Only a Super Admin can correct a published ${content}. Nothing was imported or changed.`,
+    code: 'published_content_super_admin_only',
+  });
+}
+
+export const RESULT_UPSERT_SQL = Object.freeze({
+  // Super Admin: new rows and corrections are written as drafts (A-16).
+  draft: `INSERT INTO published_results (id, application_number, roll_number, exam_code, date_of_birth, scorecard, is_published)
+     VALUES ($1, $2, $3, $4, $5, $6, false)
+     ON CONFLICT (exam_code, roll_number) DO UPDATE SET
+       application_number = EXCLUDED.application_number, date_of_birth = EXCLUDED.date_of_birth,
+       scorecard = EXCLUDED.scorecard, is_published = false, published_at = now()
+     RETURNING id, application_number, roll_number, exam_code, published_at, is_published`,
+  // Ordinary Official: a conflicting row is replaced only while it is still a draft.
+  // A published conflicting row makes this statement affect 0 rows.
+  draftOnlyOverDrafts: `INSERT INTO published_results (id, application_number, roll_number, exam_code, date_of_birth, scorecard, is_published)
+     VALUES ($1, $2, $3, $4, $5, $6, false)
+     ON CONFLICT (exam_code, roll_number) DO UPDATE SET
+       application_number = EXCLUDED.application_number, date_of_birth = EXCLUDED.date_of_birth,
+       scorecard = EXCLUDED.scorecard, is_published = false, published_at = now()
+     WHERE published_results.is_published = false
+     RETURNING id, application_number, roll_number, exam_code, published_at, is_published`,
+});
+
+const ANSWER_KEY_UPSERT = `INSERT INTO answer_key_questions
+         (id, exam_code, question_number, subject, question_text, options, official_key, explanation)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (exam_code, question_number) DO UPDATE SET
+           subject = EXCLUDED.subject, question_text = EXCLUDED.question_text, options = EXCLUDED.options,
+           official_key = EXCLUDED.official_key, explanation = EXCLUDED.explanation, is_published = false`;
+
+export const ANSWER_KEY_IMPORT_SQL = Object.freeze({
+  lockExam: `SELECT question_number, is_published FROM answer_key_questions
+     WHERE exam_code = $1 ORDER BY question_number FOR UPDATE`,
+  upsert: ANSWER_KEY_UPSERT,
+  upsertDraftOnly: `${ANSWER_KEY_UPSERT}
+         WHERE answer_key_questions.is_published = false`,
+});
+
+const ONLINE_EXAM_UPSERT = `INSERT INTO online_exam_questions
+         (id, exam_code, exam_name, duration_minutes, question_number, section, question_text, options, correct_option, points)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (exam_code, question_number) DO UPDATE SET
+           exam_name = EXCLUDED.exam_name, duration_minutes = EXCLUDED.duration_minutes, section = EXCLUDED.section,
+           question_text = EXCLUDED.question_text, options = EXCLUDED.options,
+           correct_option = EXCLUDED.correct_option, points = EXCLUDED.points, is_published = false`;
+
+export const ONLINE_EXAM_IMPORT_SQL = Object.freeze({
+  lockExam: `SELECT question_number, is_published FROM online_exam_questions
+     WHERE exam_code = $1 ORDER BY question_number FOR UPDATE`,
+  upsert: ONLINE_EXAM_UPSERT,
+  upsertDraftOnly: `${ONLINE_EXAM_UPSERT}
+         WHERE online_exam_questions.is_published = false`,
+});
+
 app.get('/api/admin/workbook-template', requireAuth, requireRoles('official'), asyncRoute(async (_request, response) => {
   const workbook = new ExcelJS.Workbook();
   addWorkbookSheet(workbook, 'AdmitCards', [
@@ -242,18 +307,21 @@ app.get('/api/admin/workbook-template', requireAuth, requireRoles('official'), a
   response.send(Buffer.from(buffer));
 }));
 
-app.get('/api/admin/dashboard-stats', requireAuth, requireRoles('official'), asyncRoute(async (_request, response) => {
+// P0-3 (A-14, P3-D4): the open-helpdesk count is Super Admin-only. For ordinary Officials the
+// feedback table is not queried at all and `openHelpdesk` is null.
+app.get('/api/admin/dashboard-stats', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+  const includeHelpdesk = getUser(request)?.isSuperAdmin === true;
   const { rows } = await pool.query(
     `SELECT
        (SELECT count(*) FROM applications) AS applications,
-       (SELECT count(*) FROM feedback WHERE status <> 'resolved') AS open_helpdesk,
+       ${includeHelpdesk ? "(SELECT count(*) FROM feedback WHERE status <> 'resolved')" : 'NULL'} AS open_helpdesk,
        (SELECT count(*) FROM mock_exam_attempts) AS mock_exam_attempts,
        (SELECT count(*) FROM published_results WHERE is_published = true) AS published_results`,
   );
   response.json({
     stats: {
       applications: Number(rows[0].applications),
-      openHelpdesk: Number(rows[0].open_helpdesk),
+      openHelpdesk: includeHelpdesk ? Number(rows[0].open_helpdesk) : null,
       mockExamAttempts: Number(rows[0].mock_exam_attempts),
       publishedResults: Number(rows[0].published_results),
     },
@@ -313,7 +381,9 @@ app.get('/api/admin/data-export', requireAuth, requireRoles('official'), require
   response.send(Buffer.from(buffer));
 }));
 
-app.post('/api/admin/admit-cards/import', requireAuth, requireRoles('official'), workbookUpload, asyncRoute(async (request, response) => {
+// P0-3 (A-06, P3-D1): admit cards have no draft state yet, so every write publishes; interim
+// Super Admin-only. The guard runs before the upload is parsed.
+app.post('/api/admin/admit-cards/import', requireAuth, requireRoles('official'), requireSuperAdmin, workbookUpload, asyncRoute(async (request, response) => {
   const rows = await getUploadRows(request, response, 'AdmitCards');
   if (!rows) return;
   const schema = z.object({
@@ -406,25 +476,42 @@ app.post('/api/admin/answer-keys/import', requireAuth, requireRoles('official'),
     response.status(400).json({ error: 'The AnswerKeys worksheet contains duplicate exam/question numbers.' });
     return;
   }
+  const superAdmin = getUser(request)?.isSuperAdmin === true;
+  const examCodes = [...new Set(parsed.flatMap((item) => item.success ? [item.data.examCode.toUpperCase()] : []))].sort();
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    for (const examCode of new Set(parsed.flatMap((item) => item.success ? [item.data.examCode.toUpperCase()] : []))) {
+    // P0-3 (A-05, A-16, P3-D11): lock every existing row of each exam before reading its
+    // publication state, so a concurrent publish either finishes first (and is seen here) or
+    // waits for this import. Exams are locked in a fixed order to avoid lock-order deadlocks.
+    for (const examCode of examCodes) {
+      const { rows: locked } = await client.query(ANSWER_KEY_IMPORT_SQL.lockExam, [examCode]);
+      if (!superAdmin && locked.some((row) => row.is_published === true)) {
+        await client.query('ROLLBACK');
+        sendPublishedContentForbidden(response, 'answer key');
+        return;
+      }
+    }
+    // Super Admin correction of published content returns the whole exam to draft (A-16).
+    for (const examCode of examCodes) {
       await client.query('UPDATE answer_key_questions SET is_published = false WHERE exam_code = $1', [examCode]);
     }
     for (const item of parsed) {
       if (!item.success) continue;
       const key = item.data;
-      await client.query(
-        `INSERT INTO answer_key_questions
-         (id, exam_code, question_number, subject, question_text, options, official_key, explanation)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (exam_code, question_number) DO UPDATE SET
-           subject = EXCLUDED.subject, question_text = EXCLUDED.question_text, options = EXCLUDED.options,
-           official_key = EXCLUDED.official_key, explanation = EXCLUDED.explanation, is_published = false`,
+      const { rowCount } = await client.query(
+        superAdmin ? ANSWER_KEY_IMPORT_SQL.upsert : ANSWER_KEY_IMPORT_SQL.upsertDraftOnly,
         [randomUUID(), key.examCode.toUpperCase(), key.questionNumber, key.subject, key.questionText,
           { A: key.optionA, B: key.optionB, C: key.optionC, D: key.optionD }, key.officialKey, key.explanation ?? ''],
       );
+      if (rowCount !== 1) {
+        // Unexpected for a Super Admin: the catch block rolls back the whole import.
+        if (superAdmin) throw new Error('Answer-key import did not write exactly one row.');
+        // The draft-only guard matched a published row; nothing from this import is kept.
+        await client.query('ROLLBACK');
+        sendPublishedContentForbidden(response, 'answer key');
+        return;
+      }
     }
     await client.query('COMMIT');
     response.status(201).json({ imported: parsed.length });
@@ -478,9 +565,11 @@ app.post('/api/admin/online-exams/import', requireAuth, requireRoles('official')
     response.status(400).json({ error: 'The OnlineExam worksheet contains duplicate question numbers.' });
     return;
   }
+  const superAdmin = getUser(request)?.isSuperAdmin === true;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // P0-4 history protection: unchanged and still the first check, for every Official.
     const activeAttempts = await client.query(
       'SELECT 1 FROM online_exam_attempts WHERE exam_code = $1 LIMIT 1',
       [[...exams][0]],
@@ -490,23 +579,31 @@ app.post('/api/admin/online-exams/import', requireAuth, requireRoles('official')
       response.status(409).json({ error: 'This exam already has attempts. Create a new exam code to preserve its question and scoring history.' });
       return;
     }
+    // P0-3 (A-05, A-16, P3-D11): lock the exam's rows before reading its publication state.
+    const { rows: locked } = await client.query(ONLINE_EXAM_IMPORT_SQL.lockExam, [[...exams][0]]);
+    if (!superAdmin && locked.some((row) => row.is_published === true)) {
+      await client.query('ROLLBACK');
+      sendPublishedContentForbidden(response, 'online exam');
+      return;
+    }
+    // Super Admin correction of a published paper returns it to draft (A-16).
     await client.query('UPDATE online_exam_questions SET is_published = false WHERE exam_code = $1', [[...exams][0]]);
     for (const item of parsed) {
       if (!item.success) continue;
       const question = item.data;
-      await client.query(
-        `INSERT INTO online_exam_questions
-         (id, exam_code, exam_name, duration_minutes, question_number, section, question_text, options, correct_option, points)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         ON CONFLICT (exam_code, question_number) DO UPDATE SET
-           exam_name = EXCLUDED.exam_name, duration_minutes = EXCLUDED.duration_minutes, section = EXCLUDED.section,
-           question_text = EXCLUDED.question_text, options = EXCLUDED.options,
-           correct_option = EXCLUDED.correct_option, points = EXCLUDED.points, is_published = false`,
+      const { rowCount } = await client.query(
+        superAdmin ? ONLINE_EXAM_IMPORT_SQL.upsert : ONLINE_EXAM_IMPORT_SQL.upsertDraftOnly,
         [randomUUID(), question.examCode.toUpperCase(), question.examName, question.durationMinutes,
           question.questionNumber, question.section, question.questionText,
           { A: question.optionA, B: question.optionB, C: question.optionC, D: question.optionD },
           question.correctOption, question.points],
       );
+      if (rowCount !== 1) {
+        if (superAdmin) throw new Error('Online-exam import did not write exactly one row.');
+        await client.query('ROLLBACK');
+        sendPublishedContentForbidden(response, 'online exam');
+        return;
+      }
     }
     await client.query('COMMIT');
     response.status(201).json({ examCode: [...exams][0], imported: parsed.length, published: false });
@@ -557,6 +654,7 @@ app.post('/api/admin/results/import', requireAuth, requireRoles('official'), wor
     response.status(400).json({ error: 'The Results worksheet contains duplicate exam/roll-number rows.' });
     return;
   }
+  const superAdmin = getUser(request)?.isSuperAdmin === true;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -581,15 +679,21 @@ app.post('/api/admin/results/import', requireAuth, requireRoles('official'), wor
         response.status(400).json({ error: `Roll number for ${result.applicationNumber} does not match its assigned admit card; no results were imported.` });
         return;
       }
-      await client.query(
-        `INSERT INTO published_results (id, application_number, roll_number, exam_code, date_of_birth, scorecard, is_published)
-         VALUES ($1, $2, $3, $4, $5, $6, false)
-         ON CONFLICT (exam_code, roll_number) DO UPDATE SET
-           application_number = EXCLUDED.application_number, date_of_birth = EXCLUDED.date_of_birth,
-           scorecard = EXCLUDED.scorecard, is_published = false, published_at = now()`,
+      // P0-3 (A-04, A-16, P3-D11): conditional upsert plus row-count check. For an ordinary
+      // Official the conflict branch only fires on a draft row; PostgreSQL evaluates that
+      // condition on the locked, latest row version, so a row published concurrently is never
+      // overwritten. Any miss rolls back the whole import.
+      const { rowCount } = await client.query(
+        superAdmin ? RESULT_UPSERT_SQL.draft : RESULT_UPSERT_SQL.draftOnlyOverDrafts,
         [randomUUID(), result.applicationNumber.toUpperCase(), result.rollNumber.toUpperCase(),
           result.examCode.toUpperCase(), result.dateOfBirth, result.scorecard],
       );
+      if (rowCount !== 1) {
+        if (superAdmin) throw new Error('Result import did not write exactly one row.');
+        await client.query('ROLLBACK');
+        sendPublishedContentForbidden(response, 'result');
+        return;
+      }
     }
     await client.query('COMMIT');
     response.status(201).json({ imported: normalizedRows.length, published: false });
@@ -601,7 +705,8 @@ app.post('/api/admin/results/import', requireAuth, requireRoles('official'), wor
   }
 }));
 
-app.patch('/api/admin/answer-keys/:examCode', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+// P0-3 (A-05): publishing and unpublishing answer keys is Super Admin-only.
+app.patch('/api/admin/answer-keys/:examCode', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({ isPublished: z.boolean() }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
@@ -618,7 +723,8 @@ app.patch('/api/admin/answer-keys/:examCode', requireAuth, requireRoles('officia
   response.json({ examCode: request.params.examCode.toUpperCase(), updated: rowCount, isPublished: parsed.data.isPublished });
 }));
 
-app.patch('/api/admin/online-exams/:examCode', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+// P0-3 (A-05): publishing and unpublishing online exam papers is Super Admin-only.
+app.patch('/api/admin/online-exams/:examCode', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({ isPublished: z.boolean() }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
@@ -1267,7 +1373,7 @@ app.post('/api/center/withdrawals', requireAuth, requireRoles('center'), asyncRo
   }
 }));
 
-app.get('/api/admin/institute-management', requireAuth, requireRoles('official'), asyncRoute(async (_request, response) => {
+app.get('/api/admin/institute-management', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
   const [forms, profileChanges, withdrawals, walletBalances] = await Promise.all([
     pool.query(
       `SELECT f.id, f.institute_id, f.form_type, f.title, f.description, f.eligibility,
@@ -1283,11 +1389,15 @@ app.get('/api/admin/institute-management', requireAuth, requireRoles('official')
        FROM institute_profile_changes p JOIN users u ON u.id = p.institute_id
        ORDER BY CASE p.status WHEN 'pending' THEN 0 ELSE 1 END, p.created_at DESC LIMIT 500`,
     ),
+    // P0-3 (A-03): two booleans for the maker-checker UI. The approver's identity is not exposed.
     pool.query(
       `SELECT w.id, w.institute_id, w.amount_paise, w.status, w.transfer_reference, w.created_at,
-              u.display_name AS institute_name, u.login_id
+              u.display_name AS institute_name, u.login_id,
+              (w.reviewed_by IS NOT NULL) AS approver_recorded,
+              COALESCE(w.reviewed_by = $1, false) AS reviewed_by_current_user
        FROM institute_withdrawals w JOIN users u ON u.id = w.institute_id
        ORDER BY CASE w.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, w.created_at DESC LIMIT 500`,
+      [getUser(request)?.id ?? null],
     ),
     pool.query(
       `SELECT u.id AS institute_id, u.display_name AS institute_name, u.login_id,
@@ -1368,7 +1478,8 @@ app.patch('/api/admin/institute-profile-changes/:id', requireAuth, requireRoles(
   }
 }));
 
-app.post('/api/admin/institutes/:id/credits', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+// P0-3 (A-02): wallet credits are Super Admin-only.
+app.post('/api/admin/institutes/:id/credits', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({
     amountPaise: z.number().int().positive().max(1_000_000_000_000),
     description: z.string().trim().min(3).max(300),
@@ -1396,7 +1507,46 @@ app.post('/api/admin/institutes/:id/credits', requireAuth, requireRoles('officia
   response.status(201).json({ entry: rows[0] });
 }));
 
-app.patch('/api/admin/institute-withdrawals/:id', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+// P0-3 (A-03, P3-D2, P3-D3): withdrawals are Super Admin-only, with maker-checker on payment.
+// All checks run inside one transaction while the withdrawal row is locked:
+// - the approver (reviewed_by while the row is `approved`, legacy rows included) can't pay it;
+// - an approved row with no recorded approver (NULL) can't be paid;
+// - payment needs at least two active Super Admins (role official, is_super_admin,
+//   account_status approved: the same rule requireAuth applies);
+// - paying keeps the original reviewed_by and reviewed_at; the payer is recorded as created_by
+//   on the debit entry written in the same transaction;
+// - any Super Admin, the approver included, may still reject before payment.
+// The row lock plus the status-guarded UPDATE prevent double payment; the unique withdrawal_id and
+// transfer_reference on wallet entries are a second guard.
+export const WITHDRAWAL_SQL = Object.freeze({
+  lock: `SELECT w.* FROM institute_withdrawals w
+       JOIN users u ON u.id = w.institute_id
+       WHERE w.id = $1 AND u.role = 'center'
+       FOR UPDATE OF u, w`,
+  activeSuperAdmins: `SELECT count(*)::int AS active_super_admins FROM users
+       WHERE role = 'official' AND is_super_admin = true AND account_status = 'approved'`,
+  insertDebit: `INSERT INTO institute_wallet_entries
+         (id, institute_id, entry_type, amount_paise, description, transfer_reference, withdrawal_id, created_by)
+         VALUES ($1, $2, 'debit', $3, $4, $5, $6, $7)`,
+  // Payment: reviewed_by and reviewed_at are deliberately not assigned (approver preserved).
+  markPaid: `UPDATE institute_withdrawals
+       SET status = 'paid', transfer_reference = $2
+       WHERE id = $1 AND status = 'approved'
+       RETURNING id, status, amount_paise, transfer_reference`,
+  // Approve or reject: records the reviewing Super Admin. $4 = the status the row was locked in.
+  review: `UPDATE institute_withdrawals
+       SET status = $2, transfer_reference = NULL, reviewed_by = $3, reviewed_at = now()
+       WHERE id = $1 AND status = $4
+       RETURNING id, status, amount_paise, transfer_reference`,
+});
+
+export const MIN_ACTIVE_SUPER_ADMINS_FOR_PAYMENT = 2;
+
+function sendWithdrawalConflict(response: Response, code: string, error: string): void {
+  response.status(409).json({ error, code });
+}
+
+app.patch('/api/admin/institute-withdrawals/:id', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({
     status: z.enum(['approved', 'rejected', 'paid']),
     transferReference: z.string().trim().min(3).max(120).regex(/^[A-Za-z0-9._/-]+$/).optional(),
@@ -1410,16 +1560,14 @@ app.patch('/api/admin/institute-withdrawals/:id', requireAuth, requireRoles('off
     return;
   }
   const user = getUser(request);
+  if (!user) {
+    response.status(401).json({ error: 'Sign in is required.' });
+    return;
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query(
-      `SELECT w.* FROM institute_withdrawals w
-       JOIN users u ON u.id = w.institute_id
-       WHERE w.id = $1 AND u.role = 'center'
-       FOR UPDATE OF u, w`,
-      [request.params.id],
-    );
+    const { rows } = await client.query(WITHDRAWAL_SQL.lock, [request.params.id]);
     const withdrawal = rows[0];
     if (!withdrawal || withdrawal.status === 'paid' ||
         (parsed.data.status === 'approved' && withdrawal.status !== 'pending') ||
@@ -1429,23 +1577,37 @@ app.patch('/api/admin/institute-withdrawals/:id', requireAuth, requireRoles('off
       response.status(409).json({ error: 'This withdrawal cannot be moved to the requested status.' });
       return;
     }
+    let updated: Record<string, unknown>[];
     if (parsed.data.status === 'paid') {
-      await client.query(
-        `INSERT INTO institute_wallet_entries
-         (id, institute_id, entry_type, amount_paise, description, transfer_reference, withdrawal_id, created_by)
-         VALUES ($1, $2, 'debit', $3, $4, $5, $6, $7)`,
+      if (withdrawal.reviewed_by === null || withdrawal.reviewed_by === undefined) {
+        await client.query('ROLLBACK');
+        sendWithdrawalConflict(response, 'approver_unknown',
+          'This withdrawal has no recorded approver, so it cannot be paid. Reject it and ask the institute to request it again.');
+        return;
+      }
+      if (withdrawal.reviewed_by === user.id) {
+        await client.query('ROLLBACK');
+        sendWithdrawalConflict(response, 'maker_checker',
+          'You approved this withdrawal, so a different Super Admin must mark it paid.');
+        return;
+      }
+      const { rows: admins } = await client.query(WITHDRAWAL_SQL.activeSuperAdmins);
+      if (!(Number(admins[0]?.active_super_admins) >= MIN_ACTIVE_SUPER_ADMINS_FOR_PAYMENT)) {
+        await client.query('ROLLBACK');
+        sendWithdrawalConflict(response, 'insufficient_super_admins',
+          'Withdrawal payments need at least two active Super Admin accounts.');
+        return;
+      }
+      await client.query(WITHDRAWAL_SQL.insertDebit,
         [randomUUID(), withdrawal.institute_id, withdrawal.amount_paise,
-          `Withdrawal ${withdrawal.id}`, parsed.data.transferReference, withdrawal.id, user?.id],
-      );
+          `Withdrawal ${withdrawal.id}`, parsed.data.transferReference, withdrawal.id, user.id]);
+      ({ rows: updated } = await client.query(WITHDRAWAL_SQL.markPaid,
+        [withdrawal.id, parsed.data.transferReference]));
+    } else {
+      ({ rows: updated } = await client.query(WITHDRAWAL_SQL.review,
+        [withdrawal.id, parsed.data.status, user.id, withdrawal.status]));
     }
-    const { rows: updated } = await client.query(
-      `UPDATE institute_withdrawals
-       SET status = $2, transfer_reference = CASE WHEN $2 = 'paid' THEN $3 ELSE NULL END,
-           reviewed_by = $4, reviewed_at = now()
-       WHERE id = $1
-       RETURNING id, status, amount_paise, transfer_reference`,
-      [withdrawal.id, parsed.data.status, parsed.data.transferReference || null, user?.id],
-    );
+    if (updated.length !== 1) throw new Error('Withdrawal update did not affect exactly one row.');
     await client.query('COMMIT');
     response.json({ withdrawal: updated[0] });
   } catch (error) {
@@ -1853,12 +2015,13 @@ app.post('/api/feedback', optionalAuth, publicWriteLimiter, asyncRoute(async (re
   response.status(201).json({ entry: toFeedback(rows[0]) });
 }));
 
-app.get('/api/admin/feedback', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+// P0-3 (A-14): helpdesk tickets (which contain applicant contact details) are Super Admin-only.
+app.get('/api/admin/feedback', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const { rows } = await pool.query('SELECT * FROM feedback ORDER BY created_at DESC LIMIT 500');
   response.json({ entries: rows.map(toFeedback) });
 }));
 
-app.patch('/api/admin/feedback/:id', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+app.patch('/api/admin/feedback/:id', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({
     status: z.enum(['under_review', 'in_progress', 'resolved']),
     resolutionNote: z.string().trim().max(1000).optional(),
@@ -2036,7 +2199,8 @@ app.patch('/api/admin/applications/:id', requireAuth, requireRoles('official'), 
   response.json({ application: rows[0] });
 }));
 
-app.post('/api/admin/applications/:id/verify-ownership', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+// P0-3 (A-15): linking a legacy application to a candidate account is Super Admin-only.
+app.post('/api/admin/applications/:id/verify-ownership', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({
     applicationNumber: z.string().trim().min(4).max(100),
     dateOfBirth: z.string().date(),
@@ -2083,7 +2247,8 @@ app.get('/api/candidate/portal', requireAuth, requireRoles('candidate'), asyncRo
   response.json({ applications: rows, attempts: attempts.rows, results: results.rows });
 }));
 
-app.put('/api/admin/applications/:id/admit-card', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+// P0-3 (A-06, P3-D1): interim Super Admin-only (this write publishes immediately).
+app.put('/api/admin/applications/:id/admit-card', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({
     rollNumber: z.string().trim().min(3).max(50),
     examDate: z.string().trim().min(3).max(100),
@@ -2289,20 +2454,26 @@ app.post('/api/admin/results', requireAuth, requireRoles('official'), asyncRoute
     response.status(404).json({ error: 'A matching application was not found.' });
     return;
   }
-  const { rows } = await pool.query(
-    `INSERT INTO published_results (id, application_number, roll_number, exam_code, date_of_birth, scorecard, is_published)
-     VALUES ($1, $2, $3, $4, $5, $6, true)
-     ON CONFLICT (exam_code, roll_number) DO UPDATE SET
-       application_number = EXCLUDED.application_number, date_of_birth = EXCLUDED.date_of_birth,
-       scorecard = EXCLUDED.scorecard, is_published = true, published_at = now()
-     RETURNING id, application_number, roll_number, exam_code, published_at`,
+  // P0-3 (A-04, A-16, P3-D11): this route never publishes. It writes a draft for everyone;
+  // replacing a published row (a correction) is Super Admin-only and returns it to draft.
+  // Publishing is a separate Super Admin action (PATCH /api/admin/results/:id).
+  const superAdmin = getUser(request)?.isSuperAdmin === true;
+  const { rows, rowCount } = await pool.query(
+    superAdmin ? RESULT_UPSERT_SQL.draft : RESULT_UPSERT_SQL.draftOnlyOverDrafts,
     [randomUUID(), result.applicationNumber.toUpperCase(), result.rollNumber.toUpperCase(),
       result.examCode.toUpperCase(), result.dateOfBirth, result.scorecard],
   );
+  if (rowCount !== 1 || !rows[0]) {
+    if (superAdmin) throw new Error('Result write did not affect exactly one row.');
+    // Single statement: a 0-row outcome means nothing was written.
+    sendPublishedContentForbidden(response, 'result');
+    return;
+  }
   response.status(201).json({ result: rows[0] });
 }));
 
-app.patch('/api/admin/results/:id', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+// P0-3 (A-04): publishing and unpublishing results is Super Admin-only.
+app.patch('/api/admin/results/:id', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({ isPublished: z.boolean() }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
