@@ -22,3 +22,23 @@ coverage
 !public/
 !public/assets/
 !public/assets/*.png
+
+# Security: local development secrets and private TLS key material never enter a build context.
+# Keep these lines LAST: Docker applies the last matching rule, so no "!" re-include above can override them.
+.local-dev/
+**/.local-dev/
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+
+# UD-1: database credential files never enter a build context. They belong outside the repository
+# (ELTNOY_SECRETS_DIR); these rules are defence in depth. Keep after every "!" rule above.
+secrets/
+**/secrets/
+**/*.secret
+**/*_password
+**/*_password.txt
+**/*.pgpass
+**/.pgpass
+**/pgpass.conf

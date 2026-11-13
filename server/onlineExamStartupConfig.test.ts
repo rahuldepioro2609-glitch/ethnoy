@@ -284,8 +284,10 @@ function interpolate(value: string, env: Record<string, string | undefined>): st
   });
 }
 
-test('12. Compose: the app service passes ONLINE_EXAM_RECOVERY_SINCE with an empty default; unset → recovery disabled', async () => {
-  const app = serviceBlock('app');
+test('12. Compose: api_public (the recovery owner) passes ONLINE_EXAM_RECOVERY_SINCE with an empty default; unset → recovery disabled', async () => {
+  // P1-D.2: recovery is owned by the public instance; api_admin must never receive the setting.
+  assert.doesNotMatch(serviceBlock('api_admin').split('\n').filter((line) => !line.trim().startsWith('#')).join('\n'), /ONLINE_EXAM_RECOVERY_SINCE/);
+  const app = serviceBlock('api_public');
   const line = app.split('\n').find((entry) => entry.trim().startsWith('ONLINE_EXAM_RECOVERY_SINCE:'));
   assert.equal(line?.trim(), 'ONLINE_EXAM_RECOVERY_SINCE: ${ONLINE_EXAM_RECOVERY_SINCE:-}');
   assert.ok(app.indexOf('ONLINE_EXAM_RECOVERY_SINCE:') > app.indexOf('environment:'), 'inside the app environment');
@@ -306,8 +308,9 @@ test('13. Compose: no hardcoded cutoff, no other online-exam overrides, other se
   ], 'exactly one online-exam setting; grace, interval, batch and lock timeout keep their built-in defaults');
   const nonComment = composeText.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n');
   assert.doesNotMatch(nonComment, /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/, 'no hardcoded date-time outside comments');
-  for (const service of ['postgres', 'nginx']) {
-    assert.doesNotMatch(serviceBlock(service), /ONLINE_EXAM_/, `${service} receives no online-exam setting`);
+  for (const service of ['postgres', 'nginx_public', 'nginx_admin', 'api_admin', 'migrate']) {
+    const active = serviceBlock(service).split('\n').filter((line) => !line.trim().startsWith('#')).join('\n');
+    assert.doesNotMatch(active, /ONLINE_EXAM_/, `${service} receives no online-exam setting`);
   }
 });
 

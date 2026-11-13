@@ -1,13 +1,11 @@
-import { validateDeploymentConfig } from './deploymentConfig.js';
+// Deployment preflight. Runs inside each API container before the API starts (docker-compose.yml).
+// On the host, run it ONLY through the deployment wrapper (P1-D.3; README / runbook §14.8):
+//   scripts/eltnoy-deploy.sh --deployment-env-file /absolute/path/.env.production preflight
+// The wrapper parses the env file once and validates and passes the same values to Compose.
+// Errors name settings and rules only; configured values are never printed.
+import { deploymentConfigFromEnvironment, validateDeploymentConfig } from './deploymentConfig.js';
 
-const errors = validateDeploymentConfig({
-  deploymentMode: process.env.DEPLOYMENT_MODE,
-  databaseSsl: process.env.DATABASE_SSL,
-  databaseSslRejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED,
-  postgresCaFile: process.env.POSTGRES_CA_FILE,
-  postgresTlsDir: process.env.POSTGRES_TLS_DIR,
-  tlsCertDir: process.env.TLS_CERT_DIR,
-});
+const errors = validateDeploymentConfig(deploymentConfigFromEnvironment(process.env));
 
 if (errors.length > 0) {
   console.error(`Invalid deployment configuration:\n${errors.map((error) => `- ${error}`).join('\n')}`);

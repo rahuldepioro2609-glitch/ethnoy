@@ -1,3 +1,12 @@
+# UNSUPPORTED — DO NOT DEPLOY THE CURRENT APPLICATION WITH THIS FILE.
+# This legacy Render configuration is incompatible with P1-B surface isolation, which requires a
+# separate public listener and Admin listener, two independently configured trusted-proxy lists
+# (ELTNOY_PUBLIC_PROXY_CIDRS, ELTNOY_ADMIN_PROXY_CIDRS), server-assigned listener identity and an
+# internal-only /api/health probe. With this file the API refuses to start (no surface settings)
+# and the platform health check on /api/health is answered 404.
+# Retained for reference only. Any future Render deployment needs a separately reviewed architecture
+# and explicit approval; current release planning targets the private AWS/WireGuard architecture.
+# See docs/operations/production-operator-runbook.md §14.
 services:
   - type: web
     name: eltnoy-portal
