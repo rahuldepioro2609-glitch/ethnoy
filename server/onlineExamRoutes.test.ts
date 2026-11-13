@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { expectedOrigin, type Surface } from './surface.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 // Recovery enabled for this test process, so the "scored from saved answers" path is reachable.
@@ -13,7 +14,7 @@ process.env.ONLINE_EXAM_RECOVERY_SINCE = RECOVERY_SINCE;
 delete process.env.ONLINE_EXAM_SUBMIT_GRACE_SECONDS;
 delete process.env.ONLINE_EXAM_LOCK_TIMEOUT_MS;
 
-const [{ app }, { pool }, { hashSessionToken }, { ONLINE_EXAM_SQL }, { ONLINE_EXAM_RECOVERY_SQL }] = await Promise.all([
+const [{ app }, { pool }, { hashSessionToken, setTrustedRequestSurface }, { ONLINE_EXAM_SQL }, { ONLINE_EXAM_RECOVERY_SQL }] = await Promise.all([
   import('./index.js'),
   import('./db.js'),
   import('./auth.js'),
@@ -50,6 +51,13 @@ interface RouteResult {
   headers: Record<string, string>;
 }
 
+// P1-B: these route-stack tests bypass the app-level surface enforcement, so each fake request
+// carries the server-controlled surface that its account's role belongs to (candidate → Exam,
+// center → Institution, official → Admin), set through the same trusted setter the gate uses.
+function trustSurface(request: object, surface: Surface): void {
+  setTrustedRequestSurface(request, surface, expectedOrigin(surface));
+}
+
 function invokeRoute(
   method: Method,
   path: string,
@@ -68,6 +76,7 @@ function invokeRoute(
       body: options.body,
       get: () => undefined,
     } as unknown as Request;
+    trustSurface(request, options.token === officialToken ? 'admin' : options.token === centerToken ? 'institution' : 'exam');
     const response = {
       headersSent: false,
       status(code: number) {

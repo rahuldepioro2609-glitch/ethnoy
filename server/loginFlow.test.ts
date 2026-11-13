@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NextFunction, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
+import { expectedOrigin, type Surface } from './surface.js';
 
 // ---------------------------------------------------------------------------
 // Minimal pool shim — must be registered before any module that imports db.js
@@ -69,10 +70,14 @@ function makeResponse() {
   return res as typeof res & { _state: typeof state };
 }
 
-function makeAuthRequest(cookieHeader?: string): AuthenticatedRequest {
-  return {
+// P1-B: requireAuth needs the server-controlled surface. These requests carry the surface that the
+// tested account's role belongs to (candidate → Exam by default; center → Institution).
+function makeAuthRequest(cookieHeader?: string, surface: Surface = 'exam'): AuthenticatedRequest {
+  const request = {
     headers: cookieHeader ? { cookie: cookieHeader } : {},
   } as unknown as AuthenticatedRequest;
+  setTrustedRequestSurface(request, surface, expectedOrigin(surface));
+  return request;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +85,7 @@ function makeAuthRequest(cookieHeader?: string): AuthenticatedRequest {
 // we only test the cookie-parsing + role-checking logic in these cases)
 // ---------------------------------------------------------------------------
 
-const { requireAuth, requireRoles, optionalAuth } = await import('./auth.js');
+const { requireAuth, requireRoles, optionalAuth, setTrustedRequestSurface } = await import('./auth.js');
 
 // ---------------------------------------------------------------------------
 // 1.  requireAuth: no cookie → 401 (no DB call)
@@ -194,7 +199,7 @@ test('login flow: requireAuth returns 403 and clears cookie for a non-approved a
 
   try {
     const validToken = 'C'.repeat(43);
-    const req = makeAuthRequest(`elt_session=${validToken}`);
+    const req = makeAuthRequest(`elt_session=${validToken}`, 'institution');
     const res = makeResponse();
     let nextCalled = false;
 

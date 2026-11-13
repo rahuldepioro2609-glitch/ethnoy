@@ -10,7 +10,8 @@ import {
   detectDocumentMediaType,
   getInstitutionDocumentPolicy,
 } from './institutionDocuments.js';
-import { hashSessionToken } from './auth.js';
+import { hashSessionToken, setTrustedRequestSurface } from './auth.js';
+import { expectedOrigin, type Surface } from './surface.js';
 import { pool } from './db.js';
 import { INSTITUTION_DOCUMENT_CATEGORIES } from '../src/utils/institutionDocuments.js';
 
@@ -50,6 +51,20 @@ function routeHandlers(
   return layer.stack.map((item) => item.handle);
 }
 
+// P1-B: these route-stack tests bypass the app-level surface enforcement, so each fake request
+// carries the server-controlled surface that its account's role belongs to (candidate → Exam,
+// center → Institution, official → Admin), set through the same trusted setter the gate uses.
+function trustSurface(request: object, surface: Surface): void {
+  setTrustedRequestSurface(request, surface, expectedOrigin(surface));
+}
+
+function surfaceForToken(token: string | undefined, path: string): Surface {
+  if (token === tokens.candidate) return 'exam';
+  if (token === tokens.official || token === tokens.superAdmin) return 'admin';
+  if (token === tokens.center || token === tokens.otherCenter) return 'institution';
+  return path.startsWith('/admin') ? 'admin' : 'institution';
+}
+
 function invoke(
   handlers: RequestHandler[],
   options: {
@@ -85,6 +100,7 @@ function invoke(
       ip: '127.0.0.1',
       socket: { remoteAddress: '127.0.0.1' },
     }) as unknown as Request;
+    trustSurface(request, surfaceForToken(options.token, options.path));
     const response = Object.assign(new Writable({
       write(chunk, _encoding, callback) {
         bodyChunks.push(Buffer.from(chunk));

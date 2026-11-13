@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { randomInt, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
@@ -9,7 +10,10 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { z } from 'zod';
-import { AuthenticatedRequest, registrationPasswordSchema, SESSION_TTL_MS, hashSessionToken, newSessionToken, optionalAuth, requireAuth, requireRoles, requireSuperAdmin, requireTrustedMutationOrigin, setSessionCookie } from './auth.js';
+import { AuthenticatedRequest, getTrustedRequestSurface, registrationPasswordSchema, SESSION_TTL_MS, hashSessionToken, newSessionToken, requireAuth, requireRoles, requireSuperAdmin, setSessionCookie } from './auth.js';
+import { createListenerRequestHandler, ListenerStartupError, NO_RECOVERY_HANDLE, resolveActiveListeners, startApiRuntime, type ApiRuntime, type ListenerServer, type ListenerSpec } from './apiListeners.js';
+import { isLoginRoleAllowedOnSurface, type Surface } from './surface.js';
+import { createExpressProxyTrust, createRejectionLog, createSurfaceGate, loadSurfaceRuntimeConfig, type SurfaceGate } from './surfaceEnforcement.js';
 import { addWorkbookSheet, readWorkbookSheet, WORKBOOK_MIME_TYPE } from './adminWorkbook.js';
 import {
   candidateApplicationsQuery,
@@ -34,10 +38,9 @@ import {
 } from './onlineExamFinalization.js';
 import {
   attemptStateParams,
-  createGracefulShutdown,
   ONLINE_EXAM_RECOVERY_SQL,
-  startApiWithOnlineExamRecovery,
   startOnlineExamRecovery,
+  type OnlineExamRecoveryHandle,
 } from './onlineExamRecovery.js';
 import { DEFAULT_EXAM_TIME_ZONE, isValidTimeZone } from '../src/utils/examSchedule.js';
 import { createInstitutionDocumentsRouter } from './institutionDocuments.js';
@@ -49,10 +52,18 @@ import {
 } from './institutionSubmission.js';
 
 export const app = express();
-const port = Number(process.env.PORT || 4000);
 const sessionSeconds = Math.floor(SESSION_TTL_MS / 1000);
 
-app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : false);
+// P1-B surface enforcement. Proxy trust is set at startup from the validated per-listener proxy
+// addresses; until then (and in tests) nothing is trusted. The gate fails closed until startApi()
+// configures it. Rejections are counted in a bounded, aggregated log (L-3): fixed reason keys only,
+// one "first seen" line per reason and one summary per 1000 rejections (and at shutdown); no timers.
+export const surfaceRejectionLog = createRejectionLog((entry) => console.warn(JSON.stringify(entry)));
+export const surfaceGate = createSurfaceGate({
+  onReject: (reason) => surfaceRejectionLog.record(reason),
+});
+app.set('trust proxy', false);
+app.use(surfaceGate.identify);
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -62,7 +73,8 @@ app.use(helmet({
   },
 }));
 app.use(express.json({ limit: '32kb' }));
-app.use(requireTrustedMutationOrigin);
+app.use(surfaceGate.enforceOrigin);
+app.use(surfaceGate.enforceRoutePolicy);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -741,14 +753,14 @@ app.patch('/api/admin/online-exams/:examCode', requireAuth, requireRoles('offici
   response.json({ examCode: request.params.examCode.toUpperCase(), updated: rowCount, isPublished: parsed.data.isPublished });
 }));
 
-app.get('/api/answer-keys/exams', asyncRoute(async (_request, response) => {
+app.get('/api/answer-keys/exams', requireAuth, requireRoles('candidate'), asyncRoute(async (_request, response) => {
   const { rows } = await pool.query(
     'SELECT DISTINCT exam_code FROM answer_key_questions WHERE is_published = true ORDER BY exam_code',
   );
   response.json({ examCodes: rows.map((row) => row.exam_code) });
 }));
 
-app.get('/api/answer-keys', asyncRoute(async (request, response) => {
+app.get('/api/answer-keys', requireAuth, requireRoles('candidate'), asyncRoute(async (request, response) => {
   const parsed = z.string().trim().min(2).max(30).safeParse(request.query.examCode);
   if (!parsed.success) {
     sendValidationError(response, new z.ZodError([{ code: 'custom', path: ['examCode'], message: 'A valid examCode query is required.' }]));
@@ -1124,7 +1136,17 @@ app.post('/api/online-exams/:examCode/submit', requireAuth, requireRoles('candid
 }));
 
 
-app.get('/api/health', asyncRoute(async (_request, response) => {
+// Internal probe only (loopback peer, accepted by surfaceGate.identify). 503 until both listeners
+// are ready (D9); then the existing database check.
+app.get('/api/health', asyncRoute(async (request, response) => {
+  if (!surfaceGate.isInternalProbe(request)) {
+    response.status(404).json({ error: 'Route not found.' });
+    return;
+  }
+  if (!surfaceGate.isReady()) {
+    response.status(503).json({ status: 'starting' });
+    return;
+  }
   await pool.query('SELECT 1');
   response.json({ status: 'ok', database: 'connected' });
 }));
@@ -1235,17 +1257,30 @@ app.patch('/api/admin/institutes/:id', requireAuth, requireRoles('official'), as
   }
 }));
 
-app.get('/api/institute-forms', asyncRoute(async (_request, response) => {
-  const { rows } = await pool.query(
-    `SELECT f.id, f.form_type, f.title, f.description, f.eligibility,
+// Public institute forms (A-1/U2, U6): approved forms of approved institutions whose deadline has
+// not passed (inclusive, India date) or that have no deadline. No account contact data.
+export const PUBLIC_INSTITUTE_FORMS_SQL = `SELECT f.id, f.form_type, f.title, f.description, f.eligibility,
             f.application_deadline, f.external_url, f.created_at,
-            u.display_name AS institute_name, u.contact_email
+            u.display_name AS institute_name
      FROM institute_forms f
      JOIN users u ON u.id = f.institute_id
      WHERE f.status = 'approved' AND u.account_status = 'approved'
-     ORDER BY f.created_at DESC LIMIT 200`,
-  );
-  response.json({ forms: rows });
+       AND (f.application_deadline IS NULL
+            OR f.application_deadline >= (now() AT TIME ZONE 'Asia/Kolkata')::date)
+     ORDER BY f.created_at DESC LIMIT 200`;
+
+/** Explicit allow-list for the public forms response (keys as the existing frontend reads them). */
+export const PUBLIC_INSTITUTE_FORM_FIELDS = Object.freeze([
+  'id', 'form_type', 'title', 'description', 'eligibility', 'application_deadline', 'external_url', 'created_at', 'institute_name',
+] as const);
+
+export function toPublicInstituteForm(row: Record<string, unknown>): Record<(typeof PUBLIC_INSTITUTE_FORM_FIELDS)[number], unknown> {
+  return Object.fromEntries(PUBLIC_INSTITUTE_FORM_FIELDS.map((field) => [field, row[field] ?? null])) as Record<(typeof PUBLIC_INSTITUTE_FORM_FIELDS)[number], unknown>;
+}
+
+app.get('/api/institute-forms', asyncRoute(async (_request, response) => {
+  const { rows } = await pool.query(PUBLIC_INSTITUTE_FORMS_SQL);
+  response.json({ forms: rows.map(toPublicInstituteForm) });
 }));
 
 app.get('/api/center/workspace', requireAuth, requireRoles('center'), asyncRoute(async (request, response) => {
@@ -1910,6 +1945,12 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
   }
 
   const { loginId, password, role } = parsed.data;
+  // P1-B: the role must belong to this surface; checked before any user lookup, with the same
+  // generic response as invalid credentials.
+  if (!isLoginRoleAllowedOnSurface(getTrustedRequestSurface(request) as Surface, role)) {
+    response.status(401).json({ error: 'Invalid login ID, password, or account type.' });
+    return;
+  }
   const { rows } = await pool.query(
     'SELECT id, login_id, display_name, role, password_hash, account_status, is_super_admin FROM users WHERE login_id = $1 AND role = $2',
     [loginId.toUpperCase(), role],
@@ -1994,7 +2035,7 @@ const feedbackSchema = z.object({
   attachmentName: z.string().trim().max(255).optional(),
 });
 
-app.post('/api/feedback', optionalAuth, publicWriteLimiter, asyncRoute(async (request, response) => {
+app.post('/api/feedback', requireAuth, requireRoles('candidate', 'center'), publicWriteLimiter, asyncRoute(async (request, response) => {
   const parsed = feedbackSchema.safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
@@ -2533,7 +2574,7 @@ app.post(
   candidateResultLookupHandler,
 );
 
-app.post('/api/mock-exams/submit', optionalAuth, publicWriteLimiter, asyncRoute(async (request, response) => {
+app.post('/api/mock-exams/submit', requireAuth, requireRoles('candidate'), publicWriteLimiter, asyncRoute(async (request, response) => {
   const parsed = z.object({
     responses: z.record(z.string(), z.object({
       selectedOptionId: z.string().max(20).optional(),
@@ -2608,51 +2649,144 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
   response.status(500).json({ error: 'An unexpected server error occurred.' });
 });
 
-async function startApi(): Promise<void> {
-  // Online-exam settings are validated once, before the database check and before listen().
-  // Invalid settings stop startup (exit code 1); only the setting name and rule are logged.
-  // The validated object is cached by getOnlineExamConfig, so the routes, the attempt list
-  // and the recovery scheduler all use the same settings.
-  // Automatic recovery (P0-4) starts only after the server emits 'listening' (never on a bind
-  // failure) and is disabled, with no timer and no database work, unless
-  // ONLINE_EXAM_RECOVERY_SINCE is set.
-  const started = await startApiWithOnlineExamRecovery({
+/**
+ * Everything startApi() touches outside this module (M-B). Production uses
+ * productionStartApiDependencies(); unit tests inject fakes so the real startApi() runs without
+ * sockets, a database or process side effects. The default is built only when startApi() is called,
+ * never at import.
+ */
+export interface StartApiDependencies {
+  env: Readonly<Record<string, string | undefined>>;
+  /** Must be the gate mounted on `handle` (production: surfaceGate on app). */
+  gate: SurfaceGate;
+  handle: (request: IncomingMessage, response: ServerResponse) => void;
+  setTrustProxy: (trust: (address: string, hop: number) => boolean) => void;
+  createServer: (handler: (request: IncomingMessage, response: ServerResponse) => void) => ListenerServer;
+  loadOnlineExamConfig: () => OnlineExamConfig;
+  checkDatabase: () => Promise<void>;
+  startRecovery: (config: OnlineExamConfig) => OnlineExamRecoveryHandle;
+  endPool: () => Promise<void>;
+  exit: (code: number) => void;
+  setExitCode: (code: number) => void;
+  onSignal: (signal: 'SIGINT' | 'SIGTERM', handler: () => void) => void;
+  flushRejections: () => void;
+  log: (line: string) => void;
+  logError: (line: string) => void;
+}
+
+export function productionStartApiDependencies(): StartApiDependencies {
+  return {
+    env: process.env,
+    gate: surfaceGate,
+    handle: app,
+    setTrustProxy: (trust) => {
+      app.set('trust proxy', trust);
+    },
+    createServer: (handler) => createHttpServer(handler),
     loadOnlineExamConfig: getOnlineExamConfig,
     checkDatabase: async () => {
       await pool.query('SELECT 1');
     },
-    listen: () => app.listen(port, '0.0.0.0', () => {
-      console.log(`ELTNOY API listening on port ${port}.`);
-    }),
-    startRecovery: (config) => startOnlineExamRecovery(pool, () => config),
-  });
-  if (!started) {
-    await pool.end();
-    process.exitCode = 1;
-    return;
-  }
-  const { server, recovery: onlineExamRecovery } = started;
-
-  // Idempotent: repeated SIGINT/SIGTERM reuse the first shutdown. Order: stop recovery
-  // (waits for an in-flight sweep), close the server, end the pool, exit.
-  const shutdown = createGracefulShutdown({
-    stopRecovery: () => onlineExamRecovery.stop(),
-    closeServer: () => new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    }),
+    startRecovery: (examConfig) => startOnlineExamRecovery(pool, () => examConfig),
     endPool: () => pool.end(),
     exit: (code) => process.exit(code),
+    setExitCode: (code) => {
+      process.exitCode = code;
+    },
+    onSignal: (signal, handler) => {
+      process.on(signal, handler);
+    },
+    flushRejections: () => {
+      surfaceRejectionLog.flush();
+    },
+    log: (line) => console.log(line),
+    logError: (line) => console.error(line),
+  };
+}
+
+/**
+ * Starts the API. Returns the running runtime, or null (exit code 1) when the surface or
+ * online-exam configuration is invalid; rejects — with every bound listener closed — if the
+ * database check or a listener fails during startup.
+ */
+export async function startApi(deps: StartApiDependencies = productionStartApiDependencies()): Promise<ApiRuntime<ListenerServer> | null> {
+  // P1-B: surface configuration is validated first (no import-time environment reads). Invalid or
+  // missing settings stop startup before the database or any port is touched; only setting names
+  // and rules are logged, never values. Production has no permissive defaults.
+  const surfaceConfig = loadSurfaceRuntimeConfig(deps.env);
+  // P1-D.2: ELTNOY_API_LISTENERS selects the listener(s) this instance runs (no default; both only
+  // in development) and enforces recovery ownership by the public instance.
+  const listenerSelection = surfaceConfig.ok ? resolveActiveListeners(deps.env, surfaceConfig.config.mode) : null;
+  if (!surfaceConfig.ok || !listenerSelection?.ok) {
+    const errors = [...(surfaceConfig.ok ? [] : surfaceConfig.errors), ...(listenerSelection && !listenerSelection.ok ? listenerSelection.errors : [])];
+    deps.logError(JSON.stringify({ event: 'surface.config_invalid', errors }));
+    await deps.endPool();
+    deps.setExitCode(1);
+    return null;
+  }
+  const { config } = surfaceConfig;
+  const activeListeners = listenerSelection.listeners;
+  deps.gate.configure(config);
+  // Express trusts only the direct peer, and only if it is a configured proxy (same matching as
+  // the gate, which has already required a proxy of the receiving listener).
+  deps.setTrustProxy(createExpressProxyTrust(config));
+
+  // Only the configured listener(s); an instance never opens a listener it was not assigned.
+  const specs: ListenerSpec[] = activeListeners.map((name) => ({ name, port: config.listenerPorts[name], host: '0.0.0.0' }));
+  // Recovery is owned by the public instance; an Admin-only instance gets a handle that never runs.
+  const ownsRecovery = activeListeners.includes('public');
+
+  // Online-exam settings are validated once, before the database check and before listen().
+  // Invalid settings stop startup (exit code 1); only the setting name and rule are logged.
+  // The validated object is cached by getOnlineExamConfig, so the routes, the attempt list
+  // and the recovery scheduler all use the same settings.
+  // Automatic recovery (P0-4) starts exactly once, only after ALL configured listeners are
+  // listening (never on partial startup), only on the instance that runs the public listener, and
+  // is disabled, with no timer and no database work, unless ONLINE_EXAM_RECOVERY_SINCE is set. Each listener tags its requests server-side
+  // (createListenerRequestHandler); the surface gate checks that tag against socket.localPort.
+  // A listener error after binding marks the API not ready and runs the shared shutdown (exit 1).
+  const runtime = await startApiRuntime({
+    specs,
+    createServer: (spec) => deps.createServer(createListenerRequestHandler<IncomingMessage, ServerResponse>(spec.name, deps.gate.tagListener, deps.handle)),
+    loadOnlineExamConfig: deps.loadOnlineExamConfig,
+    checkDatabase: deps.checkDatabase,
+    startRecovery: ownsRecovery ? deps.startRecovery : () => NO_RECOVERY_HANDLE,
+    markReady: () => {
+      deps.gate.markReady();
+      deps.log(`ELTNOY API listening: ${specs.map((spec) => `${spec.name} on port ${spec.port}`).join(', ')}.`);
+    },
+    markNotReady: () => deps.gate.markNotReady(),
+    onFatalListenerError: (entry) => deps.logError(JSON.stringify(entry)),
+    endPool: deps.endPool,
+    exit: (code) => {
+      deps.flushRejections();
+      deps.exit(code);
+    },
   });
+  if (!runtime) {
+    await deps.endPool();
+    deps.setExitCode(1);
+    return null;
+  }
+
+  // Idempotent: repeated SIGINT/SIGTERM (and fatal listener errors) reuse the first shutdown.
+  // Order: mark not ready, stop recovery (waits for an in-flight sweep), close this instance's listener(s),
+  // end the pool, flush the rejection summary, exit.
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-    process.on(signal, () => {
-      void shutdown(signal);
+    deps.onSignal(signal, () => {
+      void runtime.shutdown(signal);
     });
   }
+  return runtime;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   void startApi().catch(async (error: unknown) => {
-    console.error('API startup failed. Check DATABASE_URL, database availability, and network access:', error);
+    if (error instanceof ListenerStartupError) {
+      console.error(JSON.stringify({ event: 'api.listener_start_failed', listener: error.listener, code: error.code }));
+    } else {
+      console.error('API startup failed. Check DATABASE_URL, database availability, and network access:', error);
+    }
     await pool.end();
     process.exitCode = 1;
   });

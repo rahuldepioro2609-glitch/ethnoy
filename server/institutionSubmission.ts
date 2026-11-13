@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg';
 import bcrypt from 'bcryptjs';
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
-import { requireAuth, requireRoles } from './auth.js';
+import { getTrustedRequestOrigin, getTrustedRequestSurface, requireAuth, requireRoles } from './auth.js';
 import { pool } from './db.js';
 import { INSTITUTION_DOCUMENT_CATEGORIES } from '../src/utils/institutionDocuments.js';
 
@@ -182,15 +182,12 @@ export function requireCapabilityMutationOrigin(
     next();
     return;
   }
-  const configured = process.env.APP_ORIGIN;
+  // P1-B: the capability flow mutates only on the Institution surface, with that surface's exact
+  // Origin (set server-side by the surface enforcement). APP_ORIGIN is no longer consulted.
+  const surface = getTrustedRequestSurface(request);
+  const expected = getTrustedRequestOrigin(request);
   const origin = request.get('origin');
-  try {
-    if (!configured || !origin || new URL(configured).origin !== configured
-        || origin !== configured || new URL(origin).origin !== origin) {
-      response.status(403).json({ error: 'Request origin is not allowed.' });
-      return;
-    }
-  } catch {
+  if (surface !== 'institution' || !expected || !origin || origin !== expected) {
     response.status(403).json({ error: 'Request origin is not allowed.' });
     return;
   }

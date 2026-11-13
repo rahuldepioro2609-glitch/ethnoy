@@ -3,10 +3,11 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import bcrypt from 'bcryptjs';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { expectedOrigin, type Surface } from './surface.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 
-const [{ app }, { pool }, { hashSessionToken, requireAuth }] = await Promise.all([
+const [{ app }, { pool }, { hashSessionToken, requireAuth, setTrustedRequestSurface }] = await Promise.all([
   import('./index.js'),
   import('./db.js'),
   import('./auth.js'),
@@ -34,6 +35,13 @@ function findPostRouteHandlers(path: string): RequestHandler[] {
   return route.stack.map((layer) => layer.handle);
 }
 
+// P1-B: these route-stack tests bypass the app-level surface enforcement, so each fake request
+// carries the server-controlled surface that its account's role belongs to (candidate → Exam,
+// center → Institution, official → Admin), set through the same trusted setter the gate uses.
+function trustSurface(request: object, surface: Surface): void {
+  setTrustedRequestSurface(request, surface, expectedOrigin(surface));
+}
+
 function invokePostRoute(
   handlers: RequestHandler[],
   body: Record<string, unknown>,
@@ -54,6 +62,7 @@ function invokePostRoute(
       path: '/api/center/resubmit',
       url: '/api/center/resubmit',
     } as unknown as Request;
+    trustSurface(request, 'institution');
     const response = {
       headersSent: false,
       status(code: number) {
@@ -122,6 +131,7 @@ function invokeAuthMiddleware(token: string): Promise<{ status: number; nextCall
     const request = {
       headers: { cookie: `elt_session=${token}` },
     } as unknown as import('./auth.js').AuthenticatedRequest;
+    trustSurface(request, 'institution');
     const response = {
       status(code: number) {
         status = code;

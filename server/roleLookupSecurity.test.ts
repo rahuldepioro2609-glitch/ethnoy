@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { expectedOrigin, type Surface } from './surface.js';
 
 process.env.DATABASE_URL ??= 'postgresql://test:test@127.0.0.1:5432/test';
 
-const [{ app }, { pool }, { hashSessionToken, requireSuperAdmin }] = await Promise.all([
+const [{ app }, { pool }, { hashSessionToken, requireSuperAdmin, setTrustedRequestSurface }] = await Promise.all([
   import('./index.js'),
   import('./db.js'),
   import('./auth.js'),
@@ -54,6 +55,20 @@ test('sensitive data export requires the Super Admin permission middleware', () 
   assert.equal(handlers[2], requireSuperAdmin);
 });
 
+// P1-B: these route-stack tests bypass the app-level surface enforcement, so each fake request
+// carries the server-controlled surface that its account's role belongs to (candidate → Exam,
+// center → Institution, official → Admin), set through the same trusted setter the gate uses.
+function trustSurface(request: object, surface: Surface): void {
+  setTrustedRequestSurface(request, surface, expectedOrigin(surface));
+}
+
+function surfaceForToken(token: string | undefined, fallback: Surface): Surface {
+  if (token === candidateAToken || token === candidateBToken) return 'exam';
+  if (token === centerToken) return 'institution';
+  if (token === ordinaryOfficialToken || token === superAdminToken) return 'admin';
+  return fallback;
+}
+
 function invokeGetRoute(
   handlers: RequestHandler[],
   token?: string,
@@ -66,6 +81,7 @@ function invokeGetRoute(
     const request = {
       headers: token ? { cookie: `elt_session=${token}` } : {},
     } as unknown as Request;
+    trustSurface(request, surfaceForToken(token, 'admin'));
     const response = {
       status(code: number) {
         status = code;
@@ -209,6 +225,7 @@ function invokePostRoute(
       headers: token ? { cookie: `elt_session=${token}` } : {},
       body,
     } as unknown as Request;
+    trustSurface(request, surfaceForToken(token, 'exam'));
     const response = {
       status(code: number) {
         status = code;

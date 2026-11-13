@@ -485,7 +485,8 @@ export interface ApiStartupSteps<S extends ListeningServer> {
   /** Parses and validates the ONLINE_EXAM_* settings; throws on any invalid value. */
   loadOnlineExamConfig: () => OnlineExamConfig;
   checkDatabase: () => Promise<void>;
-  listen: () => S;
+  /** May return a promise (P1-B: resolves only once every listener is bound). */
+  listen: () => S | Promise<S>;
   /** Receives the validated settings, so the scheduler uses the same object as the routes. */
   startRecovery: (config: OnlineExamConfig) => OnlineExamRecoveryHandle;
   log?: (entry: StartupLogEntry) => void;
@@ -535,7 +536,7 @@ export async function startApiWithOnlineExamRecovery<S extends ListeningServer>(
     return null;
   }
   await steps.checkDatabase();
-  const server = steps.listen();
+  const server = await steps.listen();
   const recovery = startOnlineExamRecoveryWhenListening(server, () => steps.startRecovery(config));
   return { server, config, recovery };
 }

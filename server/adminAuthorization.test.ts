@@ -16,13 +16,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import ExcelJS from 'exceljs';
+import { expectedOrigin, type Surface } from './surface.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:1/p03_route_tests';
 
 const [
   { app, RESULT_UPSERT_SQL, ANSWER_KEY_IMPORT_SQL, ONLINE_EXAM_IMPORT_SQL, WITHDRAWAL_SQL, MIN_ACTIVE_SUPER_ADMINS_FOR_PAYMENT },
   { pool },
-  { hashSessionToken },
+  { hashSessionToken, setTrustedRequestSurface },
   { addWorkbookSheet },
 ] = await Promise.all([
   import('./index.js'),
@@ -195,10 +196,15 @@ interface RouteOutcome {
   error?: unknown;
 }
 
+// P1-B: these route-stack calls bypass the app-level surface enforcement, so each fake request
+// carries the server-controlled surface of its account's role (candidate → Exam, center →
+// Institution, officials → Admin). Unauthenticated calls default to Admin (the matrix routes).
+const SURFACE_OF_ROLE: Record<string, Surface> = { candidate: 'exam', center: 'institution', official: 'admin' };
+
 function invoke(
   method: Method,
   path: string,
-  options: { account?: AccountName; params?: Record<string, string>; body?: unknown } = {},
+  options: { account?: AccountName; params?: Record<string, string>; body?: unknown; surface?: Surface } = {},
 ): Promise<RouteOutcome> {
   const handlers = findRoute(method, path).stack.map((layer) => layer.handle);
   return new Promise((resolve) => {
@@ -223,6 +229,9 @@ function invoke(
       get: () => undefined,
       header: () => undefined,
     } as unknown as Request;
+    const surface = options.surface
+      ?? (options.account ? SURFACE_OF_ROLE[String(ACCOUNTS[options.account].row.role)] : 'admin');
+    setTrustedRequestSurface(request, surface, expectedOrigin(surface));
     const response = {
       headersSent: false,
       status(code: number) {
@@ -345,10 +354,10 @@ const MATRIX: MatrixEntry[] = [
  * here and checked structurally.
  */
 const DOCUMENTED_NON_ADMIN_ROUTES: Array<{ method: Method; path: string; policy: 'public' | 'candidate' | 'center' | 'authenticated'; note: string }> = [
-  { method: 'get', path: '/api/answer-keys/exams', policy: 'public', note: 'lists published answer keys only' },
-  { method: 'get', path: '/api/answer-keys', policy: 'public', note: 'returns published answer keys only' },
+  { method: 'get', path: '/api/answer-keys/exams', policy: 'candidate', note: 'Candidate on Exam only (P1-A A-1/U3, enforced P1-B); published answer keys only' },
+  { method: 'get', path: '/api/answer-keys', policy: 'candidate', note: 'Candidate on Exam only (P1-A A-1/U3, enforced P1-B); published answer keys only' },
   { method: 'get', path: '/api/notices', policy: 'public', note: 'published notices only' },
-  { method: 'post', path: '/api/feedback', policy: 'public', note: 'helpdesk submission stays open (A-14 covers reading tickets)' },
+  { method: 'post', path: '/api/feedback', policy: 'authenticated', note: 'Candidate on Exam, Institution (center) on Institution (P1 v1.4 §8, enforced P1-B); A-14 covers reading tickets' },
   { method: 'get', path: '/api/online-exams', policy: 'candidate', note: 'P0-4 candidate list (published papers only)' },
   { method: 'get', path: '/api/candidate/portal', policy: 'candidate', note: "the candidate's own applications and published results" },
   { method: 'post', path: '/api/center/withdrawals', policy: 'center', note: 'an institute requests a withdrawal; approval and payment are A-03' },
@@ -1069,13 +1078,27 @@ test('dashboard stats: Super Admins get the open helpdesk count', async () => {
   assert.match(sql, /FROM feedback WHERE status <> 'resolved'/);
 });
 
-test('public answer-key routes still return published keys only', async () => {
+test('candidate answer-key routes still return published keys only', async () => {
   const seen: string[] = [];
   await withDatabase((text) => {
     seen.push(text);
     return { rows: [], rowCount: 0 };
   }, async () => {
-    assert.equal((await invoke('get', '/api/answer-keys/exams')).status, 200);
+    assert.equal((await invoke('get', '/api/answer-keys/exams', { account: 'candidate' })).status, 200);
   });
   assert.ok(seen.length > 0 && seen.every((text) => /is_published = true/.test(text)));
+});
+
+test('answer-key routes reject unauthenticated and non-candidate requests before any business query', async () => {
+  for (const path of ['/api/answer-keys/exams', '/api/answer-keys']) {
+    await withDatabase(undefined, async (db) => {
+      const unauthenticated = await invoke('get', path, { surface: 'exam' });
+      assert.equal(unauthenticated.status, 401, `${path} unauthenticated`);
+      // Officials and institutions on their own surfaces reach the role guard and are refused.
+      for (const account of ['official', 'superA', 'center'] as const) {
+        assert.equal((await invoke('get', path, { account })).status, 403, `${path} as ${account}`);
+      }
+      assert.equal(db.calls.length, 0, `${path}: no business query before the guards pass`);
+    });
+  }
 });

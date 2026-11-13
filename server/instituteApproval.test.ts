@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { expectedOrigin, type Surface } from './surface.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 
-const [{ app }, { pool }, { hashSessionToken }] = await Promise.all([
+const [{ app }, { pool }, { hashSessionToken, setTrustedRequestSurface }] = await Promise.all([
   import('./index.js'),
   import('./db.js'),
   import('./auth.js'),
@@ -33,6 +34,13 @@ function findPatchRouteHandlers(path: string): RequestHandler[] {
   return route.stack.map((layer) => layer.handle);
 }
 
+// P1-B: these route-stack tests bypass the app-level surface enforcement, so each fake request
+// carries the server-controlled surface that its account's role belongs to (candidate → Exam,
+// center → Institution, official → Admin), set through the same trusted setter the gate uses.
+function trustSurface(request: object, surface: Surface): void {
+  setTrustedRequestSurface(request, surface, expectedOrigin(surface));
+}
+
 function invokePatchRoute(
   handlers: RequestHandler[],
   body: Record<string, unknown>,
@@ -47,6 +55,7 @@ function invokePatchRoute(
       params: { id: 'synthetic-institute' },
       body,
     } as unknown as Request;
+    trustSurface(request, token === candidateToken ? 'exam' : 'admin');
     const response = {
       status(code: number) {
         status = code;

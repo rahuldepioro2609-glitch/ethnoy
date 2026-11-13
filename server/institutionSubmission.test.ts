@@ -11,7 +11,8 @@ import {
   requireInstitutionSubmissionCapability,
   setInstitutionSubmissionCookie,
 } from './institutionSubmission.js';
-import { hashSessionToken } from './auth.js';
+import { hashSessionToken, setTrustedRequestSurface } from './auth.js';
+import { expectedOrigin, type Surface } from './surface.js';
 import { pool } from './db.js';
 import { INSTITUTION_DOCUMENT_CATEGORIES } from '../src/utils/institutionDocuments.js';
 
@@ -35,6 +36,13 @@ function routeHandlers(
   return layer.stack.map((item) => item.handle);
 }
 
+// P1-B: these route-stack tests bypass the app-level surface enforcement, so each fake request
+// carries the server-controlled surface that its account's role belongs to (candidate → Exam,
+// center → Institution, official → Admin), set through the same trusted setter the gate uses.
+function trustSurface(request: object, surface: Surface): void {
+  setTrustedRequestSurface(request, surface, expectedOrigin(surface));
+}
+
 function invoke(
   handlers: RequestHandler[],
   options: {
@@ -44,6 +52,8 @@ function invoke(
     sessionToken?: string;
     origin?: string;
     body?: unknown;
+    /** Server-controlled surface; defaults to Admin for /admin paths, otherwise Institution. */
+    surface?: Surface;
   },
 ): Promise<{ status: number; body: unknown; headers: Record<string, string>; ended: boolean }> {
   return new Promise((resolve, reject) => {
@@ -69,6 +79,7 @@ function invoke(
         return name.toLowerCase() === 'origin' ? options.origin : undefined;
       },
     } as unknown as Request;
+    trustSurface(request, options.surface ?? (options.path.startsWith('/admin') ? 'admin' : 'institution'));
     const response = {
       headersSent: false,
       status(code: number) {
@@ -346,7 +357,8 @@ test('a pending institution can explicitly revoke its capability', async () => {
       method: 'POST',
       path: '/revoke',
       token,
-      origin: 'https://portal.example.test',
+      // P1-B: the exact Institution surface origin (APP_ORIGIN is no longer consulted).
+      origin: expectedOrigin('institution'),
     });
     assert.equal(result.status, 204);
     assert.equal(result.ended, true);
@@ -377,15 +389,18 @@ test('middleware implementation requires an opaque capability cookie rather than
   assert.equal(queries, 0);
 });
 
-test('capability mutations require an exact configured Origin', async () => {
+// P1-B supersedes the APP_ORIGIN rule: capability mutations need the trusted Institution surface
+// and exactly its Origin. A configured APP_ORIGIN no longer grants anything.
+test('capability mutations require the exact Institution surface Origin', async () => {
   const previousOrigin = process.env.APP_ORIGIN;
   process.env.APP_ORIGIN = 'https://portal.example.test';
   try {
-    const invokeOrigin = (origin?: string) => new Promise<number>((resolve) => {
+    const invokeOrigin = (origin: string | undefined, surface?: Surface) => new Promise<number>((resolve) => {
       const request = {
         method: 'POST',
         get: () => origin,
       } as unknown as Request;
+      if (surface) trustSurface(request, surface);
       const response = {
         status(code: number) {
           resolve(code);
@@ -395,9 +410,15 @@ test('capability mutations require an exact configured Origin', async () => {
       } as unknown as Response;
       requireCapabilityMutationOrigin(request, response, () => resolve(204));
     });
-    assert.equal(await invokeOrigin(), 403);
-    assert.equal(await invokeOrigin('https://attacker.example.test'), 403);
-    assert.equal(await invokeOrigin('https://portal.example.test'), 204);
+    const institutionOrigin = expectedOrigin('institution');
+    assert.equal(await invokeOrigin(undefined, 'institution'), 403, 'missing Origin');
+    assert.equal(await invokeOrigin('null', 'institution'), 403, 'null Origin');
+    assert.equal(await invokeOrigin('https://attacker.example.test', 'institution'), 403);
+    assert.equal(await invokeOrigin(expectedOrigin('exam'), 'institution'), 403, 'cross-surface Origin');
+    assert.equal(await invokeOrigin('https://portal.example.test', 'institution'), 403, 'APP_ORIGIN is not trusted');
+    assert.equal(await invokeOrigin(institutionOrigin), 403, 'no trusted surface');
+    assert.equal(await invokeOrigin(expectedOrigin('admin'), 'admin'), 403, 'Admin surface cannot mutate capabilities');
+    assert.equal(await invokeOrigin(institutionOrigin, 'institution'), 204);
   } finally {
     if (previousOrigin === undefined) delete process.env.APP_ORIGIN;
     else process.env.APP_ORIGIN = previousOrigin;
@@ -524,8 +545,12 @@ test('Official cycle summary remains role restricted', async () => {
     const handlers = routeHandlers(router, 'get', '/admin/cycles');
     const unauthenticated = await invoke(handlers, { method: 'GET', path: '/admin/cycles' });
     assert.equal(unauthenticated.status, 401);
-    const wrongRole = await invoke(handlers, { method: 'GET', path: '/admin/cycles', sessionToken: candidateToken });
+    // A candidate session on its own (Exam) surface reaches the role guard: 403.
+    const wrongRole = await invoke(handlers, { method: 'GET', path: '/admin/cycles', sessionToken: candidateToken, surface: 'exam' });
     assert.equal(wrongRole.status, 403);
+    // The same candidate session presented on the Admin surface is a cross-surface session: 401.
+    const crossSurface = await invoke(handlers, { method: 'GET', path: '/admin/cycles', sessionToken: candidateToken, surface: 'admin' });
+    assert.equal(crossSurface.status, 401);
     assert.equal(officialQueryCount, 0);
     const authorized = await invoke(handlers, { method: 'GET', path: '/admin/cycles', sessionToken: officialToken });
     assert.equal(authorized.status, 200);
