@@ -1,21 +1,9 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
+import { databasePoolConfig } from './databaseCredentials.js';
 
-const connectionString = process.env.DATABASE_URL;
-
-if (!connectionString) {
-  throw new Error('DATABASE_URL must be set before starting the API.');
-}
-
-export const pool = new Pool({
-  connectionString,
-  ssl: process.env.DATABASE_SSL === 'true'
-    ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
-    : undefined,
-  max: Number(process.env.DATABASE_POOL_SIZE || 10),
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 5_000,
-});
+// DATABASE_URL (+ optional DATABASE_PASSWORD_FILE): see server/databaseCredentials.ts.
+export const pool = new Pool(databasePoolConfig(process.env));
 
 pool.on('error', (error) => {
   console.error('Unexpected PostgreSQL pool error:', error);

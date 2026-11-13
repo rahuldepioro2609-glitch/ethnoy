@@ -13,6 +13,7 @@ import {
 const INSTITUTION_MIGRATIONS = [
   'institutionDocumentsMigration.sql',
   'institutionDocumentSubmissionMigration.sql',
+  'institutionDocumentsImmutabilityMigration.sql',
 ] as const;
 
 async function readServerFile(name: string): Promise<string> {
@@ -44,13 +45,17 @@ const fakeMigrations: MigrationFile[] = [
   { name: 'schema.sql', sql: '-- schema' },
   { name: 'institutionDocumentsMigration.sql', sql: '-- milestone 1' },
   { name: 'institutionDocumentSubmissionMigration.sql', sql: '-- milestone 2' },
+  { name: 'institutionDocumentsImmutabilityMigration.sql', sql: '-- immutability' },
+  { name: 'databaseGrantsMigration.sql', sql: '-- grants' },
 ];
 
-test('db:migrate runs schema, Milestone 1, then Milestone 2', async () => {
+test('db:migrate runs schema, Milestone 1, Milestone 2, document immutability, then the grants migration', async () => {
   assert.deepEqual([...MIGRATION_FILES], [
     'schema.sql',
     'institutionDocumentsMigration.sql',
     'institutionDocumentSubmissionMigration.sql',
+    'institutionDocumentsImmutabilityMigration.sql',
+    'databaseGrantsMigration.sql',
   ]);
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
     scripts: Record<string, string>;
@@ -73,6 +78,8 @@ test('runner applies every file on one client inside one locked transaction', as
     '-- schema',
     '-- milestone 1',
     '-- milestone 2',
+    '-- immutability',
+    '-- grants',
     'COMMIT',
   ]);
   assert.deepEqual(client.calls[1].values, [MIGRATION_ADVISORY_LOCK_KEY]);
@@ -102,6 +109,32 @@ test('runner rolls back when the advisory lock or commit fails', async () => {
   const commitFailure = new RecordingClient((text) => text === 'COMMIT');
   await assert.rejects(runMigrations(commitFailure, fakeMigrations), /failed at commit/);
   assert.equal(commitFailure.texts.at(-1), 'ROLLBACK');
+});
+
+test('a failure in the grants migration rolls back every file in the same transaction', async () => {
+  const client = new RecordingClient((text) => text === '-- grants');
+  await assert.rejects(
+    runMigrations(client, fakeMigrations),
+    /failed at databaseGrantsMigration\.sql; all changes were rolled back/,
+  );
+  assert.deepEqual(client.texts, [
+    'BEGIN',
+    'SELECT pg_advisory_xact_lock($1::bigint)',
+    '-- schema',
+    '-- milestone 1',
+    '-- milestone 2',
+    '-- immutability',
+    '-- grants',
+    'ROLLBACK',
+  ]);
+});
+
+test('the grants migration is last, is not a role bootstrap, and is a no-op until roles exist', async () => {
+  assert.equal(MIGRATION_FILES.at(-1), 'databaseGrantsMigration.sql');
+  assert.ok(!(MIGRATION_FILES as readonly string[]).includes('databaseRoleBootstrap.sql'));
+  const sql = withoutComments(await readServerFile('databaseGrantsMigration.sql'));
+  assert.match(sql, /IF NOT roles_ready THEN\s+RAISE NOTICE '[^']*';\s+RETURN;/);
+  assert.doesNotMatch(sql, /^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|SAVEPOINT)\b[^;\n]*;/im);
 });
 
 test('runner reports the original failure even if rollback also fails', async () => {
@@ -166,6 +199,17 @@ for (const name of INSTITUTION_MIGRATIONS) {
     }
   });
 }
+
+test('the immutability migration rejects every UPDATE, DELETE and TRUNCATE on institution_documents', async () => {
+  const sql = withoutComments(await readServerFile('institutionDocumentsImmutabilityMigration.sql'));
+  assert.match(sql, /CREATE OR REPLACE FUNCTION reject_institution_document_mutation\(\)\s+RETURNS trigger LANGUAGE plpgsql AS \$\$\s+BEGIN\s+RAISE EXCEPTION '[^']+';\s+END;\s+\$\$;/,
+    'the trigger function must reject unconditionally');
+  assert.match(sql, /CREATE TRIGGER institution_documents_immutable\s+BEFORE UPDATE OR DELETE ON institution_documents\s+FOR EACH ROW EXECUTE FUNCTION reject_institution_document_mutation\(\);/);
+  assert.match(sql, /CREATE TRIGGER institution_documents_no_truncate\s+BEFORE TRUNCATE ON institution_documents\s+FOR EACH STATEMENT EXECUTE FUNCTION reject_institution_document_mutation\(\);/);
+  const files = [...MIGRATION_FILES] as string[];
+  assert.ok(files.indexOf('institutionDocumentsImmutabilityMigration.sql') > files.indexOf('institutionDocumentsMigration.sql'));
+  assert.ok(files.indexOf('institutionDocumentsImmutabilityMigration.sql') < files.indexOf('databaseGrantsMigration.sql'));
+});
 
 test('Milestone 2 keeps submission_cycle_id nullable without backfilling legacy rows', async () => {
   const sql = withoutComments(await readServerFile('institutionDocumentSubmissionMigration.sql'));

@@ -5,11 +5,24 @@ import { fileURLToPath } from 'node:url';
  * Migration files, in the only supported order. schema.sql creates the core
  * tables; Milestone 1 depends on users; Milestone 2 depends on users and on
  * Milestone 1's institution_documents. Every file must be safe to re-run.
+ *
+ * institutionDocumentsImmutabilityMigration.sql (OD-P3) makes institution_documents
+ * rows immutable with always-reject triggers; it depends on Milestone 1 and must
+ * run before the grants migration, which checks that those triggers are enabled.
+ *
+ * databaseGrantsMigration.sql must stay last: it grants the application role
+ * exactly the privileges listed in its manifest for every table the earlier
+ * files create. Until server/databaseRoleBootstrap.sql has provisioned the
+ * eltnoy_* roles it changes nothing (it only raises a NOTICE); afterwards it
+ * must run as eltnoy_owner (via eltnoy_migrator) and fails closed on unlisted
+ * tables or sequences, so a failure rolls back every file in this list.
  */
 export const MIGRATION_FILES = [
   'schema.sql',
   'institutionDocumentsMigration.sql',
   'institutionDocumentSubmissionMigration.sql',
+  'institutionDocumentsImmutabilityMigration.sql',
+  'databaseGrantsMigration.sql',
 ] as const;
 
 /** Serializes concurrent `db:migrate` runs against the same database. */

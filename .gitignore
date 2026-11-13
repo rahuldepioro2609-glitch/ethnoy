@@ -11,3 +11,12 @@ backups/
 .env*
 !.env.example
 .local-dev/
+
+# UD-1: database credential files and generated credentials (keep them outside the repository).
+secrets/
+*.secret
+*_password
+*_password.txt
+*.pgpass
+.pgpass
+pgpass.conf
