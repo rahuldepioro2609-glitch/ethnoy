@@ -21,6 +21,7 @@ import {
   NoticeItem,
 } from '../data/portalData';
 import { DEFAULT_EXAM_TIME_ZONE, currentDateInTimeZone } from '../utils/examSchedule';
+import { useTranslation } from '../i18n';
 
 interface ThreeColumnDataGridProps {
   onOpenNotice: (notice: NoticeItem) => void;
@@ -41,6 +42,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   filterExamId,
   isAuthenticated,
 }) => {
+  const { t } = useTranslation();
   const displayedExams = filterExamId
     ? examinations.filter((e) => e.id === filterExamId)
     : examinations;
@@ -65,7 +67,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   };
 
   return (
-    <section id="exam-list" className="py-8 bg-[#F4F8FC]" aria-label="ELTNOY Information Center">
+    <section id="exam-list" className="py-8 bg-[#F4F8FC]" aria-label={t('grid.aria')}>
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           {/* COLUMN 1: Latest Notifications (approx 4 cols) */}
@@ -75,7 +77,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
               <div className="flex items-center gap-2.5">
                 <Bell className="w-4 h-4 text-sky-400" />
                 <h3 className="text-sm font-bold tracking-tight">
-                  Latest Notifications
+                  {t('grid.latestNotifications')}
                 </h3>
               </div>
               <button
@@ -83,7 +85,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                 disabled={!notices.length}
                 className="text-xs text-sky-200 hover:text-white transition-colors"
               >
-                View All →
+                {t('grid.viewAll')}
               </button>
             </div>
 
@@ -95,7 +97,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                   type="button"
                   onClick={() => onOpenNotice(notice)}
                   className="w-full p-3.5 sm:p-4 text-left hover:bg-slate-50/90 transition-colors cursor-pointer flex items-center gap-3.5 group focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-600"
-                  aria-label={`Read notice: ${notice.title}`}
+                  aria-label={t('grid.readNotice', { title: notice.title })}
                 >
                   {/* Date Badge: Stacked Blue Block */}
                   <div className="w-11 h-11 rounded-lg bg-sky-50 border border-sky-100 text-[#0284C7] flex flex-col items-center justify-center shrink-0">
@@ -111,14 +113,14 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                       </p>
                       {notice.isNew && (
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#EF4444] text-white uppercase shrink-0">
-                          New
+                          {t('grid.new')}
                         </span>
                       )}
                     </div>
                   </div>
                 </button>
               ))}
-              {!notices.length && <p className="p-5 text-sm text-slate-500">No notices have been published yet.</p>}
+              {!notices.length && <p className="p-5 text-sm text-slate-500">{t('grid.noNotices')}</p>}
             </div>
           </div>
 
@@ -129,7 +131,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
               <div className="flex items-center gap-2.5">
                 <Calendar className="w-4 h-4 text-emerald-100" />
                 <h3 className="text-sm font-bold tracking-tight">
-                  Upcoming Examinations
+                  {t('grid.upcomingExams')}
                 </h3>
               </div>
               <button
@@ -137,7 +139,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                 disabled={!displayedExams.length}
                 className="text-xs text-emerald-100 hover:text-white transition-colors"
               >
-                View All →
+                {t('grid.viewAll')}
               </button>
             </div>
 
@@ -174,21 +176,21 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                         onClick={() => onOpenExamApply(exam)}
                         className="px-3.5 py-1.5 bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-bold rounded-md shadow-2xs transition-colors whitespace-nowrap"
                       >
-                        Apply Now
+                        {t('grid.applyNow')}
                       </button>
                     ) : (
                       <button
                         type="button"
                         disabled
-                        aria-label={`${exam.regEnd < currentDateInTimeZone(new Date(), exam.timeZone || DEFAULT_EXAM_TIME_ZONE) ? 'Registration is closed' : 'Registration has not opened'} for ${exam.name}`}
+                        aria-label={t(exam.regEnd < currentDateInTimeZone(new Date(), exam.timeZone || DEFAULT_EXAM_TIME_ZONE) ? 'grid.closedFor' : 'grid.notOpenFor', { exam: exam.name })}
                         className="px-3.5 py-1.5 bg-slate-100 text-slate-500 text-xs font-semibold rounded-md border border-slate-200 whitespace-nowrap cursor-not-allowed"
                       >
-                        {exam.regEnd < currentDateInTimeZone(new Date(), exam.timeZone || DEFAULT_EXAM_TIME_ZONE) ? 'Registration closed' : 'Opens soon'}
+                        {exam.regEnd < currentDateInTimeZone(new Date(), exam.timeZone || DEFAULT_EXAM_TIME_ZONE) ? t('grid.registrationClosed') : t('grid.opensSoon')}
                       </button>
                     )}
                   </div>
                 </div>
-              )) : <p className="p-5 text-sm text-slate-500">No published exam forms are currently available.</p>}
+              )) : <p className="p-5 text-sm text-slate-500">{t('grid.noExams')}</p>}
             </div>
           </div>
 
@@ -198,7 +200,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
             <div className="bg-[#0284C7] text-white px-5 py-3.5 flex items-center gap-2.5">
               <Link2 className="w-4 h-4 text-sky-100" />
               <h3 className="text-sm font-bold tracking-tight">
-                Quick Links
+                {t('grid.quickLinks')}
               </h3>
             </div>
 
@@ -214,7 +216,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                     {renderQuickTileIcon(tile.iconType)}
                   </div>
                   <span className="text-xs font-bold text-slate-800 leading-tight">
-                    {tile.title}
+                    {t(`grid.tile.${tile.id}`)}
                   </span>
                 </button>
               ))}

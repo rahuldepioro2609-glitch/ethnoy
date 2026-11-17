@@ -5,40 +5,42 @@
 
 import React from 'react';
 import { UserRound, ClipboardCheck, Building2, ShieldCheck, MessageSquareText } from 'lucide-react';
+import { useTranslation } from '../i18n';
 
 export const MetricsBanner: React.FC = () => {
+  const { t } = useTranslation();
   const metrics = [
     {
-      value: 'Candidate',
-      label: 'Dedicated portal',
+      value: t('metrics.candidate.value'),
+      label: t('metrics.candidate.label'),
       icon: UserRound,
       textColor: 'text-[#16A34A]',
       iconColor: 'text-[#16A34A]',
     },
     {
-      value: 'Applications',
-      label: 'Online submission',
+      value: t('metrics.applications.value'),
+      label: t('metrics.applications.label'),
       icon: ClipboardCheck,
       textColor: 'text-[#0284C7]',
       iconColor: 'text-[#0284C7]',
     },
     {
-      value: 'Centers',
-      label: 'Assigned candidate check-in',
+      value: t('metrics.centers.value'),
+      label: t('metrics.centers.label'),
       icon: Building2,
       textColor: 'text-[#9333EA]',
       iconColor: 'text-[#9333EA]',
     },
     {
-      value: 'Secure',
-      label: 'Role-based account access',
+      value: t('metrics.secure.value'),
+      label: t('metrics.secure.label'),
       icon: ShieldCheck,
       textColor: 'text-[#16A34A]',
       iconColor: 'text-[#16A34A]',
     },
     {
-      value: 'Helpdesk',
-      label: 'Feedback and issue reports',
+      value: t('metrics.helpdesk.value'),
+      label: t('metrics.helpdesk.label'),
       icon: MessageSquareText,
       textColor: 'text-[#D97706]',
       iconColor: 'text-[#D97706]',

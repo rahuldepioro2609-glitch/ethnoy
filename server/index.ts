@@ -5,14 +5,19 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
-import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import { z } from 'zod';
 import { AuthenticatedRequest, SESSION_TTL_MS, hashSessionToken, newSessionToken, optionalAuth, requireAuth, requireRoles, setSessionCookie } from './auth.js';
 import { addWorkbookSheet, readWorkbookSheet, WORKBOOK_MIME_TYPE } from './adminWorkbook.js';
 import { pool } from './db.js';
+import { asyncRoute, authLimiter, getUser, publicWriteLimiter, sendValidationError } from './http.js';
 import { scoreMockResponses } from './mockScoring.js';
+import { assertOwnedFile, fileAsDataUrl, registerUploadRoutes } from './uploads.js';
+import { registerObjectionRoutes } from './objections.js';
+import { registerAccountRoutes, sendVerificationEmail } from './account.js';
+import { applicationConfirmationEmail, portalLink } from './emailTemplates.js';
+import { sendEmailInBackground } from './mailer.js';
 import { DEFAULT_EXAM_TIME_ZONE, isValidTimeZone } from '../src/utils/examSchedule.js';
 
 const app = express();
@@ -39,38 +44,6 @@ app.use((request, response, next) => {
   }
   next();
 });
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { error: 'Too many sign-in attempts. Try again in 15 minutes.' },
-});
-const publicWriteLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 30,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { error: 'Too many requests. Please try again later.' },
-});
-
-function asyncRoute(handler: (request: Request, response: Response) => Promise<void>): RequestHandler {
-  return (request, response, next: NextFunction) => {
-    handler(request, response).catch(next);
-  };
-}
-
-function sendValidationError(response: Response, error: z.ZodError): void {
-  response.status(400).json({
-    error: 'Invalid request.',
-    details: error.issues.map((issue) => ({ field: issue.path.join('.'), message: issue.message })),
-  });
-}
-
-function getUser(request: Request) {
-  return (request as AuthenticatedRequest).user;
-}
 
 function toFeedback(row: Record<string, unknown>) {
   return {
@@ -110,7 +83,20 @@ function toExam(row: Record<string, unknown>) {
   };
 }
 
+/** True for http(s) URLs; never throws on malformed input. */
+function isHttpUrl(value: string): boolean {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 const workbookUpload = express.raw({ type: WORKBOOK_MIME_TYPE, limit: '5mb' });
+
+registerUploadRoutes(app);
+registerObjectionRoutes(app);
+registerAccountRoutes(app);
 
 app.get('/api/notices', asyncRoute(async (_request, response) => {
   const { rows } = await pool.query(
@@ -222,7 +208,7 @@ app.get('/api/admin/workbook-template', requireAuth, requireRoles('official'), a
 app.get('/api/admin/data-export', requireAuth, requireRoles('official'), asyncRoute(async (_request, response) => {
   const workbook = new ExcelJS.Workbook();
   const [
-    users, applications, exams, admitCards, checkins, feedback, attempts, results, answerKeys, onlineQuestions, onlineAttempts, notices,
+    users, applications, exams, admitCards, checkins, feedback, attempts, results, answerKeys, onlineQuestions, onlineAttempts, notices, objections,
   ] = await Promise.all([
     pool.query(`SELECT id, login_id, display_name, role, contact_email, registration_number,
                        registered_address, website, account_status, created_at
@@ -247,6 +233,11 @@ app.get('/api/admin/data-export', requireAuth, requireRoles('official'), asyncRo
     pool.query(`SELECT id, title, category, summary, full_content, reference_number,
                        is_published, created_at, published_at
                 FROM portal_notices ORDER BY created_at DESC`),
+    pool.query(`SELECT o.reference_number, u.login_id, o.exam_code, o.question_number, o.official_key,
+                       o.proposed_key, o.category, o.justification, o.reference_source, o.status,
+                       o.resolution, o.reviewer_remarks, o.created_at, o.reviewed_at
+                FROM answer_key_objections o JOIN users u ON u.id = o.user_id
+                ORDER BY o.exam_code, o.question_number, o.created_at`),
   ]);
   const sheets = [
     ['Accounts', users.rows],
@@ -261,6 +252,7 @@ app.get('/api/admin/data-export', requireAuth, requireRoles('official'), asyncRo
     ['OnlineExamQuestions', onlineQuestions.rows],
     ['OnlineExamAttempts', onlineAttempts.rows],
     ['Notices', notices.rows],
+    ['AnswerKeyObjections', objections.rows],
   ] as const;
   for (const [name, rows] of sheets) {
     const headers = rows[0] ? Object.keys(rows[0]) : ['No records'];
@@ -380,7 +372,8 @@ app.post('/api/admin/answer-keys/import', requireAuth, requireRoles('official'),
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (exam_code, question_number) DO UPDATE SET
            subject = EXCLUDED.subject, question_text = EXCLUDED.question_text, options = EXCLUDED.options,
-           official_key = EXCLUDED.official_key, explanation = EXCLUDED.explanation, is_published = false`,
+           official_key = EXCLUDED.official_key, explanation = EXCLUDED.explanation, is_published = false,
+           original_key = NULL, is_dropped = false`,
         [randomUUID(), key.examCode.toUpperCase(), key.questionNumber, key.subject, key.questionText,
           { A: key.optionA, B: key.optionB, C: key.optionC, D: key.optionD }, key.officialKey, key.explanation ?? ''],
       );
@@ -601,25 +594,17 @@ app.get('/api/answer-keys/exams', asyncRoute(async (_request, response) => {
   response.json({ examCodes: rows.map((row) => row.exam_code) });
 }));
 
-app.get('/api/answer-keys', asyncRoute(async (request, response) => {
-  const parsed = z.string().trim().min(2).max(30).safeParse(request.query.examCode);
-  if (!parsed.success) {
-    sendValidationError(response, new z.ZodError([{ code: 'custom', path: ['examCode'], message: 'A valid examCode query is required.' }]));
-    return;
-  }
-  const { rows } = await pool.query(
-    `SELECT question_number, subject, question_text, options, official_key, explanation
-     FROM answer_key_questions WHERE exam_code = $1 AND is_published = true ORDER BY question_number`,
-    [parsed.data.toUpperCase()],
-  );
-  response.json({ questions: rows });
-}));
-
 app.get('/api/admin/answer-keys', requireAuth, requireRoles('official'), asyncRoute(async (_request, response) => {
   const { rows } = await pool.query(
-    `SELECT exam_code, count(*)::int AS question_count, bool_and(is_published) AS is_published,
-            max(created_at) AS updated_at
-     FROM answer_key_questions GROUP BY exam_code ORDER BY exam_code`,
+    `SELECT q.exam_code, count(*)::int AS question_count, bool_and(q.is_published) AS is_published,
+            max(q.created_at) AS updated_at,
+            COALESCE(bool_or(w.is_open AND (w.closes_at IS NULL OR w.closes_at > now())), false) AS objections_open,
+            max(w.closes_at) AS objections_close_at,
+            (SELECT count(*)::int FROM answer_key_objections o
+             WHERE o.exam_code = q.exam_code AND o.status = 'pending') AS pending_objections
+     FROM answer_key_questions q
+     LEFT JOIN answer_key_objection_windows w ON w.exam_code = q.exam_code
+     GROUP BY q.exam_code ORDER BY q.exam_code`,
   );
   response.json({ exams: rows });
 }));
@@ -966,7 +951,7 @@ app.post('/api/center/forms', requireAuth, requireRoles('center'), asyncRoute(as
     eligibility: z.string().trim().min(3).max(1000),
     applicationDeadline: z.union([z.string().date(), z.literal('')]).optional(),
     externalUrl: z.union([
-      z.string().trim().url().max(500).refine((value) => ['http:', 'https:'].includes(new URL(value).protocol)),
+      z.string().trim().url().max(500).refine(isHttpUrl, 'Enter a web address starting with http:// or https://.'),
       z.literal(''),
     ]).optional(),
   }).safeParse(request.body);
@@ -994,7 +979,7 @@ app.post('/api/center/profile-changes', requireAuth, requireRoles('center'), asy
     registrationNumber: z.string().trim().min(3).max(100),
     registeredAddress: z.string().trim().min(10).max(500),
     website: z.union([
-      z.string().trim().url().max(200).refine((value) => ['http:', 'https:'].includes(new URL(value).protocol)),
+      z.string().trim().url().max(200).refine(isHttpUrl, 'Enter a web address starting with http:// or https://.'),
       z.literal(''),
     ]).optional(),
   }).safeParse(request.body);
@@ -1326,19 +1311,21 @@ const accountRegistrationSchema = z.object({
 });
 
 app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response) => {
-  const parsed = accountRegistrationSchema.safeParse(request.body);
+  const parsed = accountRegistrationSchema.extend({
+    email: z.string().trim().email().max(254),
+  }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
     return;
   }
-  const { loginId, name, password } = parsed.data;
+  const { loginId, name, password, email } = parsed.data;
   const passwordHash = await bcrypt.hash(password, 12);
   const { rows } = await pool.query(
-    `INSERT INTO users (id, login_id, display_name, role, password_hash, account_status)
-     VALUES ($1, $2, $3, 'candidate', $4, 'approved')
+    `INSERT INTO users (id, login_id, display_name, role, password_hash, contact_email, account_status)
+     VALUES ($1, $2, $3, 'candidate', $4, $5, 'approved')
      ON CONFLICT (login_id) DO NOTHING
-     RETURNING id, login_id, display_name, role`,
-    [randomUUID(), loginId.toUpperCase(), name, passwordHash],
+     RETURNING id, login_id, display_name, role, contact_email`,
+    [randomUUID(), loginId.toUpperCase(), name, passwordHash, email.toLowerCase()],
   );
   if (!rows[0]) {
     response.status(409).json({ error: 'That student login ID is already registered. Choose another.' });
@@ -1350,6 +1337,7 @@ app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response)
      VALUES ($1, $2, now() + ($3 * interval '1 second'))`,
     [hashSessionToken(token), rows[0].id, sessionSeconds],
   );
+  await sendVerificationEmail(rows[0].id, rows[0].display_name, rows[0].contact_email);
   setSessionCookie(response, token);
   response.status(201).json({
     user: { id: rows[0].id, loginId: rows[0].login_id, name: rows[0].display_name, role: rows[0].role },
@@ -1383,6 +1371,7 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     response.status(409).json({ error: 'That institute login ID is already in use. Choose another.' });
     return;
   }
+  await sendVerificationEmail(rows[0].id, name, contactEmail.toLowerCase());
   response.status(201).json({
     message: 'Institute request submitted. Super Admin will verify the registration details before approval.',
   });
@@ -1524,6 +1513,8 @@ const applicationSchema = z.object({
   firstCityPreference: z.string().trim().min(2).max(100),
   secondCityPreference: z.string().trim().min(2).max(100),
   languageMedium: z.string().trim().min(2).max(60),
+  photoFileId: z.string().uuid({ message: 'Upload your photograph before submitting.' }),
+  signatureFileId: z.string().uuid({ message: 'Upload your signature before submitting.' }),
 });
 
 app.post('/api/applications', requireAuth, requireRoles('candidate'), publicWriteLimiter, asyncRoute(async (request, response) => {
@@ -1543,8 +1534,15 @@ app.post('/api/applications', requireAuth, requireRoles('candidate'), publicWrit
     response.status(409).json({ error: 'You have already submitted an application for this exam.' });
     return;
   }
+  if (
+    !(await assertOwnedFile(pool, input.photoFileId, user!.id, 'photo'))
+    || !(await assertOwnedFile(pool, input.signatureFileId, user!.id, 'signature'))
+  ) {
+    response.status(400).json({ error: 'Upload your photograph and signature again, then resubmit.' });
+    return;
+  }
   const exam = await pool.query(
-    `SELECT code, time_zone,
+    `SELECT code, name, time_zone,
             extract(year FROM now() AT TIME ZONE time_zone)::int AS application_year
      FROM exams
      WHERE code = $1 AND is_published = true
@@ -1563,12 +1561,13 @@ app.post('/api/applications', requireAuth, requireRoles('candidate'), publicWrit
     const result = await pool.query(
       `INSERT INTO applications
        (id, user_id, application_number, exam_code, candidate_name, father_name, date_of_birth, gender, category, email, phone,
-        first_city_preference, second_city_preference, language_medium)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        first_city_preference, second_city_preference, language_medium, photo_file_id, signature_file_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT DO NOTHING RETURNING *`,
       [applicationId, user?.id, applicationNumber, input.examCode.toUpperCase(), input.candidateName,
         input.fatherName, input.dateOfBirth, input.gender, input.category, input.email.toLowerCase(),
-        input.phone, input.firstCityPreference, input.secondCityPreference, input.languageMedium],
+        input.phone, input.firstCityPreference, input.secondCityPreference, input.languageMedium,
+        input.photoFileId, input.signatureFileId],
     );
     rows = result.rows;
     if (rows[0]) break;
@@ -1577,6 +1576,13 @@ app.post('/api/applications', requireAuth, requireRoles('candidate'), publicWrit
     response.status(409).json({ error: 'An application for this exam may already exist on your account.' });
     return;
   }
+  sendEmailInBackground(String(rows[0].email), applicationConfirmationEmail({
+    candidateName: input.candidateName,
+    applicationNumber: String(rows[0].application_number),
+    examCode: String(exam.rows[0].code),
+    examName: String(exam.rows[0].name),
+    dashboardUrl: portalLink(process.env.APP_ORIGIN || 'http://localhost:3000', '/dashboard/candidate'),
+  }));
   response.status(201).json({
     application: {
       id: rows[0].id,
@@ -1592,7 +1598,8 @@ app.get('/api/admin/applications', requireAuth, requireRoles('official'), asyncR
   const { rows } = await pool.query(
     `SELECT a.id, a.application_number, a.exam_code, a.candidate_name, a.email, a.phone,
             a.first_city_preference, a.second_city_preference, a.language_medium,
-            a.status, a.created_at, (c.application_id IS NOT NULL) AS admit_card_published
+            a.status, a.created_at, a.photo_file_id, a.signature_file_id,
+            (c.application_id IS NOT NULL) AS admit_card_published
      FROM applications a LEFT JOIN admit_cards c ON c.application_id = a.id
      ORDER BY a.created_at DESC LIMIT 500`,
   );
@@ -1707,6 +1714,45 @@ app.get('/api/center/checkins', requireAuth, requireRoles('center'), asyncRoute(
   response.json({ checkins: rows });
 }));
 
+app.post('/api/center/checkins/lookup', requireAuth, requireRoles('center'), asyncRoute(async (request, response) => {
+  const parsed = z.object({
+    applicationNumber: z.string().trim().min(4).max(100),
+    dateOfBirth: z.string().date(),
+  }).safeParse(request.body);
+  if (!parsed.success) {
+    sendValidationError(response, parsed.error);
+    return;
+  }
+  const user = getUser(request);
+  const { rows } = await pool.query(
+    `SELECT a.application_number, a.candidate_name, a.father_name, a.exam_code,
+            a.photo_file_id, a.signature_file_id, c.roll_number, c.exam_timing,
+            ci.status AS checkin_status
+     FROM applications a
+     JOIN admit_cards c ON c.application_id = a.id
+     LEFT JOIN center_checkins ci ON ci.application_id = a.id AND ci.center_code = c.center_code
+     WHERE a.application_number = $1 AND a.date_of_birth = $2 AND c.center_code = $3`,
+    [parsed.data.applicationNumber.toUpperCase(), parsed.data.dateOfBirth, user?.loginId.toUpperCase()],
+  );
+  if (!rows[0]) {
+    response.status(404).json({ error: 'No candidate assigned to this center matches those details.' });
+    return;
+  }
+  response.json({
+    candidate: {
+      applicationNumber: rows[0].application_number,
+      candidateName: rows[0].candidate_name,
+      fatherName: rows[0].father_name,
+      examCode: rows[0].exam_code,
+      rollNumber: rows[0].roll_number,
+      examTiming: rows[0].exam_timing,
+      checkinStatus: rows[0].checkin_status,
+      photoUrl: await fileAsDataUrl(rows[0].photo_file_id),
+      signatureUrl: await fileAsDataUrl(rows[0].signature_file_id),
+    },
+  });
+}));
+
 app.post('/api/center/checkins', requireAuth, requireRoles('center'), asyncRoute(async (request, response) => {
   const parsed = z.object({
     applicationNumber: z.string().trim().min(4).max(100),
@@ -1755,7 +1801,7 @@ app.post('/api/admit-cards/lookup', publicWriteLimiter, asyncRoute(async (reques
   const { applicationNumber, dateOfBirth, examCode } = parsed.data;
   const { rows } = await pool.query(
     `SELECT a.application_number, a.candidate_name, a.father_name, a.date_of_birth,
-            a.gender, a.category, a.exam_code,
+            a.gender, a.category, a.exam_code, a.photo_file_id, a.signature_file_id,
             c.roll_number, c.exam_date, c.reporting_time, c.gate_closing_time,
             c.exam_timing, c.center_code, c.center_name, c.center_address
      FROM applications a JOIN admit_cards c ON c.application_id = a.id
@@ -1784,7 +1830,8 @@ app.post('/api/admit-cards/lookup', publicWriteLimiter, asyncRoute(async (reques
       centerCode: rows[0].center_code,
       centerName: rows[0].center_name,
       centerAddress: rows[0].center_address,
-      photoUrl: '',
+      photoUrl: await fileAsDataUrl(rows[0].photo_file_id),
+      signatureUrl: await fileAsDataUrl(rows[0].signature_file_id),
     },
   });
 }));

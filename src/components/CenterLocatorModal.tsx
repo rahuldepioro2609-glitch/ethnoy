@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { X, MapPin, Search, Accessibility, ShieldCheck } from 'lucide-react';
 import { TEST_CENTERS, TestCenter } from '../data/portalData';
+import { useTranslation } from '../i18n';
 
 interface CenterLocatorModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface CenterLocatorModalProps {
 }
 
 export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, onClose }) => {
+  const { t } = useTranslation();
   const [selectedState, setSelectedState] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -45,17 +47,17 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
             </div>
             <div>
               <h2 className="text-base font-bold leading-none">
-                Examination Center Directory
+                {t('centers.title')}
               </h2>
               <span className="text-xs text-slate-400">
-                Sample center directory · Confirm your assigned venue on your admit card
+                {t('centers.subtitle')}
               </span>
             </div>
           </div>
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-            aria-label="Close dialog"
+            aria-label={t('common.close')}
           >
             <X className="w-5 h-5" />
           </button>
@@ -70,14 +72,14 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search center name, city or area..."
+              placeholder={t('centers.searchPlaceholder')}
               className="w-full pl-9 pr-4 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
             />
           </div>
 
           {/* State Selector */}
           <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto text-xs">
-            <span className="font-bold text-slate-600 text-[11px] whitespace-nowrap">State:</span>
+            <span className="font-bold text-slate-600 text-[11px] whitespace-nowrap">{t('centers.state')}</span>
             <select
               value={selectedState}
               onChange={(e) => setSelectedState(e.target.value)}
@@ -85,7 +87,7 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
             >
               {states.map((st) => (
                 <option key={st} value={st}>
-                  {st}
+                  {st === 'All' ? t('centers.allStates') : st}
                 </option>
               ))}
             </select>
@@ -95,9 +97,9 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
         {/* Centers List */}
         <div className="p-6 overflow-y-auto max-h-[60vh] space-y-4">
           <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-            <span>Sample center entries ({filteredCenters.length})</span>
+            <span>{t('centers.count', { count: filteredCenters.length })}</span>
             <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5" /> Venue details must be confirmed on the admit card
+              <ShieldCheck className="w-3.5 h-3.5" /> {t('centers.confirmOnAdmitCard')}
             </span>
           </div>
 
@@ -129,21 +131,21 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
 
                 <div className="pt-3 border-t border-slate-100 text-[11px] space-y-1.5">
                   <div className="flex items-center justify-between text-slate-700">
-                    <span>Listed capacity (sample):</span>
-                    <strong className="font-mono text-slate-900">{center.capacity} seats</strong>
+                    <span>{t('centers.capacity')}</span>
+                    <strong className="font-mono text-slate-900">{t('centers.seats', { count: center.capacity })}</strong>
                   </div>
                   <div className="flex items-center justify-between text-slate-700">
-                    <span>Biometric Gates:</span>
+                    <span>{t('centers.biometric')}</span>
                     <span className="text-slate-600 font-semibold">
-                    {center.biometricStations} (sample listing)
+                    {t('centers.sampleListing', { count: center.biometricStations })}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-1 text-slate-600">
                       <Accessibility className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Wheelchair Ramp:</span>
+                      <span>{t('centers.wheelchair')}</span>
                     </span>
-                    <span className="font-bold text-slate-700">{center.hasWheelchairAccess ? 'Listed' : 'Not listed'} (confirm with venue)</span>
+                    <span className="font-bold text-slate-700">{center.hasWheelchairAccess ? t('centers.listed') : t('centers.notListed')}</span>
                   </div>
                 </div>
               </div>
@@ -152,19 +154,19 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
 
           {filteredCenters.length === 0 && (
             <div className="py-12 text-center text-slate-500 text-xs">
-              No examination centers match your selected filters. Try choosing "All" states.
+              {t('centers.none')}
             </div>
           )}
         </div>
 
         {/* Footer */}
         <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600">
-          <span>Reporting time is 90 minutes before scheduled examination shift.</span>
+          <span>{t('centers.reportingNote')}</span>
           <button
             onClick={onClose}
             className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-colors"
           >
-            Close
+            {t('common.closeButton')}
           </button>
         </div>
       </div>

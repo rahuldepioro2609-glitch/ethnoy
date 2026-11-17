@@ -21,6 +21,7 @@ export interface CandidateAdmitCardData {
   centerName: string;
   centerAddress: string;
   photoUrl: string;
+  signatureUrl?: string;
 }
 
 export interface QuestionOption {

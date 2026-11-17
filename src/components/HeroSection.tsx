@@ -16,6 +16,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { HERO_ACTION_RAIL } from '../data/portalData';
+import { useTranslation } from '../i18n';
 
 interface HeroSectionProps {
   onOpenApply: () => void;
@@ -40,6 +41,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
   onOpenLogin,
   isAuthenticated,
 }) => {
+  const { t } = useTranslation();
   const handleActionRailClick = (actionId: string) => {
     switch (actionId) {
       case 'apply':
@@ -102,7 +104,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             {/* Tagline */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/80 border border-sky-200 shadow-2xs text-[#0284c7] text-xs font-semibold">
               <Sparkles className="w-3.5 h-3.5 text-sky-500" />
-              <span>Online Examination Services</span>
+              <span>{t('hero.tagline')}</span>
             </div>
 
             {/* Giant Heading matching ELTNOY layout */}
@@ -111,13 +113,13 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 <span className="text-[#16A34A]">ELT</span><span className="text-[#0B5CCA]">NOY</span>
               </h1>
               <h2 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-[#0B254E] tracking-tight leading-tight">
-                Examination Portal
+                {t('hero.subheading')}
               </h2>
             </div>
 
             {/* Subtitle description */}
             <p className="text-sm sm:text-base text-slate-600 leading-relaxed max-w-lg font-normal">
-              Apply for examinations, use practice tools, and look up admit cards or published results.
+              {t('hero.intro')}
             </p>
 
             {/* 4 Key Checkmarks: 2x2 inline grid */}
@@ -126,28 +128,28 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 <div className="w-5 h-5 rounded-full bg-[#0284C7] text-white flex items-center justify-center shrink-0 shadow-2xs">
                   <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
                 </div>
-                <span>Easy Registration</span>
+                <span>{t('hero.point.registration')}</span>
               </div>
 
               <div className="flex items-center gap-2">
                 <div className="w-5 h-5 rounded-full bg-[#0284C7] text-white flex items-center justify-center shrink-0 shadow-2xs">
                   <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
                 </div>
-                <span>Role-based Account Access</span>
+                <span>{t('hero.point.access')}</span>
               </div>
 
               <div className="flex items-center gap-2">
                 <div className="w-5 h-5 rounded-full bg-[#0284C7] text-white flex items-center justify-center shrink-0 shadow-2xs">
                   <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
                 </div>
-                <span>Practice Test Tools</span>
+                <span>{t('hero.point.practice')}</span>
               </div>
 
               <div className="flex items-center gap-2">
                 <div className="w-5 h-5 rounded-full bg-[#0284C7] text-white flex items-center justify-center shrink-0 shadow-2xs">
                   <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
                 </div>
-                <span>Official Result Lookup</span>
+                <span>{t('hero.point.results')}</span>
               </div>
             </div>
 
@@ -157,7 +159,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 onClick={onOpenApply}
                 className="px-5 py-2.5 sm:px-6 sm:py-3 bg-[#16A34A] hover:bg-[#15803D] active:bg-[#166534] text-white font-bold text-xs sm:text-sm rounded-lg shadow-sm flex items-center gap-2 transition-all transform hover:-translate-y-0.5"
               >
-                <span>{hasOpenExams ? 'Apply for Examination' : 'View Exam Forms'}</span>
+                <span>{hasOpenExams ? t('hero.apply') : t('hero.viewForms')}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
 
@@ -166,7 +168,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 className="px-5 py-2.5 sm:px-6 sm:py-3 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-xs sm:text-sm rounded-lg border border-slate-300 flex items-center gap-2 transition-all shadow-2xs"
               >
                 <User className="w-4 h-4 text-blue-600" />
-                <span>{isAuthenticated ? 'My Dashboard' : 'Student Login'}</span>
+                <span>{isAuthenticated ? t('nav.myDashboard') : t('hero.studentLogin')}</span>
               </button>
             </div>
           </div>
@@ -176,7 +178,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             <div className="w-full overflow-hidden rounded-2xl border border-white/80 bg-white p-1.5 shadow-lg">
               <img
                 src="/assets/mission-students.png"
-                alt="Student holding books on campus, with the message Your Future, Our Mission"
+                alt={t('hero.imageAlt')}
                 className="block aspect-[16/9] w-full rounded-xl object-contain"
                 loading="eager"
                 decoding="async"
@@ -197,10 +199,10 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-xs sm:text-sm font-bold text-slate-900 group-hover:text-[#16A34A] transition-colors truncate">
-                    {card.title}
+                    {t(`hero.rail.${card.id}.title`)}
                   </div>
                   <div className="text-[11px] text-slate-500 truncate">
-                    {card.description}
+                    {t(`hero.rail.${card.id}.description`)}
                   </div>
                 </div>
               </button>
