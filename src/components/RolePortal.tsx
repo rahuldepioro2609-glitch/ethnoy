@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { apiRequest } from '../api';
 import { OnlineExamRunner } from './OnlineExamRunner';
+import { AdminObjectionsPanel } from './AdminObjectionsPanel';
 import { BrandLogo } from './BrandLogo';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
@@ -261,7 +262,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
                   <label htmlFor="role-login-id" className="mb-1.5 block text-sm font-semibold text-slate-700">
                     {role === 'candidate' ? (isRegistering ? 'Choose student login ID' : 'Student login ID') : (isRegistering ? 'Choose institute / center ID' : 'Staff / Center ID')}
                   </label>
-                  <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={4} maxLength={50} pattern="[A-Za-z0-9._-]+" title="Use 4-50 letters, numbers, dots, underscores or hyphens." className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm uppercase outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                  <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={4} maxLength={50} pattern="[A-Za-z0-9._\-]+" title="Use 4-50 letters, numbers, dots, underscores or hyphens." className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm uppercase outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
                 </div>
                 {isRegistering && role === 'center' && (
                   <div>
@@ -339,6 +340,18 @@ interface RoleDashboardProps {
 }
 
 type PortalData = Record<string, unknown>;
+
+interface CheckinCandidate {
+  applicationNumber: string;
+  candidateName: string;
+  fatherName: string;
+  examCode: string;
+  rollNumber: string;
+  examTiming: string;
+  checkinStatus: string | null;
+  photoUrl: string;
+  signatureUrl: string;
+}
 
 interface ExamDraft {
   code: string;
@@ -428,6 +441,8 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [checkinStatus, setCheckinStatus] = useState('verified');
   const [checkinNote, setCheckinNote] = useState('');
+  const [checkinCandidate, setCheckinCandidate] = useState<CheckinCandidate | null>(null);
+  const [isCheckingCandidate, setIsCheckingCandidate] = useState(false);
   const [examDraft, setExamDraft] = useState<ExamDraft>(emptyExamDraft);
   const [noticeDraft, setNoticeDraft] = useState<NoticeDraft>(emptyNoticeDraft);
   const [instituteFormDraft, setInstituteFormDraft] = useState<InstituteFormDraft>(emptyInstituteFormDraft);
@@ -446,6 +461,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const [isSavingInstituteProfile, setIsSavingInstituteProfile] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
   const [activeOnlineExam, setActiveOnlineExam] = useState<{ code: string; name: string } | null>(null);
+  const [objectionExamCode, setObjectionExamCode] = useState<string | null>(null);
 
   const refresh = async () => {
     setError(null);
@@ -718,6 +734,21 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const submitCheckin = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
+    if (!checkinCandidate) {
+      setIsCheckingCandidate(true);
+      try {
+        const { candidate } = await apiRequest<{ candidate: CheckinCandidate }>('/api/center/checkins/lookup', {
+          method: 'POST',
+          body: JSON.stringify({ applicationNumber, dateOfBirth }),
+        });
+        setCheckinCandidate(candidate);
+      } catch (lookupError) {
+        setError(lookupError instanceof Error ? lookupError.message : 'Could not find this candidate.');
+      } finally {
+        setIsCheckingCandidate(false);
+      }
+      return;
+    }
     try {
       await apiRequest('/api/center/checkins', {
         method: 'POST',
@@ -727,6 +758,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
       setApplicationNumber('');
       setDateOfBirth('');
       setCheckinNote('');
+      setCheckinCandidate(null);
       await refresh();
     } catch (checkinError) {
       setError(checkinError instanceof Error ? checkinError.message : 'Could not verify this candidate.');
@@ -888,7 +920,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                       <textarea required minLength={10} maxLength={10000} rows={6} value={noticeDraft.fullContent} onChange={(event) => setNoticeDraft((draft) => ({ ...draft, fullContent: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal" placeholder="Write the full notice. Line breaks are preserved." />
                     </label>
                     <label className="text-sm font-semibold text-slate-700">Reference number
-                      <input required minLength={3} maxLength={80} pattern="[A-Za-z0-9._/-]+" value={noticeDraft.referenceNumber} onChange={(event) => setNoticeDraft((draft) => ({ ...draft, referenceNumber: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-mono font-normal" placeholder="ELTNOY/NOTICE/2026/001" />
+                      <input required minLength={3} maxLength={80} pattern="[A-Za-z0-9._\/\-]+" value={noticeDraft.referenceNumber} onChange={(event) => setNoticeDraft((draft) => ({ ...draft, referenceNumber: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-mono font-normal" placeholder="ELTNOY/NOTICE/2026/001" />
                     </label>
                   </div>
                   <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Publishing is immediate. Check dates, application links, and notice text before publishing. You can unpublish an item below.</p>
@@ -971,10 +1003,18 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 </div>
                 <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                   <table className="w-full min-w-[600px] text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Exam</th><th className="p-4">Questions</th><th className="p-4">Status</th><th className="p-4">Action</th></tr></thead>
-                    <tbody className="divide-y divide-slate-100">{list('answerKeys').map((exam) => <tr key={String(exam.exam_code)}><td className="p-4 font-bold">{String(exam.exam_code)}</td><td className="p-4">{String(exam.question_count)}</td><td className="p-4">{exam.is_published ? 'Published' : 'Draft'}</td><td className="p-4"><button type="button" onClick={() => void publishAdminRecord(`/api/admin/answer-keys/${encodeURIComponent(String(exam.exam_code))}`, !Boolean(exam.is_published), 'Answer key')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{exam.is_published ? 'Unpublish' : 'Publish key'}</button></td></tr>)}</tbody>
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Exam</th><th className="p-4">Questions</th><th className="p-4">Status</th><th className="p-4">Objections</th><th className="p-4">Action</th></tr></thead>
+                    <tbody className="divide-y divide-slate-100">{list('answerKeys').map((exam) => <tr key={String(exam.exam_code)}><td className="p-4 font-bold">{String(exam.exam_code)}</td><td className="p-4">{String(exam.question_count)}</td><td className="p-4">{exam.is_published ? 'Published' : 'Draft'}</td><td className="p-4 text-xs"><span className={exam.objections_open ? 'font-bold text-emerald-700' : 'text-slate-500'}>{exam.objections_open ? 'Window open' : 'Window closed'}</span>{Number(exam.pending_objections) > 0 && <span className="mt-1 block font-bold text-amber-700">{String(exam.pending_objections)} pending</span>}</td><td className="p-4"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void publishAdminRecord(`/api/admin/answer-keys/${encodeURIComponent(String(exam.exam_code))}`, !Boolean(exam.is_published), 'Answer key')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{exam.is_published ? 'Unpublish' : 'Publish key'}</button><button type="button" onClick={() => setObjectionExamCode(String(exam.exam_code))} className="rounded-lg border border-purple-300 px-3 py-2 text-xs font-bold text-purple-800 hover:bg-purple-50">Manage objections</button></div></td></tr>)}</tbody>
                   </table>
                 </section>
+                {objectionExamCode && (
+                  <AdminObjectionsPanel
+                    key={objectionExamCode}
+                    examCode={objectionExamCode}
+                    onClose={() => setObjectionExamCode(null)}
+                    onChanged={(message) => { setNotice(message); void refresh(); }}
+                  />
+                )}
               </section>
             )}
 
@@ -1004,7 +1044,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="text-sm font-semibold text-slate-700">Exam code
-                      <input required maxLength={30} pattern="[A-Za-z0-9-]+" value={examDraft.code} onChange={(event) => setExamField('code', event.target.value.toUpperCase())} placeholder="e.g. ENT-2027" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase" />
+                      <input required maxLength={30} pattern="[A-Za-z0-9\-]+" value={examDraft.code} onChange={(event) => setExamField('code', event.target.value.toUpperCase())} placeholder="e.g. ENT-2027" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase" />
                     </label>
                     <label className="text-sm font-semibold text-slate-700">Exam category
                       <select value={examDraft.category} onChange={(event) => setExamField('category', event.target.value as ExamDraft['category'])} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm">
@@ -1135,10 +1175,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 <p className="mt-1 text-sm text-slate-500">Before recording a credit, independently verify the application-fee payment. This does not connect to a payment gateway.</p>
                 <div className="mt-3 space-y-3">{list('institutes').filter((institute) => institute.account_status === 'approved').map((institute) => {
                   const balance = list('walletBalances').find((item) => item.institute_id === institute.id);
-                  return <article key={String(institute.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><div><h3 className="font-bold">{String(institute.display_name)}</h3><p className="text-xs text-slate-500">{String(institute.login_id)}</p></div><strong>{formatPaise(balance?.balance_paise ?? 0)}</strong></div><form onSubmit={(event) => void recordInstituteCredit(event, String(institute.id))} className="mt-3 grid gap-2 sm:grid-cols-[140px_1fr_1fr_auto]"><input name="amount" required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?" placeholder="Amount ₹" aria-label="Credit amount in rupees" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input name="paymentReference" required minLength={3} maxLength={120} pattern="[A-Za-z0-9._/-]+" placeholder="Verified payment reference" aria-label="Verified payment reference" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input name="description" required minLength={3} maxLength={300} placeholder="Reason / fee details" aria-label="Credit description" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="submit" className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">Record credit</button></form></article>;
+                  return <article key={String(institute.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><div><h3 className="font-bold">{String(institute.display_name)}</h3><p className="text-xs text-slate-500">{String(institute.login_id)}</p></div><strong>{formatPaise(balance?.balance_paise ?? 0)}</strong></div><form onSubmit={(event) => void recordInstituteCredit(event, String(institute.id))} className="mt-3 grid gap-2 sm:grid-cols-[140px_1fr_1fr_auto]"><input name="amount" required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?" placeholder="Amount ₹" aria-label="Credit amount in rupees" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input name="paymentReference" required minLength={3} maxLength={120} pattern="[A-Za-z0-9._\/\-]+" placeholder="Verified payment reference" aria-label="Verified payment reference" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input name="description" required minLength={3} maxLength={300} placeholder="Reason / fee details" aria-label="Credit description" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="submit" className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">Record credit</button></form></article>;
                 })}</div>
                 <h3 className="mt-6 font-bold text-slate-800">Withdrawal requests</h3>
-                {list('withdrawals').length ? <div className="mt-3 space-y-3">{list('withdrawals').map((withdrawal) => <article key={String(withdrawal.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><div><strong>{String(withdrawal.institute_name)} · {String(withdrawal.login_id)}</strong><p className="text-sm">{formatPaise(withdrawal.amount_paise)} · <span className="capitalize">{String(withdrawal.status)}</span></p></div><span className="text-xs text-slate-500">{new Date(String(withdrawal.created_at)).toLocaleDateString()}</span></div>{withdrawal.status === 'pending' && <div className="mt-3 flex gap-2"><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'approved')} className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white">Approve</button><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700">Reject</button></div>}{withdrawal.status === 'approved' && <div className="mt-3 flex flex-wrap gap-2"><input value={transferReferences[String(withdrawal.id)] || ''} onChange={(event) => setTransferReferences((refs) => ({ ...refs, [String(withdrawal.id)]: event.target.value }))} required minLength={3} maxLength={120} pattern="[A-Za-z0-9._/-]+" placeholder="Manual transfer reference" aria-label={`Manual transfer reference for ${String(withdrawal.login_id)}`} className="min-w-60 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'paid')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">Mark paid</button><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700">Cancel approval</button></div>}</article>)}</div> : <p className="mt-2 text-sm text-slate-500">No withdrawal requests.</p>}
+                {list('withdrawals').length ? <div className="mt-3 space-y-3">{list('withdrawals').map((withdrawal) => <article key={String(withdrawal.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><div><strong>{String(withdrawal.institute_name)} · {String(withdrawal.login_id)}</strong><p className="text-sm">{formatPaise(withdrawal.amount_paise)} · <span className="capitalize">{String(withdrawal.status)}</span></p></div><span className="text-xs text-slate-500">{new Date(String(withdrawal.created_at)).toLocaleDateString()}</span></div>{withdrawal.status === 'pending' && <div className="mt-3 flex gap-2"><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'approved')} className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white">Approve</button><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700">Reject</button></div>}{withdrawal.status === 'approved' && <div className="mt-3 flex flex-wrap gap-2"><input value={transferReferences[String(withdrawal.id)] || ''} onChange={(event) => setTransferReferences((refs) => ({ ...refs, [String(withdrawal.id)]: event.target.value }))} required minLength={3} maxLength={120} pattern="[A-Za-z0-9._\/\-]+" placeholder="Manual transfer reference" aria-label={`Manual transfer reference for ${String(withdrawal.login_id)}`} className="min-w-60 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'paid')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">Mark paid</button><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700">Cancel approval</button></div>}</article>)}</div> : <p className="mt-2 text-sm text-slate-500">No withdrawal requests.</p>}
               </section>
               </div>
             )}
@@ -1208,11 +1248,36 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 <form onSubmit={(event) => void submitCheckin(event)} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">Verify a candidate</h2>
                   <p className="mt-1 text-sm text-slate-500">Only candidates assigned to center <strong>{user.id}</strong> can be checked in.</p>
-                  <label className="mt-4 block text-sm font-semibold text-slate-700">Application number<input required value={applicationNumber} onChange={(event) => setApplicationNumber(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase" /></label>
-                  <label className="mt-3 block text-sm font-semibold text-slate-700">Date of birth<input required type="date" value={dateOfBirth} onChange={(event) => setDateOfBirth(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" /></label>
-                  <label className="mt-3 block text-sm font-semibold text-slate-700">Check-in status<select value={checkinStatus} onChange={(event) => setCheckinStatus(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm"><option value="verified">Identity verified</option><option value="admitted">Admitted to exam</option><option value="flagged">Flag for review</option><option value="rejected">Entry denied</option></select></label>
-                  <label className="mt-3 block text-sm font-semibold text-slate-700">Note (optional)<textarea value={checkinNote} onChange={(event) => setCheckinNote(event.target.value)} maxLength={500} rows={2} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" /></label>
-                  <button type="submit" className="mt-4 inline-flex items-center gap-2 rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600"><ClipboardCheck className="h-4 w-4" /> Verify and save</button>
+                  <label className="mt-4 block text-sm font-semibold text-slate-700">Application number<input required value={applicationNumber} onChange={(event) => { setApplicationNumber(event.target.value); setCheckinCandidate(null); }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase" /></label>
+                  <label className="mt-3 block text-sm font-semibold text-slate-700">Date of birth<input required type="date" value={dateOfBirth} onChange={(event) => { setDateOfBirth(event.target.value); setCheckinCandidate(null); }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" /></label>
+                  {checkinCandidate && (
+                    <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-3">
+                      <p className="text-xs font-bold uppercase tracking-wide text-sky-800">Compare with the person in front of you</p>
+                      <div className="mt-2 flex gap-3">
+                        {checkinCandidate.photoUrl
+                          ? <img src={checkinCandidate.photoUrl} alt={`Photograph of ${checkinCandidate.candidateName}`} className="h-28 w-24 rounded border border-slate-300 bg-white object-cover" />
+                          : <div className="flex h-28 w-24 items-center justify-center rounded border border-dashed border-slate-300 bg-white p-1 text-center text-[10px] text-slate-500">No photo on file</div>}
+                        <div className="min-w-0 text-sm">
+                          <p className="font-bold text-slate-900">{checkinCandidate.candidateName}</p>
+                          <p className="text-xs text-slate-600">Father/guardian: {checkinCandidate.fatherName}</p>
+                          <p className="text-xs text-slate-600">Roll {checkinCandidate.rollNumber} · {checkinCandidate.examCode}</p>
+                          <p className="text-xs text-slate-600">{checkinCandidate.examTiming}</p>
+                          {checkinCandidate.checkinStatus && <p className="mt-1 text-xs font-bold capitalize text-amber-800">Already recorded: {checkinCandidate.checkinStatus}</p>}
+                          {checkinCandidate.signatureUrl && <img src={checkinCandidate.signatureUrl} alt="Candidate signature" className="mt-2 h-10 max-w-40 rounded border border-slate-200 bg-white object-contain" />}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {checkinCandidate && (
+                    <>
+                      <label className="mt-3 block text-sm font-semibold text-slate-700">Check-in status<select value={checkinStatus} onChange={(event) => setCheckinStatus(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm"><option value="verified">Identity verified</option><option value="admitted">Admitted to exam</option><option value="flagged">Flag for review</option><option value="rejected">Entry denied</option></select></label>
+                      <label className="mt-3 block text-sm font-semibold text-slate-700">Note (optional)<textarea value={checkinNote} onChange={(event) => setCheckinNote(event.target.value)} maxLength={500} rows={2} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" /></label>
+                    </>
+                  )}
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="submit" disabled={isCheckingCandidate} className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600 disabled:opacity-60"><ClipboardCheck className="h-4 w-4" /> {checkinCandidate ? 'Save check-in' : isCheckingCandidate ? 'Looking up…' : 'Look up candidate'}</button>
+                    {checkinCandidate && <button type="button" onClick={() => setCheckinCandidate(null)} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>}
+                  </div>
                 </form>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-[#0B2E59]">Recent check-ins</h2>{list('checkins').length ? <div className="mt-4 space-y-2">{list('checkins').map((item) => <article key={String(item.id)} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-3"><div><strong className="text-sm">{String(item.candidate_name)}</strong><p className="text-xs text-slate-500">{String(item.application_number)} · {String(item.roll_number)} · {String(item.exam_code)}</p></div><span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold capitalize text-sky-800">{String(item.status)}</span></article>)}</div> : <p className="mt-4 text-sm text-slate-500">No check-ins recorded for this center.</p>}</section>
               </div>
@@ -1297,7 +1362,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               </div>
             )}
 
-            {user.role === 'official' && tab === 'applications' && <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Candidate / exam</th><th className="p-4">Submitted</th><th className="p-4">Status</th><th className="p-4">Admit card</th></tr></thead><tbody className="divide-y divide-slate-100">{list('applications').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono font-bold">{String(item.application_number)}</td><td className="p-4">{String(item.candidate_name)}<span className="block text-xs text-slate-500">{String(item.exam_code)}</span></td><td className="p-4 text-slate-500">{new Date(String(item.created_at)).toLocaleDateString()}</td><td className="p-4"><select aria-label={`Status for ${String(item.application_number)}`} value={String(item.status)} onChange={(event) => void updateApplication(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1"><option value="submitted">Submitted</option><option value="under_review">Under review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></td><td className="p-4 text-xs">{item.admit_card_published ? 'Published' : 'Not published'}</td></tr>)}</tbody></table></section>}
+            {user.role === 'official' && tab === 'applications' && <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Candidate / exam</th><th className="p-4">Submitted</th><th className="p-4">Status</th><th className="p-4">Admit card</th></tr></thead><tbody className="divide-y divide-slate-100">{list('applications').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono font-bold">{String(item.application_number)}</td><td className="p-4">{String(item.candidate_name)}<span className="block text-xs text-slate-500">{String(item.exam_code)}</span>{(item.photo_file_id || item.signature_file_id) ? <span className="mt-1 flex gap-2 text-xs">{typeof item.photo_file_id === 'string' && <a href={`/api/files/${encodeURIComponent(item.photo_file_id)}`} target="_blank" rel="noreferrer" className="font-semibold text-blue-800 underline">Photo</a>}{typeof item.signature_file_id === 'string' && <a href={`/api/files/${encodeURIComponent(item.signature_file_id)}`} target="_blank" rel="noreferrer" className="font-semibold text-blue-800 underline">Signature</a>}</span> : <span className="mt-1 block text-xs text-amber-700">No photo/signature</span>}</td><td className="p-4 text-slate-500">{new Date(String(item.created_at)).toLocaleDateString()}</td><td className="p-4"><select aria-label={`Status for ${String(item.application_number)}`} value={String(item.status)} onChange={(event) => void updateApplication(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1"><option value="submitted">Submitted</option><option value="under_review">Under review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></td><td className="p-4 text-xs">{item.admit_card_published ? 'Published' : 'Not published'}</td></tr>)}</tbody></table></section>}
 
             {user.role === 'official' && tab === 'feedback' && <section className="space-y-3">{list('feedback').length ? list('feedback').map((item) => <article key={String(item.id)} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-bold text-[#0B2E59]">{String(item.title)}</p><p className="mt-1 text-xs text-slate-500">{String(item.id)} · {String(item.type)} · {String(item.priority)}</p></div><select aria-label={`Status for ${String(item.id)}`} value={String(item.status)} onChange={(event) => void updateFeedback(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1 text-sm"><option value="under_review">Under review</option><option value="in_progress">In progress</option><option value="resolved">Resolved</option></select></div><p className="mt-3 text-sm text-slate-700">{String(item.description)}</p></article>) : <p className="rounded-xl bg-white p-6 text-sm text-slate-500">No helpdesk tickets have been submitted.</p>}</section>}
 

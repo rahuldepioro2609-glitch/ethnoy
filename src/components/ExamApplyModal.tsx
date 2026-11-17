@@ -7,6 +7,8 @@ import React, { useState } from 'react';
 import { X, CheckCircle2, ArrowRight, ArrowLeft, ShieldCheck, FileCheck } from 'lucide-react';
 import { ExamItem } from '../data/portalData';
 import { apiRequest } from '../api';
+import { ImageUploadField } from './ImageUploadField';
+import type { UploadedFile } from '../utils/fileUpload';
 
 interface ExamApplyModalProps {
   exam: ExamItem | null;
@@ -29,6 +31,8 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
   const [generatedAppNo, setGeneratedAppNo] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [photo, setPhoto] = useState<UploadedFile | null>(null);
+  const [signature, setSignature] = useState<UploadedFile | null>(null);
 
   if (!exam) return null;
 
@@ -37,6 +41,10 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
     if (step === 1) {
       setStep(2);
     } else if (step === 2) {
+      if (!photo || !signature) {
+        setSubmitError('Upload your photograph and signature before submitting.');
+        return;
+      }
       setIsSubmitting(true);
       setSubmitError(null);
       try {
@@ -56,6 +64,8 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
             firstCityPreference: prefCity1,
             secondCityPreference: prefCity2,
             languageMedium,
+            photoFileId: photo.id,
+            signatureFileId: signature.id,
           }),
         });
         setGeneratedAppNo(application.applicationNumber);
@@ -120,7 +130,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
               2
             </span>
             <span className={step >= 2 ? 'font-bold text-slate-900' : 'text-slate-400'}>
-              Center Preferences
+              Centre &amp; Documents
             </span>
           </div>
           <span className="text-slate-300">———</span>
@@ -328,6 +338,23 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                 </select>
               </div>
 
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ImageUploadField
+                  kind="photo"
+                  label="Recent Photograph *"
+                  hint="Passport-style, face clearly visible, plain background. Printed on your admit card."
+                  value={photo}
+                  onChange={setPhoto}
+                />
+                <ImageUploadField
+                  kind="signature"
+                  label="Signature *"
+                  hint="Sign in black or blue ink on white paper, then photograph or scan it."
+                  value={signature}
+                  onChange={setSignature}
+                />
+              </div>
+
               <div className="pt-3 flex items-center justify-between">
                 <button
                   type="button"
@@ -339,7 +366,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !photo || !signature}
                   className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold rounded-xl flex items-center gap-1.5 transition-colors shadow-sm"
                 >
                   <span>{isSubmitting ? 'Submitting…' : 'Submit Application'}</span>

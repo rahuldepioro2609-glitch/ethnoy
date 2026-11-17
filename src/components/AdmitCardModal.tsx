@@ -263,9 +263,18 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
 
                   {/* Candidate Photo Placeholder box */}
                   <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg p-2 bg-white">
-                    <div className="w-20 h-24 bg-slate-200 rounded flex items-center justify-center text-slate-400 text-center text-[10px] p-1 font-bold">
-                      OFFICIAL PHOTOGRAPH ATTESTED
-                    </div>
+                    {admitCard.photoUrl ? (
+                      <img src={admitCard.photoUrl} alt="Candidate photograph" className="w-20 h-24 rounded object-cover border border-slate-200" />
+                    ) : (
+                      <div className="w-20 h-24 bg-slate-200 rounded flex items-center justify-center text-slate-500 text-center text-[10px] p-1 font-bold">
+                        PASTE RECENT PHOTOGRAPH
+                      </div>
+                    )}
+                    {admitCard.signatureUrl ? (
+                      <img src={admitCard.signatureUrl} alt="Candidate signature" className="mt-1 h-8 w-24 object-contain" />
+                    ) : (
+                      <span className="h-8 w-24 border-b border-slate-400" aria-hidden="true" />
+                    )}
                     <span className="text-[10px] text-slate-500 font-mono mt-1">CANDIDATE SIGN</span>
                   </div>
                 </div>

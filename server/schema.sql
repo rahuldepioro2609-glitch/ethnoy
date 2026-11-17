@@ -310,3 +310,74 @@ BEGIN
       FOREIGN KEY (withdrawal_id) REFERENCES institute_withdrawals(id) ON DELETE CASCADE;
   END IF;
 END $$;
+
+-- Uploaded files (candidate photo/signature, objection evidence). Stored in the
+-- database so uploads survive redeploys on hosts without a persistent disk.
+CREATE TABLE IF NOT EXISTS uploaded_files (
+  id text PRIMARY KEY,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('photo', 'signature', 'objection_document')),
+  mime_type text NOT NULL CHECK (mime_type IN ('image/jpeg', 'image/png', 'application/pdf')),
+  original_name text,
+  size_bytes integer NOT NULL CHECK (size_bytes > 0),
+  data bytea NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS uploaded_files_user_idx ON uploaded_files(user_id, created_at DESC);
+
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS photo_file_id text REFERENCES uploaded_files(id) ON DELETE SET NULL;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS signature_file_id text REFERENCES uploaded_files(id) ON DELETE SET NULL;
+
+-- Answer-key objection windows and candidate objections.
+CREATE TABLE IF NOT EXISTS answer_key_objection_windows (
+  exam_code text PRIMARY KEY,
+  is_open boolean NOT NULL DEFAULT false,
+  closes_at timestamptz,
+  updated_by text REFERENCES users(id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE answer_key_questions ADD COLUMN IF NOT EXISTS original_key text
+  CHECK (original_key IS NULL OR original_key IN ('A', 'B', 'C', 'D'));
+ALTER TABLE answer_key_questions ADD COLUMN IF NOT EXISTS is_dropped boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS answer_key_objections (
+  id text PRIMARY KEY,
+  reference_number text NOT NULL UNIQUE,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  exam_code text NOT NULL,
+  question_number integer NOT NULL CHECK (question_number > 0),
+  official_key text NOT NULL CHECK (official_key IN ('A', 'B', 'C', 'D')),
+  proposed_key text NOT NULL CHECK (proposed_key IN ('A', 'B', 'C', 'D', 'NONE')),
+  category text NOT NULL CHECK (category IN (
+    'Incorrect Key', 'Ambiguous Question', 'Multiple Answers', 'Out of Syllabus', 'Typographical Discrepancy'
+  )),
+  justification text NOT NULL CHECK (char_length(justification) BETWEEN 15 AND 3000),
+  reference_source text NOT NULL CHECK (char_length(reference_source) BETWEEN 5 AND 500),
+  document_file_id text REFERENCES uploaded_files(id) ON DELETE SET NULL,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+  resolution text CHECK (resolution IS NULL OR resolution IN ('key_changed', 'question_dropped', 'no_change')),
+  reviewer_remarks text,
+  reviewed_by text REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, exam_code, question_number)
+);
+CREATE INDEX IF NOT EXISTS answer_key_objections_exam_idx
+  ON answer_key_objections(exam_code, question_number, status);
+CREATE INDEX IF NOT EXISTS answer_key_objections_user_idx
+  ON answer_key_objections(user_id, created_at DESC);
+
+-- Email verification and password reset.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  token_hash text PRIMARY KEY,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose text NOT NULL CHECK (purpose IN ('password_reset', 'email_verification')),
+  email text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS auth_tokens_user_idx ON auth_tokens(user_id, purpose, created_at DESC);
