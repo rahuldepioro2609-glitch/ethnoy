@@ -19,6 +19,7 @@ import { NoticeDetailModal } from './components/NoticeDetailModal';
 import { ExamApplyModal } from './components/ExamApplyModal';
 import { CandidateResultModal } from './components/CandidateResultModal';
 import { AnswerKeyObjectionModal } from './components/AnswerKeyObjectionModal';
+import { ResetPasswordPage, VerifyEmailPage } from './components/AccountPages';
 import { FeedbackSlideOut } from './components/FeedbackSlideOut';
 import { ExamItem, NoticeItem } from './data/portalData';
 import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
@@ -351,6 +352,14 @@ export default function App() {
       navigate(`/dashboard/${user.role}`);
     }
   };
+
+  if (pathname === '/reset-password') {
+    return <ResetPasswordPage onHome={() => navigate('/')} onSignIn={(role) => { setLoggedInUser(null); navigate(`/login/${role}`); }} />;
+  }
+
+  if (pathname === '/verify-email') {
+    return <VerifyEmailPage onHome={() => navigate('/')} />;
+  }
 
   if (pathname.startsWith('/login')) {
     if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Checking secure session…</main>;

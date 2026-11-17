@@ -40,13 +40,16 @@ export const publicWriteLimiter = rateLimit({
   message: { error: 'Too many requests. Please try again later.' },
 });
 
-export const accountRecoveryLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  limit: 5,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { error: 'Too many account recovery requests. Try again in an hour.' },
-});
+/** Each call creates an independent counter, so one recovery route cannot exhaust another. */
+export function accountRecoveryLimiter(limit = 20) {
+  return rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'Too many account requests from this network. Try again in an hour.' },
+  });
+}
 
 export const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

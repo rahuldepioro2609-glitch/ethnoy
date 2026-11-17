@@ -28,6 +28,8 @@ import {
 import { apiRequest } from '../api';
 import { OnlineExamRunner } from './OnlineExamRunner';
 import { AdminObjectionsPanel } from './AdminObjectionsPanel';
+import { AccountEmailCard } from './AccountPages';
+import { useTranslation } from '../i18n';
 import { BrandLogo } from './BrandLogo';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
@@ -101,10 +103,16 @@ interface RoleLoginPageProps {
   onLogin: (user: PortalUser) => void;
 }
 
+type LoginMode = 'signin' | 'register' | 'forgot';
+
+const inputClass = 'w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100';
+
 export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLogin }) => {
+  const { t } = useTranslation();
+  const [mode, setMode] = useState<LoginMode>('signin');
   const [loginId, setLoginId] = useState('');
   const [fullName, setFullName] = useState('');
-  const [contactEmail, setContactEmail] = useState('');
+  const [email, setEmail] = useState('');
   const [registrationNumber, setRegistrationNumber] = useState('');
   const [registeredAddress, setRegisteredAddress] = useState('');
   const [website, setWebsite] = useState('');
@@ -113,50 +121,37 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isRegistering, setIsRegistering] = useState(false);
+
+  const isRegistering = mode === 'register';
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!role) return;
     setError(null);
-    setIsSubmitting(true);
-    try {
-      const { user } = await apiRequest<{
-        user: { id: string; loginId: string; name: string; role: PortalRole };
-      }>('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ loginId: loginId.trim(), password, role }),
-      });
-      onLogin({ id: user.loginId, name: user.name, role: user.role });
-    } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : 'Sign in failed. Please try again.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const register = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!role || role === 'official') return;
-    setError(null);
     setMessage(null);
     setIsSubmitting(true);
     try {
-      if (role === 'candidate') {
+      if (mode === 'forgot') {
+        const result = await apiRequest<{ message: string }>('/api/auth/password-reset/request', {
+          method: 'POST',
+          body: JSON.stringify({ loginId: loginId.trim(), email: email.trim() }),
+        });
+        setMessage(result.message);
+      } else if (mode === 'register' && role === 'candidate') {
         const { user } = await apiRequest<{
           user: { id: string; loginId: string; name: string; role: PortalRole };
         }>('/api/auth/register', {
           method: 'POST',
-          body: JSON.stringify({ loginId: loginId.trim(), name: fullName.trim(), password }),
+          body: JSON.stringify({ loginId: loginId.trim(), name: fullName.trim(), email: email.trim(), password }),
         });
         onLogin({ id: user.loginId, name: user.name, role: user.role });
-      } else {
+      } else if (mode === 'register' && role === 'center') {
         const { message: registrationMessage } = await apiRequest<{ message: string }>('/api/center/register', {
           method: 'POST',
           body: JSON.stringify({
             loginId: loginId.trim(),
             name: fullName.trim(),
-            contactEmail: contactEmail.trim(),
+            contactEmail: email.trim(),
             registrationNumber: registrationNumber.trim(),
             registeredAddress: registeredAddress.trim(),
             website: website.trim(),
@@ -165,17 +160,25 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
         });
         setMessage(registrationMessage);
         setPassword('');
-        setIsRegistering(false);
+        setMode('signin');
+      } else {
+        const { user } = await apiRequest<{
+          user: { id: string; loginId: string; name: string; role: PortalRole };
+        }>('/api/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({ loginId: loginId.trim(), password, role }),
+        });
+        onLogin({ id: user.loginId, name: user.name, role: user.role });
       }
-    } catch (registrationError) {
-      setError(registrationError instanceof Error ? registrationError.message : 'Could not submit registration.');
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : t('login.genericError'));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const changeRegistrationMode = (enabled: boolean) => {
-    setIsRegistering(enabled);
+  const changeMode = (next: LoginMode) => {
+    setMode(next);
     setIsPasswordVisible(false);
     setError(null);
     setMessage(null);
@@ -185,6 +188,24 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   const Icon = detail?.icon ?? GraduationCap;
   const accent = accentClasses[detail?.accent ?? 'emerald'];
 
+  const heading = mode === 'forgot'
+    ? t('login.forgotTitle')
+    : isRegistering
+      ? t(role === 'candidate' ? 'login.registerStudentTitle' : 'login.registerInstituteTitle')
+      : t('login.signInTitle');
+  const intro = mode === 'forgot'
+    ? t('login.forgotIntro')
+    : isRegistering
+      ? t(role === 'candidate' ? 'login.registerStudentIntro' : 'login.registerInstituteIntro')
+      : t(role === 'candidate' ? 'login.signInStudentIntro' : 'login.signInStaffIntro');
+  const submitLabel = isSubmitting
+    ? t('common.pleaseWait')
+    : mode === 'forgot'
+      ? t('login.sendResetLink')
+      : isRegistering
+        ? t(role === 'candidate' ? 'login.createAccount' : 'login.submitForApproval')
+        : t('login.secureSignIn');
+
   return (
     <main className="min-h-screen bg-[#eef5fa] text-slate-900">
       <header className="border-b border-slate-200 bg-white">
@@ -193,7 +214,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
             <BrandLogo />
           </div>
           <button onClick={onBack} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-[#0B2E59] hover:bg-emerald-50">
-            <ArrowLeft className="h-4 w-4" /> Home
+            <ArrowLeft className="h-4 w-4" /> {t('account.home')}
           </button>
         </div>
       </header>
@@ -202,21 +223,20 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
         {!role ? (
           <>
             <div className="mx-auto mb-9 max-w-2xl text-center">
-              <p className="text-sm font-bold uppercase tracking-[0.2em] text-emerald-700">Secure access</p>
-              <h1 className="mt-2 text-3xl font-black text-[#0B2E59] sm:text-4xl">Choose your portal</h1>
-              <p className="mt-3 text-slate-600">Select the account type shown on your ELTNOY credentials.</p>
+              <p className="text-sm font-bold uppercase tracking-[0.2em] text-emerald-700">{t('login.secureAccess')}</p>
+              <h1 className="mt-2 text-3xl font-black text-[#0B2E59] sm:text-4xl">{t('login.choosePortal')}</h1>
+              <p className="mt-3 text-slate-600">{t('login.choosePortalIntro')}</p>
             </div>
             <div className="grid gap-5 md:grid-cols-3">
               {(['candidate', 'center', 'official'] as const).map((item) => {
-                const itemDetail = roleDetails[item];
-                const RoleIcon = itemDetail.icon;
+                const RoleIcon = roleDetails[item].icon;
                 const colorClass = item === 'candidate' ? 'bg-emerald-600' : item === 'center' ? 'bg-sky-600' : 'bg-blue-800';
                 return (
                   <a key={item} href={rolePath[item]} className="group rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
                     <div className={`mb-5 inline-flex rounded-xl p-3 text-white ${colorClass}`}><RoleIcon className="h-7 w-7" /></div>
-                    <h2 className="text-xl font-extrabold text-[#0B2E59]">{itemDetail.title}</h2>
-                    <p className="mt-2 min-h-12 text-sm leading-6 text-slate-600">{itemDetail.subtitle}</p>
-                    <span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-emerald-700">Continue to login <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" /></span>
+                    <h2 className="text-xl font-extrabold text-[#0B2E59]">{t(`role.${item}.title`)}</h2>
+                    <p className="mt-2 min-h-12 text-sm leading-6 text-slate-600">{t(`role.${item}.subtitle`)}</p>
+                    <span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-emerald-700">{t('login.continue')} <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" /></span>
                   </a>
                 );
               })}
@@ -227,99 +247,99 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
             <section className={`flex min-h-64 flex-col justify-between ${accent.panel} p-8 text-white sm:p-10`}>
               <div>
                 <div className="inline-flex rounded-2xl bg-white/15 p-3"><Icon className="h-8 w-8" /></div>
-                <p className="mt-8 text-sm font-bold uppercase tracking-[0.18em] text-white/75">{detail?.label}</p>
-                <h1 className="mt-2 text-3xl font-black">{detail?.title}</h1>
-                <p className="mt-3 max-w-sm text-sm leading-6 text-white/85">{detail?.subtitle}</p>
+                <p className="mt-8 text-sm font-bold uppercase tracking-[0.18em] text-white/75">{t(`role.${role}.label`)}</p>
+                <h1 className="mt-2 text-3xl font-black">{t(`role.${role}.title`)}</h1>
+                <p className="mt-3 max-w-sm text-sm leading-6 text-white/85">{t(`role.${role}.subtitle`)}</p>
               </div>
-              <p className="mt-8 text-xs text-white/70">Your Future, Our Mission</p>
+              <p className="mt-8 text-xs text-white/70">{t('login.tagline')}</p>
             </section>
             <section className="p-7 sm:p-10">
-              <a href="/login" className="mb-7 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> All login options</a>
-              <h2 className="text-2xl font-extrabold text-[#0B2E59]">
-                {isRegistering ? (role === 'candidate' ? 'Create student account' : 'Request institute access') : 'Sign in to your account'}
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                {isRegistering
-                  ? role === 'candidate'
-                    ? 'Create an account first. You can then sign in and submit exam applications.'
-                    : 'Submit your institute details. Portal access starts only after Super Admin approval.'
-                  : role === 'candidate'
-                    ? 'Sign in before starting or continuing an exam application.'
-                    : 'Enter the credentials provided by your portal administrator.'}
-              </p>
-              <form className="mt-7 space-y-5" onSubmit={(event) => void (isRegistering ? register(event) : submit(event))}>
+              <a href="/login" className="mb-7 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('login.allOptions')}</a>
+              <h2 className="text-2xl font-extrabold text-[#0B2E59]">{heading}</h2>
+              <p className="mt-1 text-sm text-slate-500">{intro}</p>
+              <form className="mt-7 space-y-5" onSubmit={(event) => void submit(event)}>
                 {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
                 {message && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{message}</div>}
                 {isRegistering && (
                   <div>
                     <label htmlFor="role-register-name" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                      {role === 'candidate' ? 'Student full name' : 'Institute name'}
+                      {t(role === 'candidate' ? 'login.studentName' : 'login.instituteName')}
                     </label>
-                    <input id="role-register-name" autoComplete="name" value={fullName} onChange={(event) => setFullName(event.target.value)} required maxLength={120} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                    <input id="role-register-name" autoComplete={role === 'candidate' ? 'name' : 'organization'} value={fullName} onChange={(event) => setFullName(event.target.value)} required minLength={2} maxLength={120} className={inputClass} />
                   </div>
                 )}
                 <div>
                   <label htmlFor="role-login-id" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                    {role === 'candidate' ? (isRegistering ? 'Choose student login ID' : 'Student login ID') : (isRegistering ? 'Choose institute / center ID' : 'Staff / Center ID')}
+                    {role === 'candidate'
+                      ? t(isRegistering ? 'login.chooseStudentId' : 'login.studentId')
+                      : t(isRegistering ? 'login.chooseInstituteId' : 'login.staffId')}
                   </label>
-                  <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={4} maxLength={50} pattern="[A-Za-z0-9._\-]+" title="Use 4-50 letters, numbers, dots, underscores or hyphens." className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm uppercase outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                  <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={isRegistering ? 4 : 1} maxLength={isRegistering ? 50 : 100} pattern={isRegistering ? '[A-Za-z0-9._\\-]+' : undefined} title={isRegistering ? t('login.idRule') : undefined} className={`${inputClass} uppercase`} />
                 </div>
-                {isRegistering && role === 'center' && (
+                {isRegistering || mode === 'forgot' ? (
                   <div>
-                    <label htmlFor="institute-contact-email" className="mb-1.5 block text-sm font-semibold text-slate-700">Contact email</label>
-                    <input id="institute-contact-email" type="email" autoComplete="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} required maxLength={254} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                    <label htmlFor="role-email" className="mb-1.5 block text-sm font-semibold text-slate-700">
+                      {t(role === 'center' ? 'login.instituteEmail' : 'login.email')}
+                    </label>
+                    <input id="role-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} className={inputClass} />
+                    {isRegistering && role === 'candidate' && <p className="mt-1 text-xs text-slate-500">{t('login.emailHint')}</p>}
+                  </div>
+                ) : null}
+                {isRegistering && role === 'center' && (
+                  <>
+                    <div>
+                      <label htmlFor="institute-registration-number" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.registrationNumber')}</label>
+                      <input id="institute-registration-number" value={registrationNumber} onChange={(event) => setRegistrationNumber(event.target.value)} required minLength={3} maxLength={100} className={inputClass} />
+                    </div>
+                    <div>
+                      <label htmlFor="institute-registered-address" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.registeredAddress')}</label>
+                      <textarea id="institute-registered-address" value={registeredAddress} onChange={(event) => setRegisteredAddress(event.target.value)} required minLength={10} maxLength={500} rows={3} className={inputClass} />
+                    </div>
+                    <div>
+                      <label htmlFor="institute-website" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.website')}</label>
+                      <input id="institute-website" type="url" value={website} onChange={(event) => setWebsite(event.target.value)} maxLength={200} placeholder="https://example.org" className={inputClass} />
+                    </div>
+                  </>
+                )}
+                {mode !== 'forgot' && (
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label htmlFor="role-login-password" className="block text-sm font-semibold text-slate-700">{t('login.password')}</label>
+                      {mode === 'signin' && (
+                        <button type="button" onClick={() => changeMode('forgot')} className="text-xs font-bold text-emerald-800 hover:underline">{t('login.forgotLink')}</button>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input id="role-login-password" type={isPasswordVisible ? 'text' : 'password'} autoComplete={isRegistering ? 'new-password' : 'current-password'} minLength={isRegistering ? 12 : undefined} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required className={`${inputClass} pr-12`} />
+                      <button
+                        type="button"
+                        onClick={() => setIsPasswordVisible((visible) => !visible)}
+                        aria-label={isPasswordVisible ? t('account.hidePassword') : t('account.showPassword')}
+                        aria-pressed={isPasswordVisible}
+                        className="absolute inset-y-0 right-0 inline-flex items-center justify-center px-3 text-slate-500 hover:text-[#0B2E59] focus-visible:outline-2 focus-visible:outline-emerald-600"
+                      >
+                        {isPasswordVisible ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                      </button>
+                    </div>
+                    {isRegistering && <p className="mt-1 text-xs text-slate-500">{t('account.passwordRule')}</p>}
                   </div>
                 )}
-                <div>
-                  <label htmlFor="role-login-password" className="mb-1.5 block text-sm font-semibold text-slate-700">Password</label>
-                  <div className="relative">
-                    <input id="role-login-password" type={isPasswordVisible ? 'text' : 'password'} autoComplete={isRegistering ? 'new-password' : 'current-password'} minLength={isRegistering ? 12 : undefined} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 pr-12 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
-                    <button
-                      type="button"
-                      onClick={() => setIsPasswordVisible((visible) => !visible)}
-                      aria-label={isPasswordVisible ? 'Hide password' : 'Show password'}
-                      aria-pressed={isPasswordVisible}
-                      className="absolute inset-y-0 right-0 inline-flex items-center justify-center px-3 text-slate-500 hover:text-[#0B2E59] focus-visible:outline-2 focus-visible:outline-emerald-600"
-                    >
-                      {isPasswordVisible ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                    </button>
-                  </div>
-                  {isRegistering && <p className="mt-1 text-xs text-slate-500">Use at least 12 characters. Keep your login ID and password safe.</p>}
-                </div>
                 <button type="submit" disabled={isSubmitting} className={`flex w-full items-center justify-center gap-2 rounded-lg ${accent.button} px-4 py-3 text-sm font-bold text-white transition hover:brightness-110 disabled:cursor-wait disabled:opacity-60`}>
-                  <LockKeyhole className="h-4 w-4" /> {isSubmitting ? 'Please wait…' : isRegistering ? (role === 'candidate' ? 'Create account' : 'Submit for approval') : 'Secure sign in'}
+                  <LockKeyhole className="h-4 w-4" /> {submitLabel}
                 </button>
               </form>
-              {role !== 'official' && (
-                <button type="button" onClick={() => changeRegistrationMode(!isRegistering)} className="mt-5 w-full text-center text-sm font-bold text-emerald-800 hover:underline">
-                  {isRegistering ? 'Already registered? Sign in' : role === 'candidate' ? 'New student? Create an account' : 'Institute needs access? Register for approval'}
+              {mode === 'forgot' ? (
+                <button type="button" onClick={() => changeMode('signin')} className="mt-5 w-full text-center text-sm font-bold text-emerald-800 hover:underline">{t('login.backToSignIn')}</button>
+              ) : role !== 'official' && (
+                <button type="button" onClick={() => changeMode(isRegistering ? 'signin' : 'register')} className="mt-5 w-full text-center text-sm font-bold text-emerald-800 hover:underline">
+                  {isRegistering ? t('login.haveAccount') : t(role === 'candidate' ? 'login.newStudent' : 'login.newInstitute')}
                 </button>
               )}
-              {role === 'center' && isRegistering && (
-                <>
-                  <div>
-                    <label htmlFor="institute-registration-number" className="mb-1.5 block text-sm font-semibold text-slate-700">Institute registration / recognition number</label>
-                    <input id="institute-registration-number" value={registrationNumber} onChange={(event) => setRegistrationNumber(event.target.value)} required minLength={3} maxLength={100} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
-                  </div>
-                  <div>
-                    <label htmlFor="institute-registered-address" className="mb-1.5 block text-sm font-semibold text-slate-700">Registered address</label>
-                    <textarea id="institute-registered-address" value={registeredAddress} onChange={(event) => setRegisteredAddress(event.target.value)} required minLength={10} maxLength={500} rows={3} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
-                  </div>
-                  <div>
-                    <label htmlFor="institute-website" className="mb-1.5 block text-sm font-semibold text-slate-700">Official website (optional)</label>
-                    <input id="institute-website" type="url" value={website} onChange={(event) => setWebsite(event.target.value)} maxLength={200} placeholder="https://example.org" className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
-                  </div>
-                </>
+              {mode === 'forgot' && (
+                <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">{t('login.forgotNoEmail')}</p>
               )}
               {role === 'center' && isRegistering && (
-                <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">
-                  Registration does not grant immediate access. Super Admin must independently verify these details before approval. Approved institutes may submit exam and teacher-recruitment listings for Super Admin review; no documents are uploaded here.
-                </p>
-              )}
-              {role === 'candidate' && isRegistering && (
-                <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-                  Email/SMS verification and password recovery are not configured. Do not use a password you use elsewhere.
-                </p>
+                <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">{t('login.instituteNotice')}</p>
               )}
             </section>
           </div>
@@ -1202,6 +1222,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                   return <article key={item.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-500">{item.label}</p><CardIcon className="h-5 w-5 text-emerald-700" /></div><p className="mt-3 text-2xl font-black text-[#0B2E59]">{item.value}</p></article>;
                 })}
               </div>
+            )}
+
+            {(user.role === 'candidate' || (user.role === 'official' && tab === 'overview')) && (
+              <div className="mt-5"><AccountEmailCard /></div>
             )}
 
             {user.role === 'candidate' && (

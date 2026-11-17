@@ -15,6 +15,9 @@ import { asyncRoute, authLimiter, getUser, publicWriteLimiter, sendValidationErr
 import { scoreMockResponses } from './mockScoring.js';
 import { assertOwnedFile, fileAsDataUrl, registerUploadRoutes } from './uploads.js';
 import { registerObjectionRoutes } from './objections.js';
+import { registerAccountRoutes, sendVerificationEmail } from './account.js';
+import { applicationConfirmationEmail, portalLink } from './emailTemplates.js';
+import { sendEmailInBackground } from './mailer.js';
 import { DEFAULT_EXAM_TIME_ZONE, isValidTimeZone } from '../src/utils/examSchedule.js';
 
 const app = express();
@@ -84,6 +87,7 @@ const workbookUpload = express.raw({ type: WORKBOOK_MIME_TYPE, limit: '5mb' });
 
 registerUploadRoutes(app);
 registerObjectionRoutes(app);
+registerAccountRoutes(app);
 
 app.get('/api/notices', asyncRoute(async (_request, response) => {
   const { rows } = await pool.query(
@@ -1298,19 +1302,21 @@ const accountRegistrationSchema = z.object({
 });
 
 app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response) => {
-  const parsed = accountRegistrationSchema.safeParse(request.body);
+  const parsed = accountRegistrationSchema.extend({
+    email: z.string().trim().email().max(254),
+  }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
     return;
   }
-  const { loginId, name, password } = parsed.data;
+  const { loginId, name, password, email } = parsed.data;
   const passwordHash = await bcrypt.hash(password, 12);
   const { rows } = await pool.query(
-    `INSERT INTO users (id, login_id, display_name, role, password_hash, account_status)
-     VALUES ($1, $2, $3, 'candidate', $4, 'approved')
+    `INSERT INTO users (id, login_id, display_name, role, password_hash, contact_email, account_status)
+     VALUES ($1, $2, $3, 'candidate', $4, $5, 'approved')
      ON CONFLICT (login_id) DO NOTHING
-     RETURNING id, login_id, display_name, role`,
-    [randomUUID(), loginId.toUpperCase(), name, passwordHash],
+     RETURNING id, login_id, display_name, role, contact_email`,
+    [randomUUID(), loginId.toUpperCase(), name, passwordHash, email.toLowerCase()],
   );
   if (!rows[0]) {
     response.status(409).json({ error: 'That student login ID is already registered. Choose another.' });
@@ -1322,6 +1328,7 @@ app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response)
      VALUES ($1, $2, now() + ($3 * interval '1 second'))`,
     [hashSessionToken(token), rows[0].id, sessionSeconds],
   );
+  await sendVerificationEmail(rows[0].id, rows[0].display_name, rows[0].contact_email);
   setSessionCookie(response, token);
   response.status(201).json({
     user: { id: rows[0].id, loginId: rows[0].login_id, name: rows[0].display_name, role: rows[0].role },
@@ -1355,6 +1362,7 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     response.status(409).json({ error: 'That institute login ID is already in use. Choose another.' });
     return;
   }
+  await sendVerificationEmail(rows[0].id, name, contactEmail.toLowerCase());
   response.status(201).json({
     message: 'Institute request submitted. Super Admin will verify the registration details before approval.',
   });
@@ -1525,7 +1533,7 @@ app.post('/api/applications', requireAuth, requireRoles('candidate'), publicWrit
     return;
   }
   const exam = await pool.query(
-    `SELECT code, time_zone,
+    `SELECT code, name, time_zone,
             extract(year FROM now() AT TIME ZONE time_zone)::int AS application_year
      FROM exams
      WHERE code = $1 AND is_published = true
@@ -1559,6 +1567,13 @@ app.post('/api/applications', requireAuth, requireRoles('candidate'), publicWrit
     response.status(409).json({ error: 'An application for this exam may already exist on your account.' });
     return;
   }
+  sendEmailInBackground(String(rows[0].email), applicationConfirmationEmail({
+    candidateName: input.candidateName,
+    applicationNumber: String(rows[0].application_number),
+    examCode: String(exam.rows[0].code),
+    examName: String(exam.rows[0].name),
+    dashboardUrl: portalLink(process.env.APP_ORIGIN || 'http://localhost:3000', '/dashboard/candidate'),
+  }));
   response.status(201).json({
     application: {
       id: rows[0].id,
