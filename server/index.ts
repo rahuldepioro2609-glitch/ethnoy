@@ -83,6 +83,15 @@ function toExam(row: Record<string, unknown>) {
   };
 }
 
+/** True for http(s) URLs; never throws on malformed input. */
+function isHttpUrl(value: string): boolean {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 const workbookUpload = express.raw({ type: WORKBOOK_MIME_TYPE, limit: '5mb' });
 
 registerUploadRoutes(app);
@@ -942,7 +951,7 @@ app.post('/api/center/forms', requireAuth, requireRoles('center'), asyncRoute(as
     eligibility: z.string().trim().min(3).max(1000),
     applicationDeadline: z.union([z.string().date(), z.literal('')]).optional(),
     externalUrl: z.union([
-      z.string().trim().url().max(500).refine((value) => ['http:', 'https:'].includes(new URL(value).protocol)),
+      z.string().trim().url().max(500).refine(isHttpUrl, 'Enter a web address starting with http:// or https://.'),
       z.literal(''),
     ]).optional(),
   }).safeParse(request.body);
@@ -970,7 +979,7 @@ app.post('/api/center/profile-changes', requireAuth, requireRoles('center'), asy
     registrationNumber: z.string().trim().min(3).max(100),
     registeredAddress: z.string().trim().min(10).max(500),
     website: z.union([
-      z.string().trim().url().max(200).refine((value) => ['http:', 'https:'].includes(new URL(value).protocol)),
+      z.string().trim().url().max(200).refine(isHttpUrl, 'Enter a web address starting with http:// or https://.'),
       z.literal(''),
     ]).optional(),
   }).safeParse(request.body);
