@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, FileText, Calendar, Building2, ExternalLink, ArrowRight } from 'lucide-react';
 import { TEST_CENTERS, ExamItem, NoticeItem, TestCenter } from '../data/portalData';
+import { useTranslation } from '../i18n';
 
 interface GlobalSearchModalProps {
   isOpen: boolean;
@@ -28,6 +29,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   examinations,
   notices,
 }) => {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -80,7 +82,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search test code (NEE-2026, CMET), circular, admit card, or center..."
+            placeholder={t('search.placeholder')}
             className="w-full bg-transparent text-sm sm:text-base font-medium text-slate-900 placeholder:text-slate-400 outline-none"
           />
           {query && (
@@ -88,13 +90,13 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
               onClick={() => setQuery('')}
               className="text-xs text-slate-400 hover:text-slate-600 px-1"
             >
-              Clear
+              {t('search.clear')}
             </button>
           )}
           <button
             onClick={onClose}
             className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors"
-            aria-label="Close search"
+            aria-label={t('search.close')}
           >
             <X className="w-5 h-5" />
           </button>
@@ -102,8 +104,8 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
 
         {/* Quick Suggestion Chips */}
         <div className="px-4 py-2 border-b border-slate-100 bg-white flex items-center gap-1.5 overflow-x-auto text-xs">
-          <span className="text-slate-400 font-medium text-[11px] mr-1">Popular:</span>
-          {['NEE-2026', 'Admit Card', 'CMET-2026', 'Biometric', 'Mock Test', 'Delhi'].map((chip) => (
+          <span className="text-slate-400 font-medium text-[11px] mr-1">{t('search.popular')}</span>
+          {[...examinations.slice(0, 2).map((exam) => exam.code), t('search.chip.admitCard'), t('search.chip.result'), 'Delhi'].map((chip) => (
             <button
               key={chip}
               onClick={() => setQuery(chip)}
@@ -119,7 +121,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
           {/* Quick Direct Actions */}
           <div>
             <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-              Instant Portals
+              {t('search.quickActions')}
             </div>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -130,8 +132,8 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                 className="p-2.5 rounded-xl border border-blue-200 bg-blue-50/60 hover:bg-blue-100/70 text-left transition-colors flex items-center justify-between"
               >
                 <div>
-                  <div className="text-xs font-bold text-blue-900">Download Admit Card</div>
-                  <div className="text-[10px] text-blue-700">Lookup by Application &amp; DOB</div>
+                  <div className="text-xs font-bold text-blue-900">{t('search.admitCard')}</div>
+                  <div className="text-[10px] text-blue-700">{t('search.admitCardHint')}</div>
                 </div>
                 <ArrowRight className="w-4 h-4 text-blue-600" />
               </button>
@@ -144,8 +146,8 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                 className="p-2.5 rounded-xl border border-emerald-200 bg-emerald-50/60 hover:bg-emerald-100/70 text-left transition-colors flex items-center justify-between"
               >
                 <div>
-                  <div className="text-xs font-bold text-emerald-900">Launch CBT Mock Exam</div>
-                  <div className="text-[10px] text-emerald-700">Timed 4-section practice</div>
+                  <div className="text-xs font-bold text-emerald-900">{t('search.mock')}</div>
+                  <div className="text-[10px] text-emerald-700">{t('search.mockHint')}</div>
                 </div>
                 <ArrowRight className="w-4 h-4 text-emerald-600" />
               </button>
@@ -156,7 +158,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
           {matchedExams.length > 0 && (
             <div className="pt-3">
               <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
-                <span>Examinations ({matchedExams.length})</span>
+                <span>{t('search.exams', { count: matchedExams.length })}</span>
                 <Calendar className="w-3.5 h-3.5 text-slate-400" />
               </div>
               <div className="space-y-1.5">
@@ -179,11 +181,11 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                         </span>
                       </div>
                       <div className="text-[11px] text-slate-500 mt-0.5">
-                        {e.targetAudience} · Exam: {e.examDate}
+                        {e.targetAudience} · {t('search.examOn', { date: e.examDate })}
                       </div>
                     </div>
                     <span className="text-xs font-semibold text-emerald-600 group-hover:translate-x-0.5 transition-transform">
-                      View →
+                      {t('search.view')}
                     </span>
                   </button>
                 ))}
@@ -195,7 +197,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
           {matchedNotices.length > 0 && (
             <div className="pt-3">
               <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
-                <span>Circulars &amp; Notices ({matchedNotices.length})</span>
+                <span>{t('search.notices', { count: matchedNotices.length })}</span>
                 <FileText className="w-3.5 h-3.5 text-slate-400" />
               </div>
               <div className="space-y-1.5">
@@ -229,7 +231,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
           {matchedCenters.length > 0 && (
             <div className="pt-3">
               <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
-                <span>Accredited Centers ({matchedCenters.length})</span>
+                <span>{t('search.centers', { count: matchedCenters.length })}</span>
                 <Building2 className="w-3.5 h-3.5 text-slate-400" />
               </div>
               <div className="space-y-1.5">
@@ -243,7 +245,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                       <span className="font-mono text-purple-700 font-semibold">{c.code}</span>
                     </div>
                     <div className="text-[11px] text-slate-500 mt-0.5">
-                      {c.city}, {c.state} · Capacity: {c.capacity} nodes
+                      {c.city}, {c.state} · {t('search.capacity', { count: c.capacity })}
                     </div>
                   </div>
                 ))}
@@ -253,16 +255,16 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
 
           {totalResults === 0 && (
             <div className="py-8 text-center text-slate-500 text-xs">
-              No matching records found for "{query}". Try searching by exam code like NEE, CMET or city name.
+              {t('search.noResults', { query })}
             </div>
           )}
         </div>
 
         {/* Footer info */}
         <div className="px-4 py-2.5 bg-slate-100 border-t border-slate-200 text-[11px] text-slate-500 flex items-center justify-between">
-          <span>Search index updated live from NEA Server</span>
+          <span>{t('search.footer')}</span>
           <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-300 text-slate-600 font-semibold">
-            ESC to close
+            {t('search.escToClose')}
           </kbd>
         </div>
       </div>

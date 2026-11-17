@@ -8,6 +8,7 @@ import { X, CheckCircle2, ArrowRight, ArrowLeft, ShieldCheck, FileCheck } from '
 import { ExamItem } from '../data/portalData';
 import { apiRequest } from '../api';
 import { ImageUploadField } from './ImageUploadField';
+import { useTranslation } from '../i18n';
 import type { UploadedFile } from '../utils/fileUpload';
 
 interface ExamApplyModalProps {
@@ -17,6 +18,7 @@ interface ExamApplyModalProps {
 }
 
 export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, onApplicationComplete }) => {
+  const { t } = useTranslation();
   const [step, setStep] = useState(1);
   const [candidateName, setCandidateName] = useState('');
   const [fatherName, setFatherName] = useState('');
@@ -42,7 +44,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
       setStep(2);
     } else if (step === 2) {
       if (!photo || !signature) {
-        setSubmitError('Upload your photograph and signature before submitting.');
+        setSubmitError(t('apply.uploadsRequired'));
         return;
       }
       setIsSubmitting(true);
@@ -72,7 +74,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
         setStep(3);
         onApplicationComplete(application.applicationNumber);
       } catch (error) {
-        setSubmitError(error instanceof Error ? error.message : 'Could not submit the application.');
+        setSubmitError(error instanceof Error ? error.message : t('apply.submitError'));
       } finally {
         setIsSubmitting(false);
       }
@@ -90,7 +92,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
             </div>
             <div>
               <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-100">
-                Online Candidate Registration Window
+                {t('apply.windowLabel')}
               </span>
               <h2 className="text-sm font-bold truncate max-w-sm">
                 {exam.name} ({exam.code})
@@ -100,7 +102,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-emerald-100 hover:text-white hover:bg-emerald-700 transition-colors"
-            aria-label="Close application dialog"
+            aria-label={t('apply.close')}
           >
             <X className="w-5 h-5" />
           </button>
@@ -117,7 +119,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
               1
             </span>
             <span className={step >= 1 ? 'font-bold text-slate-900' : 'text-slate-400'}>
-              Candidate Info
+              {t('apply.step1')}
             </span>
           </div>
           <span className="text-slate-300">———</span>
@@ -130,7 +132,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
               2
             </span>
             <span className={step >= 2 ? 'font-bold text-slate-900' : 'text-slate-400'}>
-              Centre &amp; Documents
+              {t('apply.step2')}
             </span>
           </div>
           <span className="text-slate-300">———</span>
@@ -143,7 +145,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
               3
             </span>
             <span className={step >= 3 ? 'font-bold text-slate-900' : 'text-slate-400'}>
-              Confirmation
+              {t('apply.step3')}
             </span>
           </div>
         </div>
@@ -153,14 +155,14 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
           {step === 1 && (
             <form onSubmit={handleSubmit} className="space-y-4 text-xs">
               <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 text-blue-900 space-y-1">
-                <span className="font-bold">Exam Details:</span>
-                <div>Duration: {exam.duration} · Mode: {exam.mode}</div>
-                <div>Standard Application Fee: <strong className="text-blue-950 font-mono">{exam.fee}</strong></div>
+                <span className="font-bold">{t('apply.examDetails')}</span>
+                <div>{t('apply.durationMode', { duration: exam.duration, mode: exam.mode })}</div>
+                <div>{t('apply.fee')} <strong className="text-blue-950 font-mono">{exam.fee}</strong></div>
               </div>
 
               <div>
                 <label htmlFor="exam-apply-name" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Full Candidate Name (As in Class 10th Certificate)
+                  {t('apply.name')}
                 </label>
                 <input
                   id="exam-apply-name"
@@ -174,7 +176,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
 
               <div>
                 <label htmlFor="exam-apply-dob" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Date of Birth
+                  {t('apply.dob')}
                 </label>
                 <input
                   id="exam-apply-dob"
@@ -188,7 +190,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
 
               <div>
                 <label htmlFor="exam-apply-father" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Father / Guardian Name
+                  {t('apply.father')}
                 </label>
                 <input
                   id="exam-apply-father"
@@ -203,7 +205,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="exam-apply-gender" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Gender
+                    {t('apply.genderLabel')}
                   </label>
                   <select
                     id="exam-apply-gender"
@@ -212,15 +214,15 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                     required
                   >
-                    <option value="">Select</option>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                    <option value="Other">Other</option>
+                    <option value="">{t('apply.select')}</option>
+                    <option value="Male">{t('apply.gender.male')}</option>
+                    <option value="Female">{t('apply.gender.female')}</option>
+                    <option value="Other">{t('apply.gender.other')}</option>
                   </select>
                 </div>
                 <div>
                   <label htmlFor="exam-apply-category" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Category
+                    {t('apply.categoryLabel')}
                   </label>
                   <select
                     id="exam-apply-category"
@@ -229,8 +231,8 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                     required
                   >
-                    <option value="">Select</option>
-                    <option value="General">General</option>
+                    <option value="">{t('apply.select')}</option>
+                    <option value="General">{t('apply.category.general')}</option>
                     <option value="OBC-NCL">OBC-NCL</option>
                     <option value="SC">SC</option>
                     <option value="ST">ST</option>
@@ -242,7 +244,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="exam-apply-email" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Email Address
+                    {t('apply.email')}
                   </label>
                   <input
                     id="exam-apply-email"
@@ -255,7 +257,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                 </div>
                 <div>
                   <label htmlFor="exam-apply-phone" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Mobile Number
+                    {t('apply.phone')}
                   </label>
                   <input
                     id="exam-apply-phone"
@@ -273,7 +275,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                   type="submit"
                   className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-1.5 transition-colors shadow-sm"
                 >
-                  <span>Proceed to Center Choice</span>
+                  <span>{t('apply.next')}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
@@ -289,7 +291,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
               )}
               <div>
                 <label htmlFor="exam-apply-pref-1" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  1st Choice Examination City
+                  {t('apply.city1')}
                 </label>
                 <select
                   id="exam-apply-pref-1"
@@ -307,7 +309,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
 
               <div>
                 <label htmlFor="exam-apply-pref-2" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  2nd Choice Examination City (Alternative)
+                  {t('apply.city2')}
                 </label>
                 <select
                   id="exam-apply-pref-2"
@@ -324,7 +326,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
 
               <div>
                 <label htmlFor="exam-apply-medium" className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Question Paper Medium / Language
+                  {t('apply.medium')}
                 </label>
                 <select
                   id="exam-apply-medium"
@@ -332,24 +334,24 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                   onChange={(e) => setLanguageMedium(e.target.value)}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 >
-                  <option value="English">English</option>
-                  <option value="Hindi">हिन्दी (Hindi)</option>
-                  <option value="Regional Bilingual">Regional Bilingual (English + State Language)</option>
+                  <option value="English">{t('apply.medium.english')}</option>
+                  <option value="Hindi">{t('apply.medium.hindi')}</option>
+                  <option value="Regional Bilingual">{t('apply.medium.regional')}</option>
                 </select>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <ImageUploadField
                   kind="photo"
-                  label="Recent Photograph *"
-                  hint="Passport-style, face clearly visible, plain background. Printed on your admit card."
+                  label={`${t('apply.photo')} *`}
+                  hint={t('apply.photoHint')}
                   value={photo}
                   onChange={setPhoto}
                 />
                 <ImageUploadField
                   kind="signature"
-                  label="Signature *"
-                  hint="Sign in black or blue ink on white paper, then photograph or scan it."
+                  label={`${t('apply.signature')} *`}
+                  hint={t('apply.signatureHint')}
                   value={signature}
                   onChange={setSignature}
                 />
@@ -362,14 +364,14 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                   className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl flex items-center gap-1 transition-colors"
                 >
                   <ArrowLeft className="w-4 h-4" />
-                  <span>Back</span>
+                  <span>{t('apply.back')}</span>
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting || !photo || !signature}
                   className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold rounded-xl flex items-center gap-1.5 transition-colors shadow-sm"
                 >
-                  <span>{isSubmitting ? 'Submitting…' : 'Submit Application'}</span>
+                  <span>{isSubmitting ? t('common.submitting') : t('apply.submit')}</span>
                   <CheckCircle2 className="w-4 h-4" />
                 </button>
               </div>
@@ -382,29 +384,29 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                 <CheckCircle2 className="w-8 h-8" />
               </div>
               <h3 className="text-lg font-extrabold text-slate-900">
-                Application Successfully Submitted!
+                {t('apply.successTitle')}
               </h3>
               <p className="text-xs text-slate-600 max-w-sm mx-auto">
-                Your provisional registration for {exam.name} has been recorded in the central database.
+                {t('apply.successText', { exam: exam.name })}
               </p>
 
               <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-left text-xs space-y-2 max-w-md mx-auto">
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Application Number:</span>
+                  <span className="text-slate-500">{t('apply.appNumber')}</span>
                   <strong className="font-mono text-emerald-700 text-sm">{generatedAppNo}</strong>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Candidate:</span>
+                  <span className="text-slate-500">{t('apply.candidate')}</span>
                   <strong className="uppercase">{candidateName}</strong>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Primary Center:</span>
+                  <span className="text-slate-500">{t('apply.primaryCenter')}</span>
                   <strong>{prefCity1}</strong>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Status:</span>
+                  <span className="text-slate-500">{t('apply.status')}</span>
                   <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded">
-                    Submitted (payment not configured)
+                    {t('apply.statusSubmitted')}
                   </span>
                 </div>
               </div>
@@ -414,7 +416,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
                   onClick={onClose}
                   className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition-colors"
                 >
-                  Done
+                  {t('apply.done')}
                 </button>
               </div>
             </div>

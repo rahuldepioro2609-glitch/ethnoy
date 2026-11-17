@@ -1,21 +1,36 @@
 import type { Language } from '../utils/languageLogic';
 import en from './locales/en';
-import hi from './locales/hi';
-import kn from './locales/kn';
-import bn from './locales/bn';
-import mr from './locales/mr';
 
 export type TranslationKey = keyof typeof en;
 export type Dictionary = Record<TranslationKey, string>;
 export type TranslationParams = Record<string, string | number>;
 
-export const DICTIONARIES: Record<Language, Partial<Dictionary>> = {
-  English: en,
-  Hindi: hi,
-  Kannada: kn,
-  Bengali: bn,
-  Marathi: mr,
+/**
+ * English ships with the main bundle. Other languages are separate chunks, fetched only
+ * when a visitor chooses them, so most visitors do not download every translation.
+ */
+const LOADERS: Record<Exclude<Language, 'English'>, () => Promise<{ default: Partial<Dictionary> }>> = {
+  Hindi: () => import('./locales/hi'),
+  Kannada: () => import('./locales/kn'),
+  Bengali: () => import('./locales/bn'),
+  Marathi: () => import('./locales/mr'),
 };
+
+const loaded: Partial<Record<Language, Partial<Dictionary>>> = { English: en };
+
+export function isDictionaryLoaded(language: Language): boolean {
+  return Boolean(loaded[language]);
+}
+
+export async function loadDictionary(language: Language): Promise<void> {
+  if (loaded[language] || language === 'English') return;
+  loaded[language] = (await LOADERS[language]()).default;
+}
+
+/** For tests: registers a dictionary without the dynamic import. */
+export function registerDictionary(language: Language, dictionary: Partial<Dictionary>): void {
+  loaded[language] = dictionary;
+}
 
 /** Returns the {placeholder} names used in a message, sorted. */
 export function placeholdersOf(message: string): string[] {
@@ -27,7 +42,7 @@ export function placeholdersOf(message: string): string[] {
  * and fills {placeholders} from params.
  */
 export function translate(language: Language, key: string, params?: TranslationParams): string {
-  const message = (DICTIONARIES[language] as Record<string, string | undefined>)[key]
+  const message = (loaded[language] as Record<string, string | undefined> | undefined)?.[key]
     ?? (en as Record<string, string | undefined>)[key]
     ?? key;
   if (!params) return message;

@@ -21,6 +21,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { FAQItem, FAQ_ITEMS, filterFaqsByCategory, searchFaqs } from '../data/faqData';
+import { useTranslation } from '../i18n';
 
 interface FAQAccordionProps {
   onOpenAdmitCard?: () => void;
@@ -31,12 +32,12 @@ interface FAQAccordionProps {
 }
 
 const CATEGORIES = [
-  { id: 'all', label: 'All Queries', icon: BookOpen },
-  { id: 'admit-card', label: 'Admit Card', icon: FileText },
-  { id: 'cbt-exam', label: 'CBT Terminal', icon: Monitor },
-  { id: 'scoring', label: 'Marking & Results', icon: Award },
-  { id: 'centers', label: 'Test Centers', icon: MapPin },
-  { id: 'registration', label: 'Registration', icon: HelpCircle },
+  { id: 'all', labelKey: 'faq.filter.all', icon: BookOpen },
+  { id: 'admit-card', labelKey: 'faq.filter.admit-card', icon: FileText },
+  { id: 'cbt-exam', labelKey: 'faq.filter.cbt-exam', icon: Monitor },
+  { id: 'scoring', labelKey: 'faq.filter.scoring', icon: Award },
+  { id: 'centers', labelKey: 'faq.filter.centers', icon: MapPin },
+  { id: 'registration', labelKey: 'faq.filter.registration', icon: HelpCircle },
 ];
 
 export function FAQAccordion({
@@ -46,6 +47,15 @@ export function FAQAccordion({
   onOpenCenterLocator,
   onOpenFeedback,
 }: FAQAccordionProps) {
+  const { t } = useTranslation();
+  const localizedItems = useMemo<FAQItem[]>(() => FAQ_ITEMS.map((item) => ({
+    ...item,
+    categoryLabel: t(`faq.category.${item.category}`),
+    question: t(`faq.${item.id}.question`),
+    answer: t(`faq.${item.id}.answer`),
+    keyPoints: item.keyPoints?.map((_, index) => t(`faq.${item.id}.point${index + 1}`)),
+    actionLink: item.actionLink && { ...item.actionLink, label: t(`faq.${item.id}.action`) },
+  })), [t]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set(['faq-01']));
@@ -53,12 +63,12 @@ export function FAQAccordion({
 
   // Filter & Search computation
   const filteredItems = useMemo(() => {
-    let result = filterFaqsByCategory(FAQ_ITEMS, selectedCategory);
+    let result = filterFaqsByCategory(localizedItems, selectedCategory);
     if (searchQuery.trim()) {
       result = searchFaqs(result, searchQuery);
     }
     return result;
-  }, [selectedCategory, searchQuery]);
+  }, [localizedItems, selectedCategory, searchQuery]);
 
   const toggleItem = (id: string) => {
     setExpandedIds((prev) => {
@@ -118,14 +128,13 @@ export function FAQAccordion({
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold uppercase tracking-wider mb-2">
               <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Candidate Helpdesk & Guidelines</span>
+              <span>{t('faq.badge')}</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-[#0B254E] tracking-tight">
-              Frequently Asked Questions
+              {t('faq.title')}
             </h2>
             <p className="text-slate-600 text-sm sm:text-base mt-1 max-w-2xl">
-              Official answers for examination guidelines, admit card downloads, CBT terminal procedures,
-              and negative marking policies.
+              {t('faq.intro')}
             </p>
           </div>
 
@@ -135,13 +144,13 @@ export function FAQAccordion({
               onClick={handleExpandAll}
               className="text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 px-3 py-1.5 rounded-md shadow-xs transition-colors"
             >
-              Expand All
+              {t('faq.expandAll')}
             </button>
             <button
               onClick={handleCollapseAll}
               className="text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 px-3 py-1.5 rounded-md shadow-xs transition-colors"
             >
-              Collapse All
+              {t('faq.collapseAll')}
             </button>
           </div>
         </div>
@@ -154,7 +163,7 @@ export function FAQAccordion({
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder="Search FAQs by topic (e.g., calculator, negative marking, freeze, ID proof)..."
+                placeholder={t('faq.searchPlaceholder')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all"
@@ -162,7 +171,7 @@ export function FAQAccordion({
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  aria-label="Clear search query"
+                  aria-label={t('faq.clearSearch')}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-md"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
@@ -172,7 +181,7 @@ export function FAQAccordion({
 
             {/* Match Counter */}
             <div className="text-xs text-slate-500 font-medium px-2 py-1 shrink-0">
-              Showing <strong>{filteredItems.length}</strong> of <strong>{FAQ_ITEMS.length}</strong> questions
+              {t('faq.showing', { shown: filteredItems.length, total: FAQ_ITEMS.length })}
             </div>
           </div>
 
@@ -192,7 +201,7 @@ export function FAQAccordion({
                   }`}
                 >
                   <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`} />
-                  <span>{cat.label}</span>
+                  <span>{t(cat.labelKey)}</span>
                 </button>
               );
             })}
@@ -203,10 +212,9 @@ export function FAQAccordion({
         {filteredItems.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-10 text-center shadow-xs">
             <HelpCircle className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-            <h3 className="text-base font-bold text-slate-800">No matching questions found</h3>
+            <h3 className="text-base font-bold text-slate-800">{t('faq.noMatches')}</h3>
             <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-              We couldn't find any questions matching &ldquo;{searchQuery}&rdquo;. Try using different keywords or ask our
-              candidate support team directly.
+              {t('faq.noMatchesText', { query: searchQuery })}
             </p>
             <div className="mt-4 flex items-center justify-center gap-3">
               <button
@@ -216,13 +224,13 @@ export function FAQAccordion({
                 }}
                 className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
               >
-                Reset Search Filters
+                {t('faq.resetFilters')}
               </button>
               <button
                 onClick={onOpenFeedback}
                 className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors"
               >
-                Ask Helpdesk
+                {t('faq.askHelpdesk')}
               </button>
             </div>
           </div>
@@ -273,7 +281,7 @@ export function FAQAccordion({
                       {item.keyPoints && item.keyPoints.length > 0 && (
                         <div className="mt-3.5 bg-slate-50 rounded-lg p-3.5 border border-slate-200/80">
                           <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">
-                            Key Official Guidelines:
+                            {t('faq.keyPoints')}
                           </h4>
                           <ul className="space-y-1.5">
                             {item.keyPoints.map((point, index) => (
@@ -306,25 +314,25 @@ export function FAQAccordion({
                           {rated !== undefined ? (
                             <span className="text-emerald-700 font-medium inline-flex items-center gap-1">
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              Thank you for your feedback!
+                              {t('faq.thanks')}
                             </span>
                           ) : (
                             <>
-                              <span>Was this answer helpful?</span>
+                              <span>{t('faq.helpful')}</span>
                               <button
                                 onClick={() => handleRateHelpful(item.id, true)}
                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] transition-colors"
-                                title="Yes, helpful"
+                                title={t('faq.yesTitle')}
                               >
                                 <ThumbsUp className="w-3 h-3 text-slate-600" />
-                                <span>Yes</span>
+                                <span>{t('faq.yes')}</span>
                               </button>
                               <button
                                 onClick={() => handleRateHelpful(item.id, false)}
                                 className="px-2 py-0.5 rounded border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] transition-colors"
-                                title="No, need more details"
+                                title={t('faq.noTitle')}
                               >
-                                <span>No</span>
+                                <span>{t('faq.no')}</span>
                               </button>
                             </>
                           )}
@@ -345,9 +353,9 @@ export function FAQAccordion({
               <MessageSquare className="w-6 h-6 text-emerald-400" />
             </div>
             <div>
-              <h3 className="text-base sm:text-lg font-bold">Have a specific examination query or technical issue?</h3>
+              <h3 className="text-base sm:text-lg font-bold">{t('faq.bannerTitle')}</h3>
               <p className="text-xs sm:text-sm text-slate-200 mt-0.5">
-                Use the helpdesk form to send a question or report a technical issue.
+                {t('faq.bannerText')}
               </p>
             </div>
           </div>
@@ -357,13 +365,13 @@ export function FAQAccordion({
               className="flex-1 md:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-900 font-bold text-xs rounded-lg transition-colors shadow-sm"
             >
               <MessageSquare className="w-4 h-4 text-slate-900" />
-              <span>Report Issue / Give Feedback</span>
+              <span>{t('faq.reportIssue')}</span>
             </button>
             <button
               onClick={onOpenFeedback}
               className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-medium text-xs rounded-lg border border-white/20 transition-colors"
             >
-              <span>Contact Helpdesk</span>
+              <span>{t('faq.contactHelpdesk')}</span>
             </button>
           </div>
         </div>

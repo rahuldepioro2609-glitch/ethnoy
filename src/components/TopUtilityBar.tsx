@@ -15,11 +15,11 @@ import {
 } from 'lucide-react';
 import {
   Language,
+  LANGUAGE_LOCALES,
   LANGUAGE_OPTIONS,
   getNextLanguage,
-  getSavedLanguage,
-  getTopBarTranslation,
 } from '../utils/languageLogic';
+import { useTranslation } from '../i18n';
 
 interface TopUtilityBarProps {
   fontSizeLevel: number;
@@ -27,7 +27,6 @@ interface TopUtilityBarProps {
   highContrast: boolean;
   onToggleHighContrast: () => void;
   onOpenGrievance: () => void;
-  onLanguageChange?: (lang: Language) => void;
 }
 
 export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
@@ -36,21 +35,11 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
   highContrast,
   onToggleHighContrast,
   onOpenGrievance,
-  onLanguageChange,
 }) => {
-  const [selectedLanguage, setSelectedLanguage] = useState<Language>(() => (
-    typeof window === 'undefined' ? 'English' : getSavedLanguage(window.localStorage.getItem('portal-language'))
-  ));
+  const { t, language: selectedLanguage, setLanguage } = useTranslation();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [indiaTime, setIndiaTime] = useState(() => new Date());
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  // Active translations for UI text based on component state
-  const t = getTopBarTranslation(selectedLanguage);
-
-  useEffect(() => {
-    window.localStorage.setItem('portal-language', selectedLanguage);
-  }, [selectedLanguage]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setIndiaTime(new Date()), 1000);
@@ -73,21 +62,20 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
   }, [isDropdownOpen]);
 
   const handleSelectLanguage = (lang: Language) => {
-    setSelectedLanguage(lang);
+    setLanguage(lang);
     setIsDropdownOpen(false);
-    onLanguageChange?.(lang);
   };
 
   const handleCycleLanguage = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const nextLang = getNextLanguage(selectedLanguage);
-    setSelectedLanguage(nextLang);
-    onLanguageChange?.(nextLang);
+    setLanguage(getNextLanguage(selectedLanguage));
   };
+  const currentOption = LANGUAGE_OPTIONS.find((option) => option.id === selectedLanguage) ?? LANGUAGE_OPTIONS[0];
+  const locale = LANGUAGE_LOCALES[selectedLanguage];
 
   return (
     <aside
-      aria-label="ELTNOY Examination Portal Utility Bar"
+      aria-label={t('topbar.aria')}
       className={`border-b text-xs transition-colors py-1.5 px-4 md:px-8 relative z-50 ${
         highContrast
           ? 'bg-black text-amber-300 border-amber-500'
@@ -98,29 +86,29 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
         {/* Left: Dynamic localized welcome text updated via component state */}
         <div className="flex items-center gap-2 text-xs font-normal text-slate-200 tracking-wide">
           <span className="font-medium text-slate-100 transition-all duration-200">
-            {t.welcome}
+            {t('topbar.welcome')}
           </span>
           <span className="hidden lg:inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-            {t.badge}
+            {t('topbar.badge')}
           </span>
           <span
             className="inline-flex whitespace-nowrap items-center gap-1.5 rounded bg-blue-950/60 px-2 py-1 font-mono text-[11px] font-semibold tabular-nums text-emerald-200"
-            aria-label={`Current India time ${new Intl.DateTimeFormat('en-IN', {
+            aria-label={`${t('topbar.indiaTimeAria')} ${new Intl.DateTimeFormat(locale, {
               timeZone: 'Asia/Kolkata',
               dateStyle: 'full',
               timeStyle: 'long',
             }).format(indiaTime)}`}
           >
             <Clock3 className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden sm:inline">India</span>
+            <span className="hidden sm:inline">{t('topbar.india')}</span>
             <time dateTime={indiaTime.toISOString()}>
-              {new Intl.DateTimeFormat('en-IN', {
+              {new Intl.DateTimeFormat(locale, {
                 timeZone: 'Asia/Kolkata',
                 hour: '2-digit',
                 minute: '2-digit',
                 second: '2-digit',
                 hour12: true,
-              }).format(indiaTime)} IST
+              }).format(indiaTime)} {t('topbar.ist')}
             </time>
           </span>
         </div>
@@ -132,10 +120,10 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
             type="button"
             onClick={onOpenGrievance}
             className="flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
-            title="Open Helpdesk"
+            title={t('topbar.openHelpdesk')}
           >
             <Headphones className="w-3.5 h-3.5 text-sky-300" />
-            <span className="font-medium">{t.helpdesk}</span>
+            <span className="font-medium">{t('topbar.helpdesk')}</span>
           </button>
 
           <span className="hidden sm:inline text-slate-400/50">|</span>
@@ -150,10 +138,10 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
                 className="flex items-center gap-1.5 px-2 py-0.5 text-xs text-slate-100 hover:text-white cursor-pointer"
                 aria-expanded={isDropdownOpen}
                 aria-haspopup="true"
-                aria-label={`Select language. Current: ${selectedLanguage}`}
+                aria-label={t('topbar.selectLanguage', { language: currentOption.nativeName })}
               >
                 <Globe className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span className="font-semibold">{selectedLanguage}</span>
+                <span className="font-semibold">{currentOption.label === 'English' ? 'English' : currentOption.nativeName.split(' (')[0]}</span>
                 <ChevronDown
                   className={`w-3 h-3 text-slate-300 transition-transform duration-200 ${
                     isDropdownOpen ? 'rotate-180' : ''
@@ -165,9 +153,9 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
               <button
                 type="button"
                 onClick={handleCycleLanguage}
-                title="Cycle to the next language"
+                title={t('topbar.cycleLanguage')}
                 className="px-1.5 py-0.5 border-l border-slate-700/80 hover:bg-slate-800 text-sky-300 hover:text-sky-200 cursor-pointer transition-colors"
-                aria-label="Cycle to next language"
+                aria-label={t('topbar.cycleLanguage')}
               >
                 <RefreshCw className="w-2.5 h-2.5" />
               </button>
@@ -181,11 +169,11 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
                 className="absolute right-0 mt-1.5 w-52 bg-[#0B254E] border border-sky-900/80 rounded-lg shadow-xl py-1 text-xs z-50 animate-in fade-in-50 zoom-in-95 duration-150"
               >
                 <div className="px-3 py-1 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-sky-900/60 mb-1 flex items-center justify-between">
-                  <span>Portal Language</span>
-                  <span className="text-emerald-400 font-mono">{LANGUAGE_OPTIONS.length} Options</span>
+                  <span>{t('topbar.portalLanguage')}</span>
+                  <span className="text-emerald-400 font-mono">{t('topbar.optionCount', { count: LANGUAGE_OPTIONS.length })}</span>
                 </div>
                 <p className="px-3 py-1.5 text-[10px] leading-relaxed text-slate-400">
-                  Navigation, forms, and other page content are not translated yet.
+                  {t('topbar.translationNote')}
                 </p>
 
                 {LANGUAGE_OPTIONS.map((option) => {
@@ -216,13 +204,13 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
                 })}
 
                 <div className="mt-1 pt-1 border-t border-sky-900/60 px-3 py-1 text-[10px] text-slate-400 flex items-center justify-between">
-                  <span>Quick toggle:</span>
+                  <span>{t('topbar.quickToggle')}</span>
                   <button
                     type="button"
                     onClick={handleCycleLanguage}
                     className="text-emerald-400 hover:text-emerald-300 underline font-medium cursor-pointer"
                   >
-                    Cycle Next
+                    {t('topbar.cycleNext')}
                   </button>
                 </div>
               </div>
@@ -235,7 +223,7 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
               type="button"
               onClick={() => onFontSizeChange(fontSizeLevel === 0 ? 1 : 0)}
               className="text-[10px] px-1 py-0.5 rounded bg-blue-950/60 hover:bg-blue-900 text-slate-300 font-bold cursor-pointer"
-              title="Toggle Font Size"
+              title={t('topbar.fontSize')} aria-label={t('topbar.fontSize')}
             >
               A{fontSizeLevel > 0 ? '+' : ''}
             </button>
@@ -243,7 +231,7 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
               type="button"
               onClick={onToggleHighContrast}
               className="p-1 rounded bg-blue-950/60 hover:bg-blue-900 text-slate-300 cursor-pointer"
-              title="Toggle Contrast"
+              title={t('topbar.contrast')} aria-label={t('topbar.contrast')}
             >
               <Eye className="w-3 h-3" />
             </button>

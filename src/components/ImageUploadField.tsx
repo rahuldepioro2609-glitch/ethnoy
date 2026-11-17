@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useState } from 'react';
 import { CheckCircle2, ImagePlus, Loader2 } from 'lucide-react';
 import { formatBytes, prepareImage, uploadFile, type UploadedFile } from '../utils/fileUpload';
+import { useTranslation } from '../i18n';
 
 interface ImageUploadFieldProps {
   kind: 'photo' | 'signature';
@@ -12,6 +13,7 @@ interface ImageUploadFieldProps {
 
 /** Picks an image, compresses it in the browser, uploads it, and shows a preview. */
 export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({ kind, label, hint, value, onChange }) => {
+  const { t } = useTranslation();
   const inputId = useId();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -32,7 +34,7 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({ kind, label,
       onChange(uploaded);
     } catch (uploadError) {
       onChange(null);
-      setError(uploadError instanceof Error ? uploadError.message : 'Upload failed.');
+      setError(uploadError instanceof Error ? t(uploadError.message) : t('upload.failed'));
     } finally {
       setIsUploading(false);
     }
@@ -50,16 +52,16 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({ kind, label,
       >
         <div className={`${isPhoto ? 'h-20 w-16' : 'h-12 w-28'} shrink-0 overflow-hidden rounded border border-slate-200 bg-white flex items-center justify-center`}>
           {previewUrl && value
-            ? <img src={previewUrl} alt={`${label} preview`} className="h-full w-full object-contain" />
+            ? <img src={previewUrl} alt={t('upload.previewAlt', { label })} className="h-full w-full object-contain" />
             : <ImagePlus className="h-5 w-5 text-slate-400" />}
         </div>
         <div className="min-w-0 text-[11px]">
           {isUploading ? (
-            <span className="flex items-center gap-1.5 font-semibold text-slate-700"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Uploading…</span>
+            <span className="flex items-center gap-1.5 font-semibold text-slate-700"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('upload.uploading')}</span>
           ) : value ? (
-            <span className="flex items-center gap-1.5 font-bold text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" /> Uploaded ({formatBytes(value.sizeBytes)}) · tap to replace</span>
+            <span className="flex items-center gap-1.5 font-bold text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" /> {t('upload.done', { size: formatBytes(value.sizeBytes) })}</span>
           ) : (
-            <span className="font-semibold text-slate-700">Choose a JPG or PNG image</span>
+            <span className="font-semibold text-slate-700">{t('upload.choose')}</span>
           )}
           <span className="mt-0.5 block text-slate-500">{hint}</span>
         </div>

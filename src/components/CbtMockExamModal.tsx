@@ -19,6 +19,8 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { MOCK_QUESTIONS } from '../data/portalData';
+import { useTranslation } from '../i18n';
+import { evaluateArithmetic } from '../utils/arithmetic';
 import { apiRequest } from '../api';
 import {
   MockQuestion,
@@ -33,6 +35,7 @@ interface CbtMockExamModalProps {
 }
 
 export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onClose }) => {
+  const { t } = useTranslation();
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedSection, setSelectedSection] = useState<string>('Physics');
   const [responses, setResponses] = useState<Record<number, QuestionResponseState>>({});
@@ -178,8 +181,8 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
     } catch (error) {
       setScoreResult(localScore);
       setSubmitError(error instanceof Error
-        ? `Result shown locally; the attempt was not saved: ${error.message}`
-        : 'Result shown locally; the attempt was not saved.');
+        ? t('mock.notSavedReason', { reason: error.message })
+        : t('mock.notSaved'));
     } finally {
       setIsSubmitting(false);
       setIsExamSubmitted(true);
@@ -206,21 +209,26 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
     return 'not-answered';
   };
 
+  const paletteCounts = MOCK_QUESTIONS.reduce(
+    (counts, question) => {
+      const status = getQuestionStatus(question);
+      if (status === 'answered' || status === 'answered-review') counts.answered += 1;
+      else if (status === 'not-answered') counts.notAnswered += 1;
+      else if (status === 'review') counts.review += 1;
+      else counts.notVisited += 1;
+      return counts;
+    },
+    { answered: 0, notAnswered: 0, review: 0, notVisited: 0 },
+  );
+
   // Safe simple calculator
   const handleCalcClick = (val: string) => {
     if (val === 'C') {
       setCalcInput('');
       setCalcResult('');
     } else if (val === '=') {
-      try {
-        // Simple safe arithmetic evaluation of basic numbers and operators
-        const sanitized = calcInput.replace(/[^0-9+\-*/.]/g, '');
-        // eslint-disable-next-line no-eval
-        const res = Function(`"use strict"; return (${sanitized})`)();
-        setCalcResult(String(res));
-      } catch {
-        setCalcResult('Error');
-      }
+      const result = evaluateArithmetic(calcInput);
+      setCalcResult(result === null ? t('mock.calcError') : String(result));
     } else {
       setCalcInput((prev) => prev + val);
     }
@@ -237,13 +245,13 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
             </div>
             <div>
               <div className="text-xs sm:text-sm font-bold flex items-center gap-2">
-                <span>National CBT Mock Exam Simulator 2026</span>
+                <span>{t('mock.title')}</span>
                 <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950 text-emerald-400 border border-emerald-700">
-                  Marking Scheme: +4 / -1
+                  {t('mock.markingScheme')}
                 </span>
               </div>
               <div className="text-[11px] text-slate-400">
-                Candidate: <strong>AARAV SHARMA (NEA-2026-88419)</strong> · Node: CBT-TERM-04
+                {t('mock.practiceMode')}
               </div>
             </div>
           </div>
@@ -256,7 +264,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                   ? 'bg-rose-950/80 text-rose-300 border-rose-700 animate-pulse'
                   : 'bg-slate-800 text-emerald-400 border-slate-700'
               }`}
-              title="Time Remaining"
+              title={t('mock.timeRemaining')}
             >
               <Clock className="w-4 h-4 text-emerald-400" />
               <span>{formatTime(timeLeftSeconds)}</span>
@@ -266,8 +274,8 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
             <button
               onClick={() => setShowCalculator((prev) => !prev)}
               className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg border border-slate-700 transition-colors"
-              title="Toggle Scientific Calculator"
-              aria-label="Calculator"
+              title={t('mock.calculator')}
+              aria-label={t('mock.calculator')}
             >
               <Calculator className="w-4 h-4" />
             </button>
@@ -276,7 +284,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
             <button
               onClick={onClose}
               className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              aria-label="Exit CBT Examination"
+              aria-label={t('mock.exit')}
             >
               <X className="w-5 h-5" />
             </button>
@@ -291,7 +299,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
               {/* Section Tabs */}
               <div className="bg-slate-100 border-b border-slate-200 px-4 py-2 flex items-center gap-2 overflow-x-auto text-xs shrink-0">
                 <span className="font-bold text-slate-500 uppercase text-[10px] mr-1">
-                  Sections:
+                  {t('mock.sections')}
                 </span>
                 {sections.map((sec) => (
                   <button
@@ -309,7 +317,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                         : 'text-slate-700 bg-white hover:bg-slate-200/80 border border-slate-200'
                     }`}
                   >
-                    {sec}
+                    {t(`mock.section.${sec}`)}
                   </button>
                 ))}
               </div>
@@ -318,11 +326,11 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
               <div className="px-6 py-3 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between text-xs shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-slate-900 text-sm">
-                    Question {currentQuestionIndex + 1} of {MOCK_QUESTIONS.length}
+                    {t('mock.questionOf', { n: currentQuestionIndex + 1, total: MOCK_QUESTIONS.length })}
                   </span>
                   <span className="text-slate-400">|</span>
                   <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                    {currentQ.section}
+                    {t(`mock.section.${currentQ.section}`)}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 font-mono text-[11px]">
@@ -378,13 +386,13 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                     onClick={handleToggleMarkForReview}
                     className="px-3.5 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded-lg text-xs font-bold transition-colors"
                   >
-                    {currentResp.isMarkedForReview ? 'Unmark Review' : 'Mark for Review & Next'}
+                    {currentResp.isMarkedForReview ? t('mock.unmark') : t('mock.markReview')}
                   </button>
                   <button
                     onClick={handleClearResponse}
                     className="px-3 py-2 bg-white text-slate-600 hover:text-slate-900 border border-slate-300 rounded-lg text-xs font-semibold transition-colors"
                   >
-                    Clear Response
+                    {t('mock.clear')}
                   </button>
                 </div>
 
@@ -395,13 +403,13 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                     className="px-3 py-2 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-40 border border-slate-300 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
                   >
                     <ChevronLeft className="w-4 h-4" />
-                    <span>Previous</span>
+                    <span>{t('mock.previous')}</span>
                   </button>
                   <button
                     onClick={handleNextQuestion}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition-colors shadow-2xs"
                   >
-                    <span>Save &amp; Next</span>
+                    <span>{t('mock.saveNext')}</span>
                     <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
@@ -412,10 +420,10 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
             <div className="w-full md:w-80 bg-slate-50 flex flex-col p-4 border-t md:border-t-0 overflow-y-auto">
               <div className="pb-3 border-b border-slate-200">
                 <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                  Question Palette
+                  {t('mock.palette')}
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Click any question node to jump directly
+                  {t('mock.paletteHint')}
                 </p>
               </div>
 
@@ -423,27 +431,27 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
               <div className="grid grid-cols-2 gap-2 my-3 text-[11px] text-slate-700">
                 <div className="flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-md bg-emerald-600 text-white font-bold text-[10px] flex items-center justify-center">
-                    4
+                    {paletteCounts.answered}
                   </span>
-                  <span>Answered</span>
+                  <span>{t('mock.legend.answered')}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-md bg-rose-600 text-white font-bold text-[10px] flex items-center justify-center">
-                    2
+                    {paletteCounts.notAnswered}
                   </span>
-                  <span>Not Answered</span>
+                  <span>{t('mock.legend.notAnswered')}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-md bg-purple-600 text-white font-bold text-[10px] flex items-center justify-center">
-                    1
+                    {paletteCounts.review}
                   </span>
-                  <span>Marked Review</span>
+                  <span>{t('mock.legend.review')}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-md bg-slate-200 text-slate-600 font-bold text-[10px] flex items-center justify-center border border-slate-300">
-                    1
+                    {paletteCounts.notVisited}
                   </span>
-                  <span>Not Visited</span>
+                  <span>{t('mock.legend.notVisited')}</span>
                 </div>
               </div>
 
@@ -481,7 +489,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                   className="w-full py-3 bg-blue-900 hover:bg-blue-800 active:bg-blue-950 disabled:opacity-60 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2 transition-colors uppercase tracking-wider"
                 >
                   <Send className="w-4 h-4" />
-                  <span>{isSubmitting ? 'Saving attempt…' : 'Submit CBT Examination'}</span>
+                  <span>{isSubmitting ? t('mock.saving') : t('mock.submit')}</span>
                 </button>
               </div>
             </div>
@@ -500,17 +508,17 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                   <Award className="w-8 h-8" />
                 </div>
                 <h3 className="text-xl font-extrabold text-slate-900">
-                  CBT Mock Examination Completed!
+                  {t('mock.completed')}
                 </h3>
                 <p className="text-xs text-slate-600">
-                  Automated evaluation computed via official marking formula (+4 for correct, -1 for incorrect, 0 for unattempted).
+                  {t('mock.evaluationNote')}
                 </p>
 
                 {/* Score Big Display */}
                 <div className="py-3 flex items-center justify-center gap-8 border-y border-emerald-200/80">
                   <div>
                     <span className="text-xs text-slate-500 uppercase block font-semibold">
-                      Candidate Score
+                      {t('mock.score')}
                     </span>
                     <span className="text-3xl font-extrabold text-emerald-800 font-mono">
                       {scoreResult.totalScore} / {scoreResult.maxScore}
@@ -518,7 +526,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                   </div>
                   <div className="border-l border-emerald-200 pl-8">
                     <span className="text-xs text-slate-500 uppercase block font-semibold">
-                      Accuracy / Percentile
+                      {t('mock.accuracy')}
                     </span>
                     <span className="text-3xl font-extrabold text-blue-800 font-mono">
                       {scoreResult.percentage}%
@@ -529,19 +537,19 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                 {/* Metrics Breakdown */}
                 <div className="grid grid-cols-4 gap-3 text-xs pt-2">
                   <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                    <span className="text-slate-400 block text-[10px]">Attempted</span>
+                    <span className="text-slate-400 block text-[10px]">{t('mock.attempted')}</span>
                     <strong className="text-slate-800 text-base">{scoreResult.attempted}</strong>
                   </div>
                   <div className="p-2.5 rounded-lg bg-emerald-100/60 border border-emerald-200">
-                    <span className="text-emerald-700 block text-[10px]">Correct (+4)</span>
+                    <span className="text-emerald-700 block text-[10px]">{t('mock.correctMark')}</span>
                     <strong className="text-emerald-900 text-base">{scoreResult.correct}</strong>
                   </div>
                   <div className="p-2.5 rounded-lg bg-rose-100/60 border border-rose-200">
-                    <span className="text-rose-700 block text-[10px]">Incorrect (-1)</span>
+                    <span className="text-rose-700 block text-[10px]">{t('mock.incorrectMark')}</span>
                     <strong className="text-rose-900 text-base">{scoreResult.incorrect}</strong>
                   </div>
                   <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                    <span className="text-slate-400 block text-[10px]">Unattempted</span>
+                    <span className="text-slate-400 block text-[10px]">{t('mock.unattempted')}</span>
                     <strong className="text-slate-700 text-base">{scoreResult.unattempted}</strong>
                   </div>
                 </div>
@@ -552,13 +560,13 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                     className="px-5 py-2.5 bg-blue-900 hover:bg-blue-800 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-colors shadow-sm"
                   >
                     <RotateCcw className="w-4 h-4" />
-                    <span>Retake Mock Exam</span>
+                    <span>{t('mock.retake')}</span>
                   </button>
                   <button
                     onClick={onClose}
                     className="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-bold transition-colors"
                   >
-                    Close &amp; Return to Portal
+                    {t('mock.closeReturn')}
                   </button>
                 </div>
               </div>
@@ -567,7 +575,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
               <div className="max-w-4xl mx-auto space-y-4 pt-4 border-t border-slate-200">
                 <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <BookOpen className="w-4 h-4 text-blue-700" />
-                  <span>Subject Expert Review &amp; Solution Key</span>
+                  <span>{t('mock.solutions')}</span>
                 </h4>
 
                 <div className="space-y-3">
@@ -589,7 +597,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-slate-900">
-                            Q{idx + 1}. ({q.section})
+                            Q{idx + 1}. ({t(`mock.section.${q.section}`)})
                           </span>
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -600,24 +608,24 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                                 : 'bg-rose-600 text-white'
                             }`}
                           >
-                            {!isAttempted ? 'Unattempted (0)' : isCorrect ? 'Correct (+4)' : 'Incorrect (-1)'}
+                            {!isAttempted ? t('mock.unattemptedMark') : isCorrect ? t('mock.correctMark') : t('mock.incorrectMark')}
                           </span>
                         </div>
                         <p className="font-medium text-slate-800">{q.questionText}</p>
                         <div className="grid grid-cols-2 gap-2 text-[11px]">
                           <div>
-                            <span className="text-slate-500">Your Answer: </span>
+                            <span className="text-slate-500">{t('mock.yourAnswer')}</span>
                             <strong className={isCorrect ? 'text-emerald-700' : 'text-rose-600'}>
-                              {userResp || 'None'}
+                              {userResp || t('mock.none')}
                             </strong>
                           </div>
                           <div>
-                            <span className="text-slate-500">Correct Option: </span>
+                            <span className="text-slate-500">{t('mock.correctOption')}</span>
                             <strong className="text-emerald-700">{q.correctOptionId}</strong>
                           </div>
                         </div>
                         <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-slate-600 leading-relaxed text-[11px]">
-                          <strong>Explanation: </strong> {q.explanation}
+                          <strong>{t('mock.explanation')}</strong> {q.explanation}
                         </div>
                       </div>
                     );
@@ -634,12 +642,12 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
             <div className="flex items-center justify-between pb-2 border-b border-slate-800">
               <span className="text-xs font-bold flex items-center gap-1.5">
                 <Calculator className="w-3.5 h-3.5 text-emerald-400" />
-                <span>CBT On-Screen Calculator</span>
+                <span>{t('mock.calcTitle')}</span>
               </span>
               <button
                 onClick={() => setShowCalculator(false)}
                 className="text-slate-400 hover:text-white"
-                aria-label="Close calculator"
+                aria-label={t('mock.closeCalc')}
               >
                 <X className="w-4 h-4" />
               </button>

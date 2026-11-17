@@ -33,21 +33,24 @@ export function formatBytes(bytes: number): string {
 
 function canvasToBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Could not process this image.'))), 'image/jpeg', quality);
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('upload.processFailed'))), 'image/jpeg', quality);
   });
 }
 
-/** Resizes and re-encodes an image as JPEG until it fits the target size. */
+/**
+ * Resizes and re-encodes an image as JPEG until it fits the target size.
+ * Errors carry translation keys (upload.*) as their message.
+ */
 export async function prepareImage(file: File, kind: 'photo' | 'signature'): Promise<Blob> {
   if (!['image/jpeg', 'image/png'].includes(file.type)) {
-    throw new Error('Choose a JPG or PNG image.');
+    throw new Error('upload.notImage');
   }
   const target = IMAGE_TARGETS[kind];
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(file);
   } catch {
-    throw new Error('This image could not be read. Try a different JPG or PNG file.');
+    throw new Error('upload.unreadable');
   }
   let { width, height } = fitWithin(bitmap.width, bitmap.height, target.maxWidth, target.maxHeight);
   const canvas = document.createElement('canvas');
@@ -56,7 +59,7 @@ export async function prepareImage(file: File, kind: 'photo' | 'signature'): Pro
       canvas.width = width;
       canvas.height = height;
       const context = canvas.getContext('2d');
-      if (!context) throw new Error('Image processing is not supported in this browser.');
+      if (!context) throw new Error('upload.unsupported');
       context.fillStyle = '#ffffff';
       context.fillRect(0, 0, width, height);
       context.drawImage(bitmap, 0, 0, width, height);
@@ -70,7 +73,7 @@ export async function prepareImage(file: File, kind: 'photo' | 'signature'): Pro
   } finally {
     bitmap.close();
   }
-  throw new Error('This image is too detailed to compress. Try a simpler photo.');
+  throw new Error('upload.tooLarge');
 }
 
 export async function uploadFile(kind: UploadKind, body: Blob, fileName: string): Promise<UploadedFile> {

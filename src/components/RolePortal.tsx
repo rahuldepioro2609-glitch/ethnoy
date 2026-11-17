@@ -30,6 +30,7 @@ import { OnlineExamRunner } from './OnlineExamRunner';
 import { AdminObjectionsPanel } from './AdminObjectionsPanel';
 import { AccountEmailCard } from './AccountPages';
 import { useTranslation } from '../i18n';
+import { translate } from '../i18n/translate';
 import { BrandLogo } from './BrandLogo';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
@@ -452,6 +453,11 @@ const emptyNoticeDraft: NoticeDraft = {
 };
 
 export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, onHome, onOpenAdmitCard, onOpenResults }) => {
+  const { t: translateForLanguage } = useTranslation();
+  // Students see their chosen language; staff dashboards stay in English.
+  const t: typeof translateForLanguage = (key, params) => (
+    user.role === 'candidate' ? translateForLanguage(key, params) : translate('English', key, params)
+  );
   const [data, setData] = useState<PortalData>({});
   const [tab, setTab] = useState<DashboardTab>('overview');
   const [loading, setLoading] = useState(true);
@@ -884,16 +890,16 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <BrandLogo compact light />
-            <div className="min-w-0"><p className="font-black tracking-wide">{detail.label} Portal</p><p className="truncate text-xs text-slate-300">{user.name} · {user.id}</p></div>
+            <div className="min-w-0"><p className="font-black tracking-wide">{t('dash.portalName', { role: t(`role.${user.role}.label`) })}</p><p className="truncate text-xs text-slate-300">{user.name} · {user.id}</p></div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={onHome} className="rounded-lg px-3 py-2 text-sm text-slate-200 hover:bg-white/10">Public website</button>
+            <button onClick={onHome} className="rounded-lg px-3 py-2 text-sm text-slate-200 hover:bg-white/10">{t('dash.publicWebsite')}</button>
             {(user.role === 'center' || user.role === 'official') && (
               <button onClick={openWallet} className="inline-flex items-center gap-2 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
                 <Wallet className="h-4 w-4" /> Wallet
               </button>
             )}
-            <button onClick={() => void onLogout()} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold hover:bg-emerald-500"><LogOut className="h-4 w-4" /> Sign out</button>
+            <button onClick={() => void onLogout()} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold hover:bg-emerald-500"><LogOut className="h-4 w-4" /> {t('app.signOut')}</button>
           </div>
         </div>
       </header>
@@ -902,14 +908,14 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
           <div>
             <p className={`text-xs font-bold uppercase tracking-[0.16em] ${
               user.role === 'official' ? 'text-blue-800' : user.role === 'center' ? 'text-sky-800' : 'text-emerald-800'
-            }`}>{theme.eyebrow}</p>
-            <h1 className="mt-1 text-2xl font-black text-[#0B2E59] sm:text-3xl">{detail.title.replace('Login', '')} Dashboard</h1>
-            <p className="mt-1 text-sm text-slate-600">{theme.description}</p>
+            }`}>{t(`dash.${user.role}.eyebrow`)}</p>
+            <h1 className="mt-1 text-2xl font-black text-[#0B2E59] sm:text-3xl">{t(`dash.${user.role}.title`)}</h1>
+            <p className="mt-1 text-sm text-slate-600">{t(`dash.${user.role}.description`)}</p>
           </div>
-          <button onClick={() => void refresh()} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh</button>
+          <button onClick={() => void refresh()} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {t('dash.refresh')}</button>
         </div>
         {error && <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
-        {notice && <div role="status" className="mb-4 flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />{notice}</span><button onClick={() => setNotice(null)} aria-label="Dismiss message">×</button></div>}
+        {notice && <div role="status" className="mb-4 flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />{notice}</span><button onClick={() => setNotice(null)} aria-label={t('app.dismiss')}>×</button></div>}
         {user.role === 'official' && (
           <nav aria-label="Dashboard sections" className="mb-5 flex flex-wrap gap-2">
             {navTabs.map((item) => <button key={item.id} onClick={() => setTab(item.id)} className={`rounded-lg px-4 py-2 text-sm font-bold ${tab === item.id ? 'bg-blue-900 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-blue-50'}`}>{item.label}</button>)}
@@ -1206,9 +1212,9 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
             {(user.role === 'candidate' || user.role === 'center' || tab === 'overview') && (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {(user.role === 'candidate' ? [
-                  { label: 'Applications', value: list('applications').length, icon: FileText },
-                  { label: 'Mock tests', value: list('attempts').length, icon: ClipboardCheck },
-                  { label: 'Published results', value: list('results').length, icon: Award },
+                  { label: t('dash.stat.applications'), value: list('applications').length, icon: FileText },
+                  { label: t('dash.stat.mockTests'), value: list('attempts').length, icon: ClipboardCheck },
+                  { label: t('dash.stat.results'), value: list('results').length, icon: Award },
                 ] : user.role === 'center' ? [
                   { label: 'Recorded check-ins', value: list('checkins').length, icon: ClipboardCheck },
                   { label: 'Center code', value: user.id, icon: Building2 },
@@ -1231,19 +1237,19 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
             {user.role === 'candidate' && (
               <div className="mt-5 grid gap-5 lg:grid-cols-2">
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">My applications</h2>
-                  {list('applications').length ? <div className="mt-4 space-y-3">{list('applications').map((item) => <article key={String(item.application_number)} className="rounded-lg border border-slate-100 bg-slate-50 p-4"><div className="flex flex-wrap justify-between gap-2"><strong>{String(item.exam_code)}</strong><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold capitalize text-amber-800">{String(item.status)}</span></div><p className="mt-2 text-sm text-slate-600">Application {String(item.application_number)}</p>{item.roll_number !== null && item.roll_number !== undefined && <p className="mt-1 text-sm text-slate-600">Roll no. {String(item.roll_number)} · {String(item.center_name)}</p>}</article>)}</div> : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">No application is linked to this login ID yet. Use your application number as your candidate login ID.</p>}
-                  <button onClick={onOpenAdmitCard} className="mt-4 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600">Open admit card lookup</button>
+                  <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('dash.myApplications')}</h2>
+                  {list('applications').length ? <div className="mt-4 space-y-3">{list('applications').map((item) => <article key={String(item.application_number)} className="rounded-lg border border-slate-100 bg-slate-50 p-4"><div className="flex flex-wrap justify-between gap-2"><strong>{String(item.exam_code)}</strong><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">{t(`dash.appStatus.${String(item.status)}`)}</span></div><p className="mt-2 text-sm text-slate-600">{t('dash.applicationNo', { number: String(item.application_number) })}</p>{item.roll_number !== null && item.roll_number !== undefined && <p className="mt-1 text-sm text-slate-600">{t('dash.rollCenter', { roll: String(item.roll_number), center: String(item.center_name) })}</p>}</article>)}</div> : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{t('dash.noApplications')}</p>}
+                  <button onClick={onOpenAdmitCard} className="mt-4 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600">{t('dash.openAdmitCard')}</button>
                 </section>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">My results and practice</h2>
-                  {list('results').length ? <p className="mt-3 text-sm text-emerald-800">{list('results').length} result(s) published for your account.</p> : <p className="mt-3 text-sm text-slate-600">No official result has been published for this account.</p>}
-                  <button onClick={onOpenResults} className="mt-4 rounded-lg border border-emerald-700 px-4 py-2.5 text-sm font-bold text-emerald-800 hover:bg-emerald-50">Check official result</button>
-                  <h3 className="mt-6 font-bold text-slate-800">Practice test history</h3>
-                  {list('attempts').length ? <ul className="mt-3 space-y-2 text-sm text-slate-600">{list('attempts').slice(0, 5).map((attempt) => <li key={String(attempt.id)} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>{String(attempt.correct)} correct of {String(attempt.total_questions)}</span><strong>{String(attempt.percentage)}%</strong></li>)}</ul> : <p className="mt-2 text-sm text-slate-500">No practice attempts yet.</p>}
+                  <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('dash.resultsPractice')}</h2>
+                  {list('results').length ? <p className="mt-3 text-sm text-emerald-800">{t('dash.resultsCount', { count: list('results').length })}</p> : <p className="mt-3 text-sm text-slate-600">{t('dash.noResults')}</p>}
+                  <button onClick={onOpenResults} className="mt-4 rounded-lg border border-emerald-700 px-4 py-2.5 text-sm font-bold text-emerald-800 hover:bg-emerald-50">{t('dash.checkResult')}</button>
+                  <h3 className="mt-6 font-bold text-slate-800">{t('dash.practiceHistory')}</h3>
+                  {list('attempts').length ? <ul className="mt-3 space-y-2 text-sm text-slate-600">{list('attempts').slice(0, 5).map((attempt) => <li key={String(attempt.id)} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>{t('dash.correctOf', { correct: String(attempt.correct), total: String(attempt.total_questions) })}</span><strong>{String(attempt.percentage)}%</strong></li>)}</ul> : <p className="mt-2 text-sm text-slate-500">{t('dash.noPractice')}</p>}
                 </section>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">Online examinations</h2>
+                  <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('dash.onlineExams')}</h2>
                   {list('onlineExams').length ? (
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {list('onlineExams').map((exam) => {
@@ -1254,15 +1260,15 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                         return (
                           <article key={String(exam.exam_code)} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                             <h3 className="font-bold text-slate-900">{String(exam.exam_name)}</h3>
-                            <p className="mt-1 text-xs text-slate-500">{String(exam.exam_code)} · {String(exam.question_count)} questions · {String(exam.duration_minutes)} minutes</p>
-                            {submitted && <p className="mt-2 text-sm text-emerald-800">Attempt completed. Score: {String((attempt?.score as Record<string, unknown> | undefined)?.totalScore ?? 'Submitted')}</p>}
-                            {!submitted && hasAttempt && !isActive && <p className="mt-2 text-sm text-amber-800">Attempt expired.</p>}
-                            <button type="button" disabled={hasAttempt && !isActive} onClick={() => setActiveOnlineExam({ code: String(exam.exam_code), name: String(exam.exam_name) })} className="mt-3 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">{isActive ? 'Resume exam' : hasAttempt ? 'Attempt used' : 'Start exam'}</button>
+                            <p className="mt-1 text-xs text-slate-500">{t('dash.examMeta', { code: String(exam.exam_code), questions: String(exam.question_count), minutes: String(exam.duration_minutes) })}</p>
+                            {submitted && <p className="mt-2 text-sm text-emerald-800">{t('dash.attemptDone', { score: String((attempt?.score as Record<string, unknown> | undefined)?.totalScore ?? '—') })}</p>}
+                            {!submitted && hasAttempt && !isActive && <p className="mt-2 text-sm text-amber-800">{t('dash.attemptExpired')}</p>}
+                            <button type="button" disabled={hasAttempt && !isActive} onClick={() => setActiveOnlineExam({ code: String(exam.exam_code), name: String(exam.exam_name) })} className="mt-3 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">{isActive ? t('dash.resumeExam') : hasAttempt ? t('dash.attemptUsed') : t('dash.startExam')}</button>
                           </article>
                         );
                       })}
                     </div>
-                  ) : <p className="mt-3 text-sm text-slate-500">No published online exams are available for your approved applications.</p>}
+                  ) : <p className="mt-3 text-sm text-slate-500">{t('dash.noOnlineExams')}</p>}
                 </section>
               </div>
             )}

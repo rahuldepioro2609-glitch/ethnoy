@@ -319,10 +319,9 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
                 className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg font-semibold text-slate-800"
               >
                 <option value="All">{t('answerKey.allSubjects', { count: questions.length })}</option>
-                <option value="Mathematics">Mathematics</option>
-                <option value="Physics">Physics</option>
-                <option value="Chemistry">Chemistry</option>
-                <option value="Logical Reasoning">Logical Reasoning</option>
+                {(['Mathematics', 'Physics', 'Chemistry', 'Logical Reasoning'] as const).map((subject) => (
+                  <option key={subject} value={subject}>{t(`subject.${subject}`)}</option>
+                ))}
               </select>
             </label>
             <label className="relative flex items-center">
@@ -402,7 +401,7 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
                           <span className="min-w-7 h-7 px-1 rounded-lg bg-[#0B254E] text-white flex items-center justify-center font-bold text-xs">
                             Q{question.questionNumber}
                           </span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">{question.subject}</span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">{t(`subject.${question.subject}`)}</span>
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusStyles[question.status]}`}>
                             {t(`answerKey.status.${question.status}`)}
                           </span>
@@ -531,7 +530,7 @@ export const AnswerKeyObjectionModal: React.FC<AnswerKeyObjectionModalProps> = (
               <div className="bg-[#0B254E] text-white px-5 py-3.5 flex items-center justify-between">
                 <div>
                   <h3 id="objection-form-title" className="font-bold text-sm">{t('answerKey.formTitle', { n: activeChallengeQuestion.questionNumber })}</h3>
-                  <p className="text-xs text-sky-200">{activeChallengeQuestion.subject} · {selectedExamCode}</p>
+                  <p className="text-xs text-sky-200">{t(`subject.${activeChallengeQuestion.subject}`)} · {selectedExamCode}</p>
                 </div>
                 <button onClick={() => setActiveChallengeQuestion(null)} aria-label={t('common.close')} className="p-1 text-slate-300 hover:text-white">
                   <X className="w-4 h-4" />

@@ -219,3 +219,15 @@ export function getCutoffComparison(scorecard: CandidateScorecard): {
     hasCleared: margin >= 0,
   };
 }
+
+export type PerformanceBand = 'excellent' | 'good' | 'average' | 'needsImprovement';
+
+/** Describes a section score relative to its maximum. */
+export function performanceBand(marksObtained: number, maxMarks: number): PerformanceBand {
+  if (!(maxMarks > 0)) return 'needsImprovement';
+  const ratio = marksObtained / maxMarks;
+  if (ratio >= 0.85) return 'excellent';
+  if (ratio >= 0.7) return 'good';
+  if (ratio >= 0.5) return 'average';
+  return 'needsImprovement';
+}

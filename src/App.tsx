@@ -26,7 +26,8 @@ import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-
 import { ApiError, apiRequest } from './api';
 import { PortalRole, RoleDashboard, RoleLoginPage } from './components/RolePortal';
 import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './utils/examSchedule';
-import { getSavedLanguage, LANGUAGE_LOCALES, Language } from './utils/languageLogic';
+import { LANGUAGE_LOCALES } from './utils/languageLogic';
+import { useTranslation } from './i18n';
 
 function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
   const examDate = String(exam.examDate).slice(0, 10);
@@ -78,9 +79,7 @@ export default function App() {
   const [pathname, setPathname] = useState(window.location.pathname);
   const [fontSizeLevel, setFontSizeLevel] = useState<number>(0);
   const [highContrast, setHighContrast] = useState<boolean>(false);
-  const [language, setLanguage] = useState<Language>(() => (
-    typeof window === 'undefined' ? 'English' : getSavedLanguage(window.localStorage.getItem('portal-language'))
-  ));
+  const { language, t } = useTranslation();
   const [activeNavTab, setActiveNavTab] = useState<string>('Home');
 
   // Active Modals
@@ -144,7 +143,7 @@ export default function App() {
     apiRequest<{ exams: Record<string, unknown>[] }>('/api/exams')
       .then(({ exams }) => setPublishedExams(exams.map((exam) => mapPublishedExam(exam, LANGUAGE_LOCALES[language]))))
       .catch((error: unknown) => {
-        setSystemAlert(error instanceof Error ? error.message : 'Could not load published exam forms.');
+        setSystemAlert(error instanceof Error ? error.message : t('app.loadExamsError'));
       });
   }, [language]);
 
@@ -157,7 +156,7 @@ export default function App() {
         })
         .catch((error: unknown) => {
           if (active) {
-            setSystemAlert(error instanceof Error ? error.message : 'Could not load approved institute forms.');
+            setSystemAlert(error instanceof Error ? error.message : t('app.loadInstituteFormsError'));
           }
         });
     };
@@ -182,7 +181,7 @@ export default function App() {
         })
         .catch((error: unknown) => {
           if (!active) return;
-          setNoticeLoadError(error instanceof Error ? error.message : 'Could not load published notices.');
+          setNoticeLoadError(error instanceof Error ? error.message : t('app.loadNoticesError'));
         });
     };
     loadNotices();
@@ -209,7 +208,7 @@ export default function App() {
       })
       .catch((error: unknown) => {
         if (!(error instanceof ApiError && error.status === 401)) {
-          setSystemAlert(error instanceof Error ? error.message : 'Could not connect to the account service.');
+          setSystemAlert(error instanceof Error ? error.message : t('app.accountServiceError'));
         }
       })
       .finally(() => setAuthLoading(false));
@@ -221,7 +220,7 @@ export default function App() {
       setLoggedInUser(null);
       navigate('/');
     } catch (error) {
-      setSystemAlert(error instanceof Error ? error.message : 'Could not sign out. Please try again.');
+      setSystemAlert(error instanceof Error ? error.message : t('app.signOutError'));
     }
   };
 
@@ -231,7 +230,7 @@ export default function App() {
       return;
     }
     if (loggedInUser) {
-      setSystemAlert('Please sign in with a student account to use this service.');
+      setSystemAlert(t('app.studentSignInRequired'));
       return;
     }
     setPendingServiceAction(() => action);
@@ -250,7 +249,7 @@ export default function App() {
         {
           const openExam = publishedExams.find((exam) => exam.isButtonActive);
           if (openExam) handleOpenExamApply(openExam);
-          else setSystemAlert('No exam applications are currently open.');
+          else setSystemAlert(t('app.noOpenApplications'));
         }
         break;
       case 'login-student':
@@ -300,7 +299,7 @@ export default function App() {
   const handleOpenGrievance = () => {
     requireCandidateLogin(() => {
       setIsFeedbackOpen(true);
-      setSystemAlert('Candidate helpdesk is open. Submit your issue using the feedback panel.');
+      setSystemAlert(t('app.helpdeskOpen'));
       setTimeout(() => setSystemAlert(null), 6000);
     });
   };
@@ -362,15 +361,15 @@ export default function App() {
   }
 
   if (pathname.startsWith('/login')) {
-    if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Checking secure session…</main>;
-    if (loggedInUser) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Opening your dashboard…</main>;
+    if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('app.checkingSession')}</main>;
+    if (loggedInUser) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('app.openingDashboard')}</main>;
     return <RoleLoginPage role={loginRole} onBack={() => navigate('/')} onLogin={handlePortalLogin} />;
   }
 
   if (pathname.startsWith('/dashboard/')) {
-    if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Checking secure session…</main>;
+    if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('app.checkingSession')}</main>;
     if (!loggedInUser || !dashboardRole || loggedInUser.accountRole !== dashboardRole) {
-      return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Redirecting to sign in…</main>;
+      return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('app.redirectingSignIn')}</main>;
     }
     return (
       <RoleDashboard
@@ -402,7 +401,6 @@ export default function App() {
         highContrast={highContrast}
         onToggleHighContrast={() => setHighContrast((prev) => !prev)}
         onOpenGrievance={handleOpenGrievance}
-        onLanguageChange={setLanguage}
       />
 
       {/* Sticky Navbar: ELTNOY Logo, navigation links, search, and account action */}
@@ -425,14 +423,14 @@ export default function App() {
       />
 
       <div role="note" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-950">
-        Preview environment: exam schedules, center details, and answer keys may contain sample content. Verify all information before accepting public applications.
+        {t('app.previewBanner')}
       </div>
 
-      <section aria-label="Latest portal updates" className="border-b border-slate-200 bg-white">
+      <section id="latest-updates" aria-label={t('app.latestUpdatesAria')} className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-[1440px] flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:gap-3 sm:px-6 lg:px-8">
           <div className="flex shrink-0 items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-[#0B2E59]">
             <BellRing className="h-4 w-4 text-amber-600" />
-            <span>Latest updates</span>
+            <span>{t('app.latestUpdates')}</span>
           </div>
           <div className="min-w-0 flex-1 overflow-hidden">
             {portalNotices.length ? <div className="portal-news-track flex w-max items-center gap-6 py-1">
@@ -442,19 +440,19 @@ export default function App() {
                 type="button"
                 onClick={() => setActiveNotice(notice)}
                 className="max-w-[280px] truncate text-left text-xs font-semibold text-slate-700 transition hover:text-emerald-700 sm:max-w-[360px]"
-                aria-label={`Open ${notice.category} notice: ${notice.title}`}
+                aria-label={t('app.openNotice', { title: notice.title })}
               >
                 <span className="mr-1.5 text-emerald-700">•</span>{notice.title}
               </button>
             ))}
-            </div> : <p role={noticeLoadError ? 'alert' : 'status'} className="py-1 text-xs text-slate-500">{noticeLoadError ? `Notices could not be loaded: ${noticeLoadError}` : 'No updates have been published yet.'}</p>}
+            </div> : <p role={noticeLoadError ? 'alert' : 'status'} className="py-1 text-xs text-slate-500">{noticeLoadError ? t('app.noticesFailed', { error: noticeLoadError }) : t('app.noUpdates')}</p>}
           </div>
           <button
             type="button"
             onClick={() => document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' })}
             className="hidden shrink-0 items-center gap-1 text-xs font-bold text-emerald-800 hover:text-emerald-600 sm:inline-flex"
           >
-            <CalendarDays className="h-4 w-4" /> Exam calendar
+            <CalendarDays className="h-4 w-4" /> {t('app.examCalendar')}
           </button>
         </div>
       </section>
@@ -473,7 +471,7 @@ export default function App() {
             <div className="min-w-0 flex-1 leading-tight">
               <p className="truncate text-sm font-bold text-slate-900">{loggedInUser.name}</p>
               <p className="truncate text-[11px] font-medium text-slate-500">
-                {loggedInUser.role} <span className="px-1 text-slate-300">·</span> ID: {loggedInUser.id}
+                {t(`app.roleLabel.${loggedInUser.accountRole}`)} <span className="px-1 text-slate-300">·</span> {t('app.idLabel', { id: loggedInUser.id })}
               </p>
             </div>
             <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide sm:inline-flex ${
@@ -481,15 +479,15 @@ export default function App() {
                 : loggedInUser.accountRole === 'center' ? 'bg-sky-50 text-sky-800'
                   : 'bg-emerald-50 text-emerald-800'
             }`}>
-              {loggedInUser.accountRole === 'official' ? 'Admin' : loggedInUser.accountRole === 'center' ? 'Institute' : 'Student'}
+              {t(`app.roleBadge.${loggedInUser.accountRole}`)}
             </span>
             <button
               onClick={() => void handleLogout()}
               className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full bg-slate-900 px-4 text-xs font-bold text-white transition hover:bg-slate-700"
-              aria-label="Sign out"
+              aria-label={t('app.signOut')}
             >
               <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Sign out</span>
+              <span className="hidden sm:inline">{t('app.signOut')}</span>
             </button>
           </div>
         </div>
@@ -504,7 +502,7 @@ export default function App() {
             onClick={() => setSystemAlert(null)}
             className="ml-3 text-slate-300 hover:text-white underline text-[11px]"
           >
-            Dismiss
+            {t('app.dismiss')}
           </button>
         </div>
       )}
@@ -516,7 +514,7 @@ export default function App() {
           onOpenApply={() => {
             const openExam = publishedExams.find((exam) => exam.isButtonActive);
             if (openExam) handleOpenExamApply(openExam);
-            else setSystemAlert('No exam applications are currently open.');
+            else setSystemAlert(t('app.noOpenApplications'));
           }}
           hasOpenExams={publishedExams.some((exam) => exam.isButtonActive)}
           onOpenMockExam={handleOpenMockExam}
@@ -545,31 +543,31 @@ export default function App() {
         <section aria-labelledby="institute-opportunities-heading" className="bg-white py-8">
           <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
             <div className="mb-4">
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">Approved by ELTNOY Super Admin</p>
-              <h2 id="institute-opportunities-heading" className="mt-1 text-2xl font-black text-[#0B2E59]">Institute exam & teacher forms</h2>
-              <p className="mt-1 text-sm text-slate-600">These listings are published only after institute and form review. Applications are handled by the institute.</p>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">{t('instituteForms.badge')}</p>
+              <h2 id="institute-opportunities-heading" className="mt-1 text-2xl font-black text-[#0B2E59]">{t('instituteForms.titlePlain')}</h2>
+              <p className="mt-1 text-sm text-slate-600">{t('instituteForms.intro')}</p>
             </div>
             {publishedInstituteForms.length ? (
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {publishedInstituteForms.map((form) => (
                   <article key={String(form.id)} className="rounded-xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-                    <span className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-800">{form.form_type === 'teacher_recruitment' ? 'Teacher recruitment' : 'Exam application'}</span>
+                    <span className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-800">{form.form_type === 'teacher_recruitment' ? t('instituteForms.teacher') : t('instituteForms.exam')}</span>
                     <h3 className="mt-3 text-lg font-extrabold text-[#0B2E59]">{String(form.title)}</h3>
                     <p className="mt-1 text-sm font-semibold text-slate-600">{String(form.institute_name)}</p>
                     <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{String(form.description)}</p>
-                    <p className="mt-3 text-sm text-slate-600"><strong>Eligibility:</strong> {String(form.eligibility)}</p>
-                    {typeof form.application_deadline === 'string' && form.application_deadline && <p className="mt-2 text-sm text-slate-600"><strong>Deadline:</strong> {form.application_deadline.slice(0, 10)}</p>}
+                    <p className="mt-3 text-sm text-slate-600"><strong>{t('instituteForms.eligibility')}</strong> {String(form.eligibility)}</p>
+                    {typeof form.application_deadline === 'string' && form.application_deadline && <p className="mt-2 text-sm text-slate-600"><strong>{t('instituteForms.deadline')}</strong> {form.application_deadline.slice(0, 10)}</p>}
                     {typeof form.external_url === 'string' && form.external_url ? (
-                      <a href={form.external_url} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">Apply on institute website</a>
+                      <a href={form.external_url} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">{t('instituteForms.apply')}</a>
                     ) : typeof form.contact_email === 'string' && form.contact_email ? (
-                      <a href={`mailto:${form.contact_email}`} className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">Contact institute</a>
+                      <a href={`mailto:${form.contact_email}`} className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">{t('instituteForms.contact')}</a>
                     ) : (
-                      <p className="mt-4 text-xs text-slate-500">Contact the institute directly for application instructions.</p>
+                      <p className="mt-4 text-xs text-slate-500">{t('instituteForms.contactHint')}</p>
                     )}
                   </article>
                 ))}
               </div>
-            ) : <p className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">No approved institute forms are currently available.</p>}
+            ) : <p className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">{t('instituteForms.none')}</p>}
           </div>
         </section>
 
@@ -580,7 +578,7 @@ export default function App() {
           onOpenExamApply={() => {
             const openExam = publishedExams.find((exam) => exam.isButtonActive);
             if (openExam) handleOpenExamApply(openExam);
-            else setSystemAlert('No exam applications are currently open.');
+            else setSystemAlert(t('app.noOpenApplications'));
           }}
           onOpenCenterLocator={handleOpenCenterLocator}
           onOpenFeedback={handleOpenGrievance}
@@ -600,7 +598,6 @@ export default function App() {
       <AdmitCardModal
         isOpen={isAdmitCardOpen}
         onClose={() => setIsAdmitCardOpen(false)}
-        defaultExamCode="ENT-2025"
       />
 
       <CbtMockExamModal

@@ -12,12 +12,15 @@ interface NoticeDetailModalProps {
   onClose: () => void;
 }
 
+import { useTranslation } from '../i18n';
+
 export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, onClose }) => {
+  const { t } = useTranslation();
   if (!notice) return null;
 
   const handleDownload = () => {
     const element = document.createElement('a');
-    const file = new Blob([`${notice.title}\nRef: ${notice.refNo}\nDate: ${notice.date}\n\n${notice.fullContent}`], {
+    const file = new Blob([`${notice.title}\n${t('notice.ref')}: ${notice.refNo}\n${t('notice.date')}: ${notice.date}\n\n${notice.fullContent}`], {
       type: 'text/plain',
     });
     const downloadUrl = URL.createObjectURL(file);
@@ -40,7 +43,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
             </div>
             <div>
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-sky-400">
-                Portal Notice
+                {t('notice.portalNotice')}
               </span>
               <h2 className="text-sm font-bold truncate max-w-md">
                 {notice.refNo}
@@ -50,7 +53,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-            aria-label="Close notice modal"
+            aria-label={t('notice.close')}
           >
             <X className="w-5 h-5" />
           </button>
@@ -64,11 +67,11 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
                 {notice.date}
               </span>
               <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-semibold">
-                {notice.category}
+                {t(`notice.category.${notice.category}`)}
               </span>
               {notice.isNew && (
                 <span className="bg-rose-600 text-white px-1.5 py-0.2 rounded font-extrabold uppercase text-[10px]">
-                  New
+                  {t('grid.new')}
                 </span>
               )}
             </div>
@@ -85,7 +88,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
 
           <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-900 text-xs flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>This notice is displayed from the portal's current notice data.</span>
+            <span>{t('notice.source')}</span>
           </div>
         </div>
 
@@ -96,7 +99,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
             className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg font-semibold flex items-center gap-1.5 transition-colors"
           >
             <Printer className="w-4 h-4" />
-            <span>Print Notice</span>
+            <span>{t('notice.print')}</span>
           </button>
 
           <button
@@ -104,7 +107,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
             className="px-4 py-2 bg-blue-900 hover:bg-blue-800 text-white rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-2xs"
           >
             <Download className="w-4 h-4" />
-            <span>Download Notice as Text</span>
+            <span>{t('notice.download')}</span>
           </button>
         </div>
       </div>

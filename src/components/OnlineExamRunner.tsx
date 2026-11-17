@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Clock3, X } from 'lucide-react';
 import { apiRequest } from '../api';
+import { useTranslation } from '../i18n';
 
 interface OnlineExamQuestion {
   questionNumber: number;
@@ -33,6 +34,7 @@ function secondsUntil(value: string): number {
 }
 
 export const OnlineExamRunner: React.FC<OnlineExamRunnerProps> = ({ examCode, examName, onClose, onSubmitted }) => {
+  const { t } = useTranslation();
   const [attemptId, setAttemptId] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [questions, setQuestions] = useState<OnlineExamQuestion[]>([]);
@@ -58,7 +60,7 @@ export const OnlineExamRunner: React.FC<OnlineExamRunnerProps> = ({ examCode, ex
         setQuestions(examQuestions);
         setResponses(savedResponses);
       })
-      .catch((startError: unknown) => setError(startError instanceof Error ? startError.message : 'Could not start this exam.'))
+      .catch((startError: unknown) => setError(startError instanceof Error ? startError.message : t('exam.startError')))
       .finally(() => setLoading(false));
   }, [examCode]);
 
@@ -73,7 +75,7 @@ export const OnlineExamRunner: React.FC<OnlineExamRunnerProps> = ({ examCode, ex
           body: JSON.stringify({ attemptId, responses: snapshot }),
         }))
         .then(() => setSaveError(null))
-        .catch((saveFailure: unknown) => setSaveError(saveFailure instanceof Error ? saveFailure.message : 'Could not save your exam answers.'));
+        .catch((saveFailure: unknown) => setSaveError(saveFailure instanceof Error ? saveFailure.message : t('exam.saveError')));
     }, 500);
     return () => window.clearTimeout(timer);
   }, [attemptId, examCode, responses, score, submitting]);
@@ -90,7 +92,7 @@ export const OnlineExamRunner: React.FC<OnlineExamRunnerProps> = ({ examCode, ex
       setScore(result.score);
       onSubmitted();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Could not submit exam answers.');
+      setError(submitError instanceof Error ? submitError.message : t('exam.submitError'));
     } finally {
       setSubmitting(false);
     }
@@ -115,16 +117,16 @@ export const OnlineExamRunner: React.FC<OnlineExamRunnerProps> = ({ examCode, ex
           <div><p className="text-xs font-bold uppercase tracking-wider text-sky-200">{examCode}</p><h1 className="text-lg font-black sm:text-xl">{examName}</h1></div>
           <div className="flex items-center gap-3">
             {!score && attemptId && <span className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2 font-mono font-bold"><Clock3 className="h-4 w-4" />{time}</span>}
-            <button type="button" onClick={onClose} aria-label="Close exam" className="rounded-lg p-2 hover:bg-white/10"><X className="h-5 w-5" /></button>
+            <button type="button" onClick={onClose} aria-label={t('exam.close')} className="rounded-lg p-2 hover:bg-white/10"><X className="h-5 w-5" /></button>
           </div>
         </header>
         <div className="space-y-4 p-5 sm:p-7">
           {error && <div role="alert" className="flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800"><AlertCircle className="h-5 w-5 shrink-0" />{error}</div>}
-          {saveError && <div role="status" className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertCircle className="h-5 w-5 shrink-0" />{saveError} Your answers remain available on this screen; submit before leaving.</div>}
-          {loading && <p className="py-12 text-center text-slate-500">Preparing your secure exam…</p>}
+          {saveError && <div role="status" className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertCircle className="h-5 w-5 shrink-0" />{saveError} {t('exam.saveWarning')}</div>}
+          {loading && <p className="py-12 text-center text-slate-500">{t('exam.preparing')}</p>}
           {!loading && attemptId && !score && questions.map((question) => (
             <section key={question.questionNumber} className="rounded-xl border border-slate-200 p-4 sm:p-5">
-              <div className="mb-3 flex justify-between gap-3 text-xs font-bold uppercase tracking-wide text-slate-500"><span>{question.section} · Question {question.questionNumber}</span><span>{question.points} mark(s)</span></div>
+              <div className="mb-3 flex justify-between gap-3 text-xs font-bold uppercase tracking-wide text-slate-500"><span>{question.section} · {t('exam.questionN', { n: question.questionNumber })}</span><span>{t('exam.marks', { count: question.points })}</span></div>
               <h2 className="font-semibold leading-6 text-slate-900">{question.questionText}</h2>
               <div className="mt-4 grid gap-2 sm:grid-cols-2">
                 {(['A', 'B', 'C', 'D'] as const).map((option) => (
@@ -139,16 +141,16 @@ export const OnlineExamRunner: React.FC<OnlineExamRunnerProps> = ({ examCode, ex
           {score && (
             <section role="status" className="rounded-xl bg-emerald-50 p-6 text-center">
               <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-700" />
-              <h2 className="mt-3 text-xl font-black text-emerald-950">Exam submitted</h2>
-              <p className="mt-2 text-slate-700">Score: <strong>{score.totalScore} / {score.maxScore}</strong> · {score.percentage}% · {score.correct} correct</p>
+              <h2 className="mt-3 text-xl font-black text-emerald-950">{t('exam.submitted')}</h2>
+              <p className="mt-2 text-slate-700">{t('exam.scoreLine', { score: score.totalScore, max: score.maxScore, percent: score.percentage, correct: score.correct })}</p>
             </section>
           )}
           {!loading && attemptId && !score && (
             <div className="flex justify-end border-t border-slate-200 pt-4">
-              <button type="button" onClick={() => void submitExam()} disabled={submitting || !attemptId} className="rounded-lg bg-blue-900 px-5 py-3 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-60">{submitting ? 'Submitting…' : 'Submit exam'}</button>
+              <button type="button" onClick={() => void submitExam()} disabled={submitting || !attemptId} className="rounded-lg bg-blue-900 px-5 py-3 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-60">{submitting ? t('common.submitting') : t('exam.submit')}</button>
             </div>
           )}
-          {score && <div className="flex justify-end"><button type="button" onClick={onClose} className="rounded-lg bg-blue-900 px-5 py-2.5 text-sm font-bold text-white">Close</button></div>}
+          {score && <div className="flex justify-end"><button type="button" onClick={onClose} className="rounded-lg bg-blue-900 px-5 py-2.5 text-sm font-bold text-white">{t('common.closeButton')}</button></div>}
         </div>
       </main>
     </div>

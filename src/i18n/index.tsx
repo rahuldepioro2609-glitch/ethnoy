@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { LANGUAGE_LOCALES, getSavedLanguage, type Language } from '../utils/languageLogic';
-import { translate, type TranslationKey, type TranslationParams } from './translate';
+import { isDictionaryLoaded, loadDictionary, translate, type TranslationKey, type TranslationParams } from './translate';
 
 export type { TranslationKey } from './translate';
 
@@ -53,6 +53,8 @@ const I18nContext = createContext<I18nValue>(createValue('English', () => undefi
 
 export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguageState] = useState<Language>(readSavedLanguage);
+  // Bumped when a language file finishes loading, so text re-renders in that language.
+  const [loadedVersion, setLoadedVersion] = useState(0);
 
   const setLanguage = useCallback((next: Language) => {
     setLanguageState(next);
@@ -65,9 +67,15 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     document.documentElement.lang = HTML_LANG[language];
+    if (isDictionaryLoaded(language)) return;
+    let cancelled = false;
+    loadDictionary(language)
+      .then(() => { if (!cancelled) setLoadedVersion((version) => version + 1); })
+      .catch(() => { /* English text stays visible if the language file cannot load. */ });
+    return () => { cancelled = true; };
   }, [language]);
 
-  const value = useMemo(() => createValue(language, setLanguage), [language, setLanguage]);
+  const value = useMemo(() => createValue(language, setLanguage), [language, setLanguage, loadedVersion]);
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 };
 

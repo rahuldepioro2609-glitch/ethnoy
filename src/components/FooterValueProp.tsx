@@ -18,6 +18,7 @@ import {
   Scale,
 } from 'lucide-react';
 
+import { useTranslation } from '../i18n';
 interface FooterValuePropProps {
   onOpenGrievance: () => void;
   onOpenAdmitCard: () => void;
@@ -33,6 +34,7 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
   onOpenCenterLocator,
   onOpenResults,
 }) => {
+  const { t } = useTranslation();
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -43,43 +45,43 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
         <div className="mx-auto max-w-[1440px]">
           <div className="mx-auto max-w-3xl text-center">
             <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-bold uppercase tracking-wider text-emerald-800">
-              <Compass className="h-4 w-4" /> About ELTNOY
+              <Compass className="h-4 w-4" /> {t('footer.aboutBadge')}
             </span>
-            <h2 className="mt-3 text-3xl font-black tracking-tight text-[#0B254E]">A clearer path through every exam step</h2>
+            <h2 className="mt-3 text-3xl font-black tracking-tight text-[#0B254E]">{t('footer.aboutHeading')}</h2>
             <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-base">
-              ELTNOY brings examination information and candidate services together in one digital portal, with dedicated workspaces for students, approved centers, and administrators.
+              {t('footer.aboutIntro')}
             </p>
           </div>
 
           <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="inline-flex rounded-xl bg-emerald-50 p-2.5 text-emerald-700"><Compass className="h-5 w-5" /></div>
-              <h3 className="mt-4 font-extrabold text-[#0B254E]">Our vision</h3>
-              <p className="mt-2 text-sm leading-6 text-slate-600">Make examination journeys easier to understand and access through dependable, inclusive digital services.</p>
+              <h3 className="mt-4 font-extrabold text-[#0B254E]">{t('footer.vision')}</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{t('footer.visionText')}</p>
             </article>
             <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="inline-flex rounded-xl bg-blue-50 p-2.5 text-blue-700"><Target className="h-5 w-5" /></div>
-              <h3 className="mt-4 font-extrabold text-[#0B254E]">Our mission</h3>
-              <p className="mt-2 text-sm leading-6 text-slate-600">Connect candidates and examination teams with clear information, secure role-based access, and practical online workflows.</p>
+              <h3 className="mt-4 font-extrabold text-[#0B254E]">{t('footer.mission')}</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{t('footer.missionText')}</p>
             </article>
             <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="inline-flex rounded-xl bg-sky-50 p-2.5 text-sky-700"><ListChecks className="h-5 w-5" /></div>
-              <h3 className="mt-4 font-extrabold text-[#0B254E]">Our objectives</h3>
+              <h3 className="mt-4 font-extrabold text-[#0B254E]">{t('footer.objectives')}</h3>
               <ul className="mt-2 space-y-1.5 text-sm leading-5 text-slate-600">
-                <li>• Make exam notices and application status easy to find.</li>
-                <li>• Provide candidate access to applications, admit cards, results, and practice.</li>
-                <li>• Support accountable administration and center workflows.</li>
+                <li>{t('footer.objective1')}</li>
+                <li>{t('footer.objective2')}</li>
+                <li>{t('footer.objective3')}</li>
               </ul>
             </article>
             <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="inline-flex rounded-xl bg-amber-50 p-2.5 text-amber-700"><Scale className="h-5 w-5" /></div>
-              <h3 className="mt-4 font-extrabold text-[#0B254E]">Our principles</h3>
-              <p className="mt-2 text-sm leading-6 text-slate-600">Accuracy, accessibility, privacy, fairness, and clear responsibility guide how portal features should be used.</p>
+              <h3 className="mt-4 font-extrabold text-[#0B254E]">{t('footer.principles')}</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{t('footer.principlesText')}</p>
             </article>
           </div>
 
           <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950 sm:text-sm">
-            ELTNOY is an independent examination portal and is not affiliated with the National Testing Agency (NTA) or any government body. Notices and schedules shown in this preview may be sample data; rely on verified portal publications for operational information.
+            {t('footer.disclaimer')}
           </div>
         </div>
       </section>
@@ -93,7 +95,7 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               <Trophy className="w-4 h-4 text-[#16A34A]" />
             </div>
             <h3 className="text-base sm:text-lg font-extrabold text-[#0B254E] tracking-tight">
-              Why Choose ELTNOY?
+              {t('footer.whyChoose')}
             </h3>
           </div>
 
@@ -106,10 +108,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
               <div>
                 <div className="text-xs font-bold text-slate-900 leading-tight">
-                  Role-based Access
+                  {t('footer.why.access')}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">
-                  Protected portal accounts
+                  {t('footer.why.accessText')}
                 </div>
               </div>
             </div>
@@ -121,10 +123,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
               <div>
                 <div className="text-xs font-bold text-slate-900 leading-tight">
-                  User Friendly
+                  {t('footer.why.friendly')}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">
-                  Easy to Use Platform
+                  {t('footer.why.friendlyText')}
                 </div>
               </div>
             </div>
@@ -136,10 +138,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
               <div>
                 <div className="text-xs font-bold text-slate-900 leading-tight">
-                  Exam Information
+                  {t('footer.why.info')}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">
-                  Notices and schedules
+                  {t('footer.why.infoText')}
                 </div>
               </div>
             </div>
@@ -151,10 +153,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
               <div>
                 <div className="text-xs font-bold text-slate-900 leading-tight">
-                  Candidate Helpdesk
+                  {t('footer.why.helpdesk')}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">
-                  Feedback and issue reports
+                  {t('footer.why.helpdeskText')}
                 </div>
               </div>
             </div>
@@ -177,39 +179,39 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               </div>
             </div>
             <p className="text-slate-400 leading-relaxed text-xs">
-              Examination portal for applications, admit-card lookup, result lookup, practice tests, and candidate support.
+              {t('footer.brandText')}
             </p>
           </div>
 
           {/* Col 2: Quick Links */}
           <div className="space-y-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-white">
-              Student Navigation
+              {t('footer.studentNav')}
             </h4>
             <ul className="space-y-1.5 text-slate-400">
               <li>
                 <button onClick={onOpenAdmitCard} className="hover:text-white transition-colors">
-                  Download Admit Card
+                  {t('footer.link.admitCard')}
                 </button>
               </li>
               <li>
                 <button onClick={onOpenMockExam} className="hover:text-white transition-colors">
-                  Online CBT Mock Simulator
+                  {t('footer.link.mock')}
                 </button>
               </li>
               <li>
                 <button onClick={onOpenCenterLocator} className="hover:text-white transition-colors">
-                  Find a Test Center
+                  {t('footer.link.centers')}
                 </button>
               </li>
               <li>
                 <button onClick={onOpenResults} className="hover:text-white transition-colors">
-                  Check Examination Results
+                  {t('footer.link.results')}
                 </button>
               </li>
               <li>
                 <button onClick={onOpenGrievance} className="hover:text-white transition-colors">
-                  Candidate Helpdesk &amp; Grievance
+                  {t('footer.link.helpdesk')}
                 </button>
               </li>
             </ul>
@@ -218,24 +220,24 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
           {/* Col 3: Examination Programs */}
           <div className="space-y-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-white">
-              Exam Information
+              {t('footer.why.info')}
             </h4>
             <ul className="space-y-1.5 text-slate-400">
-              <li>Exam schedules are published in the latest portal notices.</li>
-              <li>Registration status is shown with each examination listing.</li>
-              <li>Use the admit card as the source of truth for your venue.</li>
+              <li>{t('footer.info1')}</li>
+              <li>{t('footer.info2')}</li>
+              <li>{t('footer.info3')}</li>
             </ul>
           </div>
 
           {/* Col 4: Contact Info */}
           <div className="space-y-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-white">
-              Contact &amp; Support
+              {t('footer.contact')}
             </h4>
             <div className="space-y-1.5 text-slate-400 text-xs">
-              <p>For assistance, submit a message through the candidate helpdesk.</p>
+              <p>{t('footer.contactText')}</p>
               <button onClick={onOpenGrievance} className="text-emerald-300 hover:text-white transition-colors">
-                Open candidate helpdesk
+                {t('footer.openHelpdesk')}
               </button>
             </div>
             <button
@@ -243,15 +245,15 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
               className="mt-3 flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs transition-colors"
             >
               <ArrowUp className="w-3.5 h-3.5" />
-              <span>Back to Top</span>
+              <span>{t('footer.backToTop')}</span>
             </button>
           </div>
         </div>
 
         {/* Bottom copyright */}
         <div className="mt-8 pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500">
-          <span>© {new Date().getFullYear()} ELTNOY Examination Portal.</span>
-          <span>Privacy notice, terms, and security disclosures must be added before public launch.</span>
+          <span>© {new Date().getFullYear()} {t('footer.copyright')}</span>
+          <span>{t('footer.legalNotice')}</span>
         </div>
       </div>
     </footer>

@@ -50,3 +50,14 @@ describe('Candidate Result Logic Tests', () => {
     assert.strictEqual(formatRankDisplay(25, 'Category Rank'), 'Category Rank #25');
   });
 });
+
+describe('performanceBand', () => {
+  test('bands scores by share of maximum marks', async () => {
+    const { performanceBand } = await import('./resultLogic.ts');
+    assert.strictEqual(performanceBand(90, 100), 'excellent');
+    assert.strictEqual(performanceBand(70, 100), 'good');
+    assert.strictEqual(performanceBand(50, 100), 'average');
+    assert.strictEqual(performanceBand(-4, 100), 'needsImprovement');
+    assert.strictEqual(performanceBand(10, 0), 'needsImprovement');
+  });
+});
