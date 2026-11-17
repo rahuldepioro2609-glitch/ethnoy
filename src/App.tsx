@@ -296,12 +296,9 @@ export default function App() {
     requireCandidateLogin(() => setActiveApplyExam(exam));
   };
 
+  // The helpdesk is open to everyone, including people who cannot sign in.
   const handleOpenGrievance = () => {
-    requireCandidateLogin(() => {
-      setIsFeedbackOpen(true);
-      setSystemAlert(t('app.helpdeskOpen'));
-      setTimeout(() => setSystemAlert(null), 6000);
-    });
+    setIsFeedbackOpen(true);
   };
 
   const handleNoticeCategoryFilter = (category: string) => {
