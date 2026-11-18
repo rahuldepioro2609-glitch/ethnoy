@@ -801,7 +801,9 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
         headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
         body: await file.arrayBuffer(),
       });
-      setNotice(`${response.imported} row(s) imported. Review them and publish when ready.`);
+      setNotice(kind === 'admit-cards'
+        ? `${response.imported} admit card(s) imported and published. Candidates can download them now.`
+        : `${response.imported} row(s) imported as a draft. Review them and publish when ready.`);
       await refresh();
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : `Could not import ${kind}.`);

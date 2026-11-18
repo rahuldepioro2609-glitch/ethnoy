@@ -5,7 +5,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, FileText, Calendar, Building2, ExternalLink, ArrowRight } from 'lucide-react';
-import { TEST_CENTERS, ExamItem, NoticeItem, TestCenter } from '../data/portalData';
+import { ExamItem, NoticeItem } from '../data/portalData';
+import { apiRequest } from '../api';
+import { filterCenters, type ExamCenter } from './CenterLocatorModal';
 import { useTranslation } from '../i18n';
 
 interface GlobalSearchModalProps {
@@ -31,7 +33,13 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
 }) => {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
+  const [centers, setCenters] = useState<ExamCenter[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    apiRequest<{ centers: ExamCenter[] }>('/api/centers').then(({ centers: list }) => setCenters(list)).catch(() => setCenters([]));
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -61,13 +69,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
       n.summary.toLowerCase().includes(q)
   );
 
-  const matchedCenters = TEST_CENTERS.filter(
-    (c) =>
-      c.name.toLowerCase().includes(q) ||
-      c.code.toLowerCase().includes(q) ||
-      c.city.toLowerCase().includes(q) ||
-      c.state.toLowerCase().includes(q)
-  );
+  const matchedCenters = q ? filterCenters(centers, q) : [];
 
   const totalResults = matchedExams.length + matchedNotices.length + matchedCenters.length;
 
@@ -237,7 +239,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
               <div className="space-y-1.5">
                 {matchedCenters.map((c) => (
                   <div
-                    key={c.id}
+                    key={c.code}
                     className="p-2.5 rounded-xl border border-slate-100 bg-slate-50 text-xs"
                   >
                     <div className="flex items-center justify-between">
@@ -245,7 +247,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                       <span className="font-mono text-purple-700 font-semibold">{c.code}</span>
                     </div>
                     <div className="text-[11px] text-slate-500 mt-0.5">
-                      {c.city}, {c.state} · {t('search.capacity', { count: c.capacity })}
+                      {c.address}
                     </div>
                   </div>
                 ))}

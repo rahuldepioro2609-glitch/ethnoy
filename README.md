@@ -88,7 +88,9 @@ Use HTTPS, managed database backups, restricted database access, and a secret ma
 
 The current CBT question bank contains only four sample questions and its content is also bundled in the client. Treat it as practice-only, not a secure or high-stakes examination. Center check-in is limited to candidates assigned to that center by an official. Candidate exam-fee collection, automatic wallet credits or fee sharing, automatic payouts, SMS delivery, online correction of submitted applications, production question authoring, biometric verification, and live AI proctoring are not configured. Institute wallet top-ups are not available in the portal; withdrawals remain manual. Do not present these capabilities as operational until their providers, workflows, and requirements are supplied and implemented.
 
-The bundled examination calendar, notices, and center directory are sample data. The example examination dates are from 2025 and are closed; replace them with verified current schedules before launch. Published answer keys are administrator-supplied records; do not rely on any key until the Super Admin verifies and publishes it. The center directory is not an authoritative list of accredited venues.
+Exams, notices, admit cards, results and answer keys all come from the database; the site starts empty. The exam-centre finder lists the centres named on published admit cards. Only the practice test uses sample questions bundled in the code. Published answer keys are administrator-supplied records; do not rely on any key until the Super Admin verifies and publishes it.
+
+The privacy notice (`/privacy`) and terms of use (`/terms`) in `src/components/LegalPages.tsx` describe how this code handles data. Review them, ideally with legal advice, before launch and whenever data handling changes.
 
 ## Production readiness and scale
 
