@@ -2050,13 +2050,30 @@ app.use((_request, response) => {
   response.status(404).json({ error: 'Route not found.' });
 });
 
+// PostgreSQL errors caused by the request's own values (e.g. a NUL byte or an impossible date).
+const CLIENT_INPUT_PG_CODES = new Set(['22021', '22P05', '22P02', '22007', '22008', '22001', '22003']);
+
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
-  console.error('API request failed:', error);
   if (response.headersSent) return;
-  if (error instanceof SyntaxError && 'status' in error && error.status === 400) {
+  const status = typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : 0;
+  const pgCode = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+  if (error instanceof SyntaxError && status === 400) {
     response.status(400).json({ error: 'Request body contains invalid JSON.' });
     return;
   }
+  if (status === 413) {
+    response.status(413).json({ error: 'The request or file is too large.' });
+    return;
+  }
+  if (status >= 400 && status < 500) {
+    response.status(status).json({ error: 'The request could not be processed.' });
+    return;
+  }
+  if (CLIENT_INPUT_PG_CODES.has(pgCode)) {
+    response.status(400).json({ error: 'The request contains invalid characters or values.' });
+    return;
+  }
+  console.error('API request failed:', error);
   response.status(500).json({ error: 'An unexpected server error occurred.' });
 });
 
