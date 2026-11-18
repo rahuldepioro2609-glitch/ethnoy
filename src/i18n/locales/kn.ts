@@ -207,7 +207,6 @@ const messages: Partial<Dictionary> = {
   'nav.mobile.answerKeys': "ಉತ್ತರ ಕೀಗಳು",
   'nav.mobile.results': "ಫಲಿತಾಂಶಗಳು",
   'nav.mobile.institute': "ಸಂಸ್ಥೆ",
-  'nav.mobile.admin': "ಅಡ್ಮಿನ್",
   'nav.mobile.contact': "ಸಂಪರ್ಕ",
   'nav.mobile.about': "ನಮ್ಮ ಬಗ್ಗೆ",
   'nav.homeAria': "ELTNOY ಪರೀಕ್ಷಾ ಪೋರ್ಟಲ್ ಮುಖಪುಟ",
@@ -236,8 +235,6 @@ const messages: Partial<Dictionary> = {
   'nav.instituteZone': "ಸಂಸ್ಥೆ ವಿಭಾಗ",
   'nav.instituteDashboard': "ಸಂಸ್ಥೆ ಆಡಳಿತ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್",
   'nav.instituteDashboardHint': "ಸ್ಲಾಟ್‌ಗಳು, ಬಯೋಮೆಟ್ರಿಕ್ ಮತ್ತು ಮೇಲ್ವಿಚಾರಕರು",
-  'nav.officialDashboard': "ಅಧಿಕೃತ ಆಡಳಿತ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್",
-  'nav.officialDashboardHint': "ಅರ್ಜಿಗಳು, ಸಹಾಯ ಟಿಕೆಟ್‌ಗಳು ಮತ್ತು ಫಲಿತಾಂಶಗಳು",
   'nav.results': "ಫಲಿತಾಂಶಗಳು",
   'nav.contact': "ಸಂಪರ್ಕಿಸಿ",
   'nav.about': "ನಮ್ಮ ಬಗ್ಗೆ",
@@ -727,7 +724,7 @@ const messages: Partial<Dictionary> = {
   'feedback.err.descriptionShort': "ದಯವಿಟ್ಟು ಸಮಸ್ಯೆ ಅಥವಾ ಸಲಹೆಯನ್ನು ಕನಿಷ್ಠ 10 ಅಕ್ಷರಗಳಲ್ಲಿ ವಿವರಿಸಿ.",
   'feedback.err.descriptionLong': "ವಿವರಣೆ 1000 ಅಕ್ಷರಗಳನ್ನು ಮೀರಬಾರದು.",
   'feedback.err.email': "ದಯವಿಟ್ಟು ಮಾನ್ಯ ಇಮೇಲ್ ವಿಳಾಸ ನೀಡಿ.",
-  'instituteForms.badge': "ELTNOY ಸೂಪರ್ ಅಡ್ಮಿನ್ ಅನುಮೋದಿಸಿದ್ದು",
+  'instituteForms.badge': "ELTNOY ಅನುಮೋದಿಸಿದ್ದು",
   'instituteForms.titlePlain': "ಸಂಸ್ಥೆ ಪರೀಕ್ಷೆ ಮತ್ತು ಶಿಕ್ಷಕ ಫಾರ್ಮ್‌ಗಳು",
   'instituteForms.intro': "ಈ ಪಟ್ಟಿಗಳನ್ನು ಸಂಸ್ಥೆ ಮತ್ತು ಫಾರ್ಮ್ ಪರಿಶೀಲನೆಯ ನಂತರವೇ ಪ್ರಕಟಿಸಲಾಗುತ್ತದೆ. ಅರ್ಜಿಗಳನ್ನು ಸಂಸ್ಥೆಯೇ ನಿರ್ವಹಿಸುತ್ತದೆ.",
   'instituteForms.apply': "ಸಂಸ್ಥೆಯ ವೆಬ್‌ಸೈಟ್‌ನಲ್ಲಿ ಅರ್ಜಿ ಸಲ್ಲಿಸಿ",
@@ -789,6 +786,12 @@ const messages: Partial<Dictionary> = {
   'footer.terms': "ಬಳಕೆಯ ನಿಯಮಗಳು",
   'legal.lastUpdated': "ಕೊನೆಯ ನವೀಕರಣ: {date}",
   'legal.englishOnly': "ಈ ದಾಖಲೆ ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿ ಮಾತ್ರ ಲಭ್ಯವಿದೆ.",
+  'account.changePasswordTitle': "ಪಾಸ್‌ವರ್ಡ್ ಬದಲಾಯಿಸಿ",
+  'account.changePassword': "ಪಾಸ್‌ವರ್ಡ್ ಬದಲಾಯಿಸಿ",
+  'account.passwordChanged': "ಪಾಸ್‌ವರ್ಡ್ ಬದಲಾಗಿದೆ. ಇತರ ಸಾಧನಗಳಿಂದ ಸೈನ್ ಔಟ್ ಮಾಡಲಾಗಿದೆ.",
+  'account.passwordChangeFailed': "ನಿಮ್ಮ ಪಾಸ್‌ವರ್ಡ್ ಬದಲಾಯಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.",
+  'notFound.title': "ಪುಟ ಸಿಗಲಿಲ್ಲ",
+  'notFound.text': "ನೀವು ಹುಡುಕುತ್ತಿದ್ದ ಪುಟ ಅಸ್ತಿತ್ವದಲ್ಲಿಲ್ಲ.",
 };
 
 export default messages;

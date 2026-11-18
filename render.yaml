@@ -1,7 +1,11 @@
+# Render Blueprint: free web service. Create the database separately (see README) and set
+# DATABASE_URL to its Internal Database URL. Free databases expire after about 30 days.
 services:
   - type: web
     name: eltnoy-portal
     runtime: node
+    plan: free
+    region: singapore
     buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run db:migrate && npm start
     healthCheckPath: /api/health
@@ -12,7 +16,21 @@ services:
         sync: false
       - key: DATABASE_SSL
         value: "false"
+      # Comma-separated; the first is used in email links, e.g. "https://eltnoy.com,https://eltnoy-portal.onrender.com".
       - key: APP_ORIGIN
+        sync: false
+      # Public domain, and hosts that redirect to it, e.g. CANONICAL_HOST=eltnoy.com, REDIRECT_HOSTS=eltnoy.in,www.eltnoy.in,www.eltnoy.com
+      - key: CANONICAL_HOST
+        sync: false
+      - key: REDIRECT_HOSTS
+        sync: false
+      # The only host(s) where the Super Admin portal works, e.g. eltnoy-portal.onrender.com.
+      - key: STAFF_HOSTS
+        sync: false
+      # Creates the first Super Admin on start-up if it does not exist (the free plan has no Shell).
+      - key: BOOTSTRAP_ADMIN_LOGIN_ID
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
         sync: false
       - key: SMTP_HOST
         sync: false

@@ -207,7 +207,6 @@ const messages: Partial<Dictionary> = {
   'nav.mobile.answerKeys': "उत्तरतालिका",
   'nav.mobile.results': "निकाल",
   'nav.mobile.institute': "संस्था",
-  'nav.mobile.admin': "अॅडमिन",
   'nav.mobile.contact': "संपर्क",
   'nav.mobile.about': "आमच्याविषयी",
   'nav.homeAria': "ELTNOY परीक्षा पोर्टल मुख्यपृष्ठ",
@@ -236,8 +235,6 @@ const messages: Partial<Dictionary> = {
   'nav.instituteZone': "संस्था विभाग",
   'nav.instituteDashboard': "संस्था प्रशासन डॅशबोर्ड",
   'nav.instituteDashboardHint': "स्लॉट, बायोमेट्रिक आणि पर्यवेक्षक",
-  'nav.officialDashboard': "अधिकृत प्रशासन डॅशबोर्ड",
-  'nav.officialDashboardHint': "अर्ज, मदत तिकिटे आणि निकाल",
   'nav.results': "निकाल",
   'nav.contact': "संपर्क साधा",
   'nav.about': "आमच्याविषयी",
@@ -727,7 +724,7 @@ const messages: Partial<Dictionary> = {
   'feedback.err.descriptionShort': "कृपया समस्या किंवा सूचना किमान 10 अक्षरांत वर्णन करा.",
   'feedback.err.descriptionLong': "वर्णन 1000 अक्षरांपेक्षा जास्त असू शकत नाही.",
   'feedback.err.email': "कृपया वैध ईमेल पत्ता द्या.",
-  'instituteForms.badge': "ELTNOY सुपर अॅडमिनने मंजूर केलेले",
+  'instituteForms.badge': "ELTNOY ने मंजूर केलेले",
   'instituteForms.titlePlain': "संस्था परीक्षा आणि शिक्षक फॉर्म",
   'instituteForms.intro': "संस्था आणि फॉर्मच्या पुनरावलोकनानंतरच या सूची प्रकाशित होतात. अर्ज संस्थाच हाताळते.",
   'instituteForms.apply': "संस्थेच्या वेबसाइटवर अर्ज करा",
@@ -789,6 +786,12 @@ const messages: Partial<Dictionary> = {
   'footer.terms': "वापराच्या अटी",
   'legal.lastUpdated': "शेवटचे अद्यतन: {date}",
   'legal.englishOnly': "हा दस्तऐवज फक्त इंग्रजीत उपलब्ध आहे.",
+  'account.changePasswordTitle': "पासवर्ड बदला",
+  'account.changePassword': "पासवर्ड बदला",
+  'account.passwordChanged': "पासवर्ड बदलला. इतर डिव्हाइसवरून साइन आउट केले आहे.",
+  'account.passwordChangeFailed': "तुमचा पासवर्ड बदलता आला नाही.",
+  'notFound.title': "पान सापडले नाही",
+  'notFound.text': "तुम्ही शोधत असलेले पान अस्तित्वात नाही.",
 };
 
 export default messages;

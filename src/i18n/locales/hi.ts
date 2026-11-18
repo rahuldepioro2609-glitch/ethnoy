@@ -207,7 +207,6 @@ const messages: Partial<Dictionary> = {
   'nav.mobile.answerKeys': "उत्तर कुंजी",
   'nav.mobile.results': "परिणाम",
   'nav.mobile.institute': "संस्थान",
-  'nav.mobile.admin': "एडमिन",
   'nav.mobile.contact': "संपर्क",
   'nav.mobile.about': "परिचय",
   'nav.homeAria': "ELTNOY परीक्षा पोर्टल होम",
@@ -236,8 +235,6 @@ const messages: Partial<Dictionary> = {
   'nav.instituteZone': "संस्थान क्षेत्र",
   'nav.instituteDashboard': "संस्थान प्रशासन डैशबोर्ड",
   'nav.instituteDashboardHint': "स्लॉट, बायोमेट्रिक्स और निरीक्षक",
-  'nav.officialDashboard': "आधिकारिक प्रशासन डैशबोर्ड",
-  'nav.officialDashboardHint': "आवेदन, सहायता टिकट और परिणाम",
   'nav.results': "परिणाम",
   'nav.contact': "संपर्क करें",
   'nav.about': "हमारे बारे में",
@@ -727,7 +724,7 @@ const messages: Partial<Dictionary> = {
   'feedback.err.descriptionShort': "कृपया समस्या या सुझाव का कम से कम 10 अक्षरों में वर्णन करें।",
   'feedback.err.descriptionLong': "विवरण 1000 अक्षरों से अधिक नहीं हो सकता।",
   'feedback.err.email': "कृपया एक मान्य ईमेल पता दें।",
-  'instituteForms.badge': "ELTNOY सुपर एडमिन द्वारा स्वीकृत",
+  'instituteForms.badge': "ELTNOY द्वारा स्वीकृत",
   'instituteForms.titlePlain': "संस्थान परीक्षा और शिक्षक फ़ॉर्म",
   'instituteForms.intro': "ये सूचियां संस्थान और फ़ॉर्म की समीक्षा के बाद ही प्रकाशित होती हैं। आवेदन संस्थान द्वारा संभाले जाते हैं।",
   'instituteForms.apply': "संस्थान की वेबसाइट पर आवेदन करें",
@@ -789,6 +786,12 @@ const messages: Partial<Dictionary> = {
   'footer.terms': "उपयोग की शर्तें",
   'legal.lastUpdated': "अंतिम अपडेट: {date}",
   'legal.englishOnly': "यह दस्तावेज़ केवल अंग्रेज़ी में उपलब्ध है।",
+  'account.changePasswordTitle': "पासवर्ड बदलें",
+  'account.changePassword': "पासवर्ड बदलें",
+  'account.passwordChanged': "पासवर्ड बदल गया। अन्य डिवाइस से साइन आउट कर दिया गया है।",
+  'account.passwordChangeFailed': "आपका पासवर्ड नहीं बदला जा सका।",
+  'notFound.title': "पेज नहीं मिला",
+  'notFound.text': "आप जिस पेज को खोज रहे थे, वह मौजूद नहीं है।",
 };
 
 export default messages;

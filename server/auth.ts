@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { pool } from './db.js';
+import { staffPortalAllowed } from './hosting.js';
 
 export type UserRole = 'candidate' | 'center' | 'official';
 
@@ -73,6 +74,11 @@ export async function requireAuth(
         path: '/',
       });
       response.status(401).json({ error: 'Your session has expired. Please sign in again.' });
+      return;
+    }
+    if (rows[0].role === 'official' && !staffPortalAllowed(request.get('host'))) {
+      // A staff session is never honoured on a public host, even if its cookie is sent there.
+      response.status(401).json({ error: 'Sign in is required.' });
       return;
     }
     if (rows[0].account_status !== 'approved') {

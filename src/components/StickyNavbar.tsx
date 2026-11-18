@@ -31,7 +31,6 @@ interface StickyNavbarProps {
   onOpenResultsPortal: () => void;
   onOpenAnswerKeyPortal: () => void;
   onOpenInstituteDashboard: () => void;
-  onOpenAiProctoring: () => void;
   examinations: ExamItem[];
   activeNavTab: string;
   setActiveNavTab: (tab: string) => void;
@@ -49,7 +48,6 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
   onOpenResultsPortal,
   onOpenAnswerKeyPortal,
   onOpenInstituteDashboard,
-  onOpenAiProctoring,
   examinations,
   activeNavTab,
   setActiveNavTab,
@@ -94,7 +92,6 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
       onOpenResultsPortal();
     } },
     { label: t('nav.mobile.institute'), activeTab: 'Institute Zone', onClick: onOpenInstituteDashboard },
-    { label: t('nav.mobile.admin'), activeTab: 'Institute Zone', onClick: onOpenAiProctoring },
     { label: t('nav.mobile.contact'), activeTab: 'Contact Us', onClick: () => {
       setActiveNavTab('Contact Us');
       document.getElementById('footer-contact')?.scrollIntoView({ behavior: 'smooth' });
@@ -354,19 +351,6 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
                       <span>{t('nav.instituteDashboard')}</span>
                     </div>
                     <div className="text-[11px] text-slate-500 pl-6">{t('nav.instituteDashboardHint')}</div>
-                  </button>
-                  <button
-                    onClick={() => {
-                      onOpenAiProctoring();
-                      setActiveDropdown(null);
-                    }}
-                    className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-rose-700 border-t border-slate-100"
-                  >
-                    <div className="font-semibold flex items-center gap-2">
-                      <Award className="w-4 h-4 text-rose-600" />
-                      <span>{t('nav.officialDashboard')}</span>
-                    </div>
-                    <div className="text-[11px] text-slate-500 pl-6">{t('nav.officialDashboardHint')}</div>
                   </button>
                 </div>
               )}

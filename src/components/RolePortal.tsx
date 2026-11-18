@@ -28,7 +28,7 @@ import {
 import { apiRequest } from '../api';
 import { OnlineExamRunner } from './OnlineExamRunner';
 import { AdminObjectionsPanel } from './AdminObjectionsPanel';
-import { AccountEmailCard } from './AccountPages';
+import { AccountEmailCard, ChangePasswordCard } from './AccountPages';
 import { useTranslation } from '../i18n';
 import { translate } from '../i18n/translate';
 import { BrandLogo } from './BrandLogo';
@@ -228,8 +228,8 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
               <h1 className="mt-2 text-3xl font-black text-[#0B2E59] sm:text-4xl">{t('login.choosePortal')}</h1>
               <p className="mt-3 text-slate-600">{t('login.choosePortalIntro')}</p>
             </div>
-            <div className="grid gap-5 md:grid-cols-3">
-              {(['candidate', 'center', 'official'] as const).map((item) => {
+            <div className="mx-auto grid max-w-3xl gap-5 md:grid-cols-2">
+              {(['candidate', 'center'] as const).map((item) => {
                 const RoleIcon = roleDetails[item].icon;
                 const colorClass = item === 'candidate' ? 'bg-emerald-600' : item === 'center' ? 'bg-sky-600' : 'bg-blue-800';
                 return (
@@ -1232,8 +1232,11 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               </div>
             )}
 
-            {(user.role === 'candidate' || (user.role === 'official' && tab === 'overview')) && (
-              <div className="mt-5"><AccountEmailCard /></div>
+            {(user.role !== 'official' || tab === 'overview') && (
+              <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                {user.role !== 'center' && <AccountEmailCard />}
+                <ChangePasswordCard />
+              </div>
             )}
 
             {user.role === 'candidate' && (

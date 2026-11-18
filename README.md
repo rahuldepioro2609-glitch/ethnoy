@@ -74,6 +74,14 @@ Before deploying, provision a PostgreSQL database (Render Postgres or another pr
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` (and `SMTP_SECURE=true` for port 465): your email provider's SMTP settings. Keep `SMTP_PASS` secret.
 - `NODE_ENV`: set to `production` (the Blueprint sets this).
 
+### Free plan, domains and the staff portal
+
+- `STAFF_HOSTS` (for example `eltnoy-portal.onrender.com`): the **only** host(s) where the Super Admin portal works. On every other host, including the public domain, `/login/official`, `/dashboard/official` and all `/api/admin/*` routes return 404, Super Admin sign-in is refused, and a Super Admin session cookie is ignored. Student and institute portals work on all hosts. Leave it unset only for local development.
+- `CANONICAL_HOST` (for example `eltnoy.com`) and `REDIRECT_HOSTS` (for example `eltnoy.in,www.eltnoy.in,www.eltnoy.com`): requests for a redirect host get a permanent redirect to `https://CANONICAL_HOST` with the same path. Add every one of these domains to the Render service and point their DNS at Render.
+- `APP_ORIGIN` may list several origins, comma-separated; the first is used for links in emails.
+- Render's free web service has no Shell. Set `BOOTSTRAP_ADMIN_LOGIN_ID` and `BOOTSTRAP_ADMIN_PASSWORD` (12+ characters): on start-up the server creates that Super Admin if it does not exist yet, and never changes an existing account. Sign in on the staff host and change the password from the dashboard ("Change password" signs other devices out).
+- Free tier limits: the free PostgreSQL database **expires about 30 days after creation** (export data from Excel data before then), and the free web service sleeps after about 15 minutes without traffic, so the next visit takes up to about a minute.
+
 After the first deploy, create the initial official account in the Render Shell. Run the command and enter a password of 12-128 characters at both hidden prompts:
 
 ```sh
