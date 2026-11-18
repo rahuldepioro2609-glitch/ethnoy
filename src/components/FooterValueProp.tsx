@@ -253,7 +253,10 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
         {/* Bottom copyright */}
         <div className="mt-8 pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500">
           <span>© {new Date().getFullYear()} {t('footer.copyright')}</span>
-          <span>{t('footer.legalNotice')}</span>
+          <nav aria-label={t('footer.legalNav')} className="flex items-center gap-4">
+            <a href="/privacy" className="hover:text-white">{t('footer.privacy')}</a>
+            <a href="/terms" className="hover:text-white">{t('footer.terms')}</a>
+          </nav>
         </div>
       </div>
     </footer>

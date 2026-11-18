@@ -828,6 +828,18 @@ app.get('/api/health', asyncRoute(async (_request, response) => {
   response.json({ status: 'ok', database: 'connected' });
 }));
 
+// Public list of exam centres that appear on at least one published admit card.
+app.get('/api/centers', asyncRoute(async (_request, response) => {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (center_code) center_code, center_name, center_address
+     FROM admit_cards
+     ORDER BY center_code, published_at DESC
+     LIMIT 1000`,
+  );
+  response.setHeader('Cache-Control', 'public, max-age=300');
+  response.json({ centers: rows.map((row) => ({ code: row.center_code, name: row.center_name, address: row.center_address })) });
+}));
+
 app.get('/api/exams', asyncRoute(async (_request, response) => {
   const { rows } = await pool.query(
     `SELECT id, code, name, category, target_audience, registration_start, registration_end,

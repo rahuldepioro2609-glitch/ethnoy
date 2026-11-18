@@ -20,6 +20,7 @@ import { ExamApplyModal } from './components/ExamApplyModal';
 import { CandidateResultModal } from './components/CandidateResultModal';
 import { AnswerKeyObjectionModal } from './components/AnswerKeyObjectionModal';
 import { ResetPasswordPage, VerifyEmailPage } from './components/AccountPages';
+import { PrivacyPage, TermsPage } from './components/LegalPages';
 import { FeedbackSlideOut } from './components/FeedbackSlideOut';
 import { ExamItem, NoticeItem } from './data/portalData';
 import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
@@ -353,6 +354,14 @@ export default function App() {
     return <ResetPasswordPage onHome={() => navigate('/')} onSignIn={(role) => { setLoggedInUser(null); navigate(`/login/${role}`); }} />;
   }
 
+  if (pathname === '/privacy') {
+    return <PrivacyPage onHome={() => navigate('/')} />;
+  }
+
+  if (pathname === '/terms') {
+    return <TermsPage onHome={() => navigate('/')} />;
+  }
+
   if (pathname === '/verify-email') {
     return <VerifyEmailPage onHome={() => navigate('/')} />;
   }
@@ -419,9 +428,6 @@ export default function App() {
         setActiveNavTab={setActiveNavTab}
       />
 
-      <div role="note" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-950">
-        {t('app.previewBanner')}
-      </div>
 
       <section id="latest-updates" aria-label={t('app.latestUpdatesAria')} className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-[1440px] flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:gap-3 sm:px-6 lg:px-8">
