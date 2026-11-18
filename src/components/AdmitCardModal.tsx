@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { useEscapeKey } from './useEscapeKey';
 import { X, Printer, Download, CheckCircle2, AlertTriangle, ShieldCheck, QrCode, FileText } from 'lucide-react';
 import {
   validateAdmitCardLookup,
@@ -19,6 +20,7 @@ interface AdmitCardModalProps {
 }
 
 export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose, defaultExamCode = '' }) => {
+  useEscapeKey(isOpen, onClose);
   const { t } = useTranslation();
   const [publishedExams, setPublishedExams] = useState<Array<{ code: string; name: string }>>([]);
   const [appNumber, setAppNumber] = useState('');
@@ -76,7 +78,7 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150">
+    <div role="dialog" aria-modal="true" aria-labelledby="admit-card-title" className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl overflow-hidden my-6">
         {/* Modal Top Bar */}
         <div className="bg-[#0F172A] text-white px-6 py-4 flex items-center justify-between">
@@ -85,7 +87,7 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
               <FileText className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold leading-none">
+              <h2 id="admit-card-title" className="text-base font-bold leading-none">
                 {t('admit.title')}
               </h2>
               <span className="text-xs text-slate-400">

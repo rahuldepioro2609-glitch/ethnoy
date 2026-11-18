@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { AuthenticatedRequest, SESSION_TTL_MS, hashSessionToken, newSessionToken, optionalAuth, requireAuth, requireRoles, setSessionCookie } from './auth.js';
 import { addWorkbookSheet, readWorkbookSheet, WORKBOOK_MIME_TYPE } from './adminWorkbook.js';
 import { pool } from './db.js';
-import { asyncRoute, authLimiter, getUser, publicWriteLimiter, sendValidationError } from './http.js';
+import { asyncRoute, authLimiter, getUser, lookupLimiter, publicWriteLimiter, registrationLimiter, sendValidationError } from './http.js';
 import { scoreMockResponses } from './mockScoring.js';
 import { assertOwnedFile, fileAsDataUrl, registerUploadRoutes } from './uploads.js';
 import { registerObjectionRoutes } from './objections.js';
@@ -1336,7 +1336,7 @@ const accountRegistrationSchema = z.object({
   password: z.string().min(12).max(128),
 });
 
-app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response) => {
+app.post('/api/auth/register', registrationLimiter, asyncRoute(async (request, response) => {
   const parsed = accountRegistrationSchema.extend({
     email: z.string().trim().email().max(254),
   }).safeParse(request.body);
@@ -1370,7 +1370,7 @@ app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response)
   });
 }));
 
-app.post('/api/center/register', authLimiter, asyncRoute(async (request, response) => {
+app.post('/api/center/register', registrationLimiter, asyncRoute(async (request, response) => {
   const parsed = accountRegistrationSchema.extend({
     contactEmail: z.string().trim().email().max(254),
     registrationNumber: z.string().trim().min(3).max(100),
@@ -1833,7 +1833,7 @@ app.post('/api/center/checkins', requireAuth, requireRoles('center'), asyncRoute
   response.status(200).json({ checkin: rows[0] });
 }));
 
-app.post('/api/admit-cards/lookup', publicWriteLimiter, asyncRoute(async (request, response) => {
+app.post('/api/admit-cards/lookup', lookupLimiter, asyncRoute(async (request, response) => {
   const parsed = z.object({
     applicationNumber: z.string().trim().min(4).max(100),
     dateOfBirth: z.string().date(),
@@ -1991,7 +1991,7 @@ app.get('/api/admin/results', requireAuth, requireRoles('official'), asyncRoute(
   response.json({ results: rows });
 }));
 
-app.post('/api/results/lookup', publicWriteLimiter, asyncRoute(async (request, response) => {
+app.post('/api/results/lookup', lookupLimiter, asyncRoute(async (request, response) => {
   const parsed = z.object({
     identifier: z.string().trim().min(3).max(100),
     dateOfBirth: z.string().date(),

@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { useEscapeKey } from './useEscapeKey';
 import {
   X,
   Award,
@@ -40,6 +41,7 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
   onClose,
   defaultRollNumber = '',
 }) => {
+  useEscapeKey(isOpen, onClose);
   const [rollInput, setRollInput] = useState(defaultRollNumber);
   const [dobInput, setDobInput] = useState('');
   const { t } = useTranslation();

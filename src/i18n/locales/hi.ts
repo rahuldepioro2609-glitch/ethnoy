@@ -308,6 +308,8 @@ const messages: Partial<Dictionary> = {
   'grid.aria': "ELTNOY सूचना केंद्र",
   'grid.latestNotifications': "नवीनतम सूचनाएं",
   'grid.viewAll': "सभी देखें →",
+  'grid.viewAllCount': "सभी देखें ({count}) →",
+  'grid.showLatest': "केवल नवीनतम दिखाएँ",
   'grid.new': "नया",
   'grid.readNotice': "सूचना पढ़ें: {title}",
   'grid.noNotices': "अभी तक कोई सूचना प्रकाशित नहीं हुई है।",

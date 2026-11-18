@@ -310,6 +310,8 @@ const en = {
   'grid.aria': "ELTNOY information center",
   'grid.latestNotifications': "Latest Notifications",
   'grid.viewAll': "View All →",
+  'grid.viewAllCount': "View all ({count}) →",
+  'grid.showLatest': "Show latest only",
   'grid.new': "New",
   'grid.readNotice': "Read notice: {title}",
   'grid.noNotices': "No notices have been published yet.",

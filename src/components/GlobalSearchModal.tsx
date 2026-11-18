@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useEscapeKey } from './useEscapeKey';
 import { Search, X, FileText, Calendar, Building2, ExternalLink, ArrowRight } from 'lucide-react';
 import { ExamItem, NoticeItem } from '../data/portalData';
 import { apiRequest } from '../api';
@@ -31,6 +32,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   examinations,
   notices,
 }) => {
+  useEscapeKey(isOpen, onClose);
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [centers, setCenters] = useState<ExamCenter[]>([]);
@@ -74,7 +76,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   const totalResults = matchedExams.length + matchedNotices.length + matchedCenters.length;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-start justify-center p-3 sm:p-6 pt-16 sm:pt-20 animate-in fade-in duration-150">
+    <div role="dialog" aria-modal="true" aria-label={t('search.placeholder')} className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-start justify-center p-3 sm:p-6 pt-16 sm:pt-20 animate-in fade-in duration-150">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 w-full max-w-2xl overflow-hidden flex flex-col">
         {/* Search Input Bar */}
         <div className="p-4 border-b border-slate-200 flex items-center gap-3 bg-slate-50">
