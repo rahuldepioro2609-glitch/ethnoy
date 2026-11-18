@@ -32,6 +32,9 @@ services:
         sync: false
       - key: BOOTSTRAP_ADMIN_PASSWORD
         sync: false
+      # Public Google OAuth Web client ID (ends in .apps.googleusercontent.com); leave unset to hide Google sign-in.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

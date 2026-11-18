@@ -8,6 +8,7 @@ import { passwordChangedEmail, passwordResetEmail, portalLink, verificationEmail
 import { accountRecoveryLimiter, asyncRoute, getUser, sendValidationError } from './http.js';
 import { isEmailEnabled, sendEmailInBackground } from './mailer.js';
 import { primaryOrigin, staffPortalAllowed } from './hosting.js';
+import { googleClientId } from './google.js';
 
 export const PASSWORD_RESET_MINUTES = 30;
 export const VERIFICATION_HOURS = 48;
@@ -57,7 +58,11 @@ const tokenSchema = z.string().trim().min(32).max(128).regex(/^[A-Za-z0-9_-]+$/)
 
 export function registerAccountRoutes(app: Express): void {
   app.get('/api/auth/options', (request, response) => {
-    response.json({ emailEnabled: isEmailEnabled(), staffPortal: staffPortalAllowed(request.get('host')) });
+    response.json({
+      emailEnabled: isEmailEnabled(),
+      staffPortal: staffPortalAllowed(request.get('host')),
+      googleClientId: googleClientId(),
+    });
   });
 
   app.post('/api/auth/password-reset/request', accountRecoveryLimiter(), asyncRoute(async (request, response) => {
@@ -152,7 +157,7 @@ export function registerAccountRoutes(app: Express): void {
   app.get('/api/account', requireAuth, asyncRoute(async (request, response) => {
     const user = getUser(request);
     const { rows } = await pool.query(
-      'SELECT login_id, display_name, role, contact_email, email_verified_at FROM users WHERE id = $1',
+      'SELECT login_id, display_name, role, contact_email, email_verified_at, google_email, has_password FROM users WHERE id = $1',
       [user?.id],
     );
     response.json({
@@ -162,6 +167,8 @@ export function registerAccountRoutes(app: Express): void {
         role: rows[0].role,
         email: rows[0].contact_email,
         emailVerified: Boolean(rows[0].email_verified_at),
+        googleEmail: rows[0].google_email,
+        hasPassword: rows[0].has_password,
       },
       emailEnabled: isEmailEnabled(),
     });
@@ -202,7 +209,7 @@ export function registerAccountRoutes(app: Express): void {
 
   app.put('/api/account/password', requireAuth, accountRecoveryLimiter(), asyncRoute(async (request, response) => {
     const parsed = z.object({
-      currentPassword: z.string().min(1).max(128),
+      currentPassword: z.string().max(128).optional().default(''),
       newPassword: z.string().min(12, 'Use at least 12 characters.').max(128),
     }).safeParse(request.body);
     if (!parsed.success) {
@@ -210,16 +217,17 @@ export function registerAccountRoutes(app: Express): void {
       return;
     }
     const user = getUser(request)!;
-    const { rows } = await pool.query('SELECT password_hash, contact_email, display_name, login_id FROM users WHERE id = $1', [user.id]);
-    if (!rows[0] || !(await bcrypt.compare(parsed.data.currentPassword, rows[0].password_hash))) {
+    const { rows } = await pool.query('SELECT password_hash, has_password, contact_email, display_name, login_id FROM users WHERE id = $1', [user.id]);
+    // Accounts created through Google have no password yet: the signed-in user may set one directly.
+    if (!rows[0] || (rows[0].has_password && !(await bcrypt.compare(parsed.data.currentPassword, rows[0].password_hash)))) {
       response.status(403).json({ error: 'Your current password is incorrect.' });
       return;
     }
-    if (parsed.data.newPassword === parsed.data.currentPassword) {
+    if (rows[0].has_password && parsed.data.newPassword === parsed.data.currentPassword) {
       response.status(400).json({ error: 'Choose a password different from your current one.' });
       return;
     }
-    await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [user.id, await bcrypt.hash(parsed.data.newPassword, 12)]);
+    await pool.query('UPDATE users SET password_hash = $2, has_password = true WHERE id = $1', [user.id, await bcrypt.hash(parsed.data.newPassword, 12)]);
     // Sign out every other device; keep this session.
     await pool.query(
       'UPDATE auth_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL AND token_hash <> $2',

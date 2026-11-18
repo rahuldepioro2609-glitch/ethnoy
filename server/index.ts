@@ -16,6 +16,7 @@ import { scoreMockResponses } from './mockScoring.js';
 import { assertOwnedFile, fileAsDataUrl, registerUploadRoutes } from './uploads.js';
 import { registerObjectionRoutes } from './objections.js';
 import { registerAccountRoutes, sendVerificationEmail } from './account.js';
+import { registerGoogleRoutes } from './google.js';
 import { applicationConfirmationEmail, portalLink } from './emailTemplates.js';
 import { sendEmailInBackground } from './mailer.js';
 import { allowedOrigins, blockStaffPortalOnPublicHosts, bootstrapAdmin, canonicalHostRedirect, primaryOrigin, staffPortalAllowed } from './hosting.js';
@@ -26,13 +27,22 @@ const port = Number(process.env.PORT || 4000);
 const sessionSeconds = Math.floor(SESSION_TTL_MS / 1000);
 
 app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : false);
+// Google Identity Services (the "Continue with Google" button) loads from accounts.google.com.
+const GOOGLE_SIGN_IN = 'https://accounts.google.com/gsi/';
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", `${GOOGLE_SIGN_IN}client`],
+      styleSrc: ["'self'", "'unsafe-inline'", `${GOOGLE_SIGN_IN}style`],
       styleSrcAttr: ["'unsafe-inline'"],
+      frameSrc: ["'self'", GOOGLE_SIGN_IN],
+      connectSrc: ["'self'", GOOGLE_SIGN_IN],
     },
   },
+  // The Google sign-in popup must be able to report back to this page.
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  // Google checks the page origin, which "no-referrer" would hide.
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 }));
 app.use(canonicalHostRedirect);
 app.use(blockStaffPortalOnPublicHosts);
@@ -100,6 +110,7 @@ const workbookUpload = express.raw({ type: WORKBOOK_MIME_TYPE, limit: '5mb' });
 registerUploadRoutes(app);
 registerObjectionRoutes(app);
 registerAccountRoutes(app);
+registerGoogleRoutes(app);
 
 app.get('/api/notices', asyncRoute(async (_request, response) => {
   const { rows } = await pool.query(
@@ -1392,9 +1403,11 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
   });
 }));
 
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('not-a-real-password', 12);
+
 app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) => {
   const schema = z.object({
-    loginId: z.string().trim().min(1).max(100),
+    loginId: z.string().trim().min(1).max(254),
     password: z.string().min(1).max(128),
     role: z.enum(['candidate', 'center', 'official']),
   });
@@ -1407,16 +1420,28 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
   const { loginId, password, role } = parsed.data;
   if (role === 'official' && !staffPortalAllowed(request.get('host'))) {
     // Same answer as a wrong password, so the public site does not reveal the staff portal.
-    response.status(401).json({ error: 'Invalid login ID, password, or account type.' });
+    response.status(401).json({ error: 'Incorrect login ID/email or password.' });
     return;
   }
+  // Students and institutes may sign in with their login ID or their account email.
+  const byEmail = role !== 'official' && loginId.includes('@');
   const { rows } = await pool.query(
-    'SELECT id, login_id, display_name, role, password_hash, account_status FROM users WHERE login_id = $1 AND role = $2',
-    [loginId.toUpperCase(), role],
+    byEmail
+      ? `SELECT id, login_id, display_name, role, password_hash, account_status FROM users
+         WHERE lower(contact_email) = $1 AND role = $2 ORDER BY created_at LIMIT 5`
+      : 'SELECT id, login_id, display_name, role, password_hash, account_status FROM users WHERE login_id = $1 AND role = $2',
+    [byEmail ? loginId.toLowerCase() : loginId.toUpperCase(), role],
   );
-  const user = rows[0];
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-    response.status(401).json({ error: 'Invalid login ID, password, or account type.' });
+  let user: (typeof rows)[number] | undefined;
+  for (const candidate of rows) {
+    if (await bcrypt.compare(password, candidate.password_hash)) {
+      user = candidate;
+      break;
+    }
+  }
+  if (!rows.length) await bcrypt.compare(password, DUMMY_PASSWORD_HASH); // similar timing for unknown IDs
+  if (!user) {
+    response.status(401).json({ error: 'Incorrect login ID/email or password.' });
     return;
   }
   if (user.account_status !== 'approved') {

@@ -3,6 +3,7 @@ import { ArrowLeft, CheckCircle2, Eye, EyeOff, KeyRound, Loader2, MailCheck, Mai
 import { apiRequest } from '../api';
 import { useTranslation } from '../i18n';
 import { BrandLogo } from './BrandLogo';
+import { GoogleSignInButton, useGoogleClientId } from './GoogleSignInButton';
 
 /** Reads ?token= once, then removes it from the address bar so it is not kept in history. */
 function useUrlToken(): string {
@@ -136,7 +137,7 @@ export const VerifyEmailPage: React.FC<{ onHome: () => void }> = ({ onHome }) =>
 };
 
 interface AccountInfo {
-  account: { loginId: string; name: string; role: string; email: string | null; emailVerified: boolean };
+  account: { loginId: string; name: string; role: string; email: string | null; emailVerified: boolean; googleEmail?: string | null; hasPassword?: boolean };
   emailEnabled: boolean;
 }
 
@@ -237,6 +238,10 @@ export const AccountEmailCard: React.FC = () => {
 /** Lets a signed-in user change their password; other devices are signed out. */
 export const ChangePasswordCard: React.FC = () => {
   const { t } = useTranslation();
+  const [hasPassword, setHasPassword] = useState(true);
+  useEffect(() => {
+    apiRequest<AccountInfo>('/api/account').then((info) => setHasPassword(info.account.hasPassword !== false)).catch(() => undefined);
+  }, []);
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -255,7 +260,8 @@ export const ChangePasswordCard: React.FC = () => {
     setBusy(true);
     try {
       await apiRequest('/api/account/password', { method: 'PUT', body: JSON.stringify({ currentPassword: current, newPassword: next }) });
-      setMessage(t('account.passwordChanged'));
+      setMessage(hasPassword ? t('account.passwordChanged') : t('account.passwordSet'));
+      setHasPassword(true);
       setCurrent(''); setNext(''); setConfirm('');
     } catch (changeError) {
       setError(changeError instanceof Error ? changeError.message : t('account.passwordChangeFailed'));
@@ -267,26 +273,72 @@ export const ChangePasswordCard: React.FC = () => {
   const field = 'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm font-normal';
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('account.changePasswordTitle')}</h2>
+      <h2 className="text-lg font-extrabold text-[#0B2E59]">{hasPassword ? t('account.changePasswordTitle') : t('account.setPasswordTitle')}</h2>
+      {!hasPassword && <p className="mt-1 text-sm text-slate-600">{t('account.setPasswordIntro')}</p>}
       {error && <p role="alert" className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-sm text-rose-800">{error}</p>}
       {message && <p role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-sm text-emerald-900">{message}</p>}
-      <form onSubmit={(event) => void submit(event)} className="mt-3 grid gap-3 sm:grid-cols-3 sm:items-end">
-        <label className="text-sm font-semibold text-slate-700">{t('account.currentPassword')}
-          <input type="password" required autoComplete="current-password" value={current} onChange={(event) => setCurrent(event.target.value)} className={field} />
-        </label>
+      <form onSubmit={(event) => void submit(event)} className={`mt-3 grid gap-3 ${hasPassword ? 'sm:grid-cols-3' : 'sm:grid-cols-2'} sm:items-end`}>
+        {hasPassword && (
+          <label className="text-sm font-semibold text-slate-700">{t('account.currentPassword')}
+            <input type="password" required autoComplete="current-password" value={current} onChange={(event) => setCurrent(event.target.value)} className={field} />
+          </label>
+        )}
         <label className="text-sm font-semibold text-slate-700">{t('account.newPassword')}
           <input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={next} onChange={(event) => setNext(event.target.value)} className={field} />
         </label>
         <label className="text-sm font-semibold text-slate-700">{t('account.confirmPassword')}
           <input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} className={field} />
         </label>
-        <div className="sm:col-span-3 flex flex-wrap items-center justify-between gap-2">
+        <div className={`${hasPassword ? 'sm:col-span-3' : 'sm:col-span-2'} flex flex-wrap items-center justify-between gap-2`}>
           <p className="text-xs text-slate-500">{t('account.passwordRule')}</p>
           <button type="submit" disabled={busy} className="rounded-lg bg-[#0B2E59] px-4 py-2.5 text-xs font-bold text-white disabled:opacity-60">
-            {busy ? t('common.pleaseWait') : t('account.changePassword')}
+            {busy ? t('common.pleaseWait') : hasPassword ? t('account.changePassword') : t('account.setPassword')}
           </button>
         </div>
       </form>
+    </section>
+  );
+};
+
+/** Shows whether a Google account is connected, and connects one for one-click sign-in. */
+export const GoogleAccountCard: React.FC = () => {
+  const { t } = useTranslation();
+  const clientId = useGoogleClientId();
+  const [googleEmail, setGoogleEmail] = useState<string | null | undefined>(undefined);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiRequest<AccountInfo>('/api/account').then((info) => setGoogleEmail(info.account.googleEmail ?? null)).catch(() => setGoogleEmail(undefined));
+  }, []);
+
+  if (!clientId || googleEmail === undefined) return null;
+
+  const connect = async (credential: string) => {
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await apiRequest<{ googleEmail: string }>('/api/account/google', { method: 'POST', body: JSON.stringify({ credential }) });
+      setGoogleEmail(result.googleEmail);
+      setMessage(t('account.googleConnectedNow'));
+    } catch (connectError) {
+      setError(connectError instanceof Error ? connectError.message : t('login.genericError'));
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('account.googleTitle')}</h2>
+      {error && <p role="alert" className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-sm text-rose-800">{error}</p>}
+      {message && <p role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-sm text-emerald-900">{message}</p>}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 text-sm text-slate-700">
+          {googleEmail ? t('account.googleConnected', { email: googleEmail }) : t('account.googleNotConnected')}
+        </p>
+        <div className="w-full max-w-xs">
+          <GoogleSignInButton clientId={clientId} text="continue_with" onCredential={(credential) => void connect(credential)} />
+        </div>
+      </div>
     </section>
   );
 };

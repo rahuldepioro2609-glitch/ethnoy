@@ -23,6 +23,7 @@ const PRIVACY: Section[] = [
     heading: 'What we collect',
     items: [
       'Account details: your login ID, name, email address and password. Passwords are stored only as a one-way hash; we cannot read them.',
+      'If you choose to sign in with Google: your Google account ID, name and email address, which Google shares with us at your request. We never receive your Google password.',
       'Application details: name, father\'s or guardian\'s name, date of birth, gender, category, email address, mobile number, exam city preferences, question-paper language, photograph and signature.',
       'Examination records: your admit card details (roll number, centre, timings), check-in status recorded by your exam centre, online exam answers and scores, practice test attempts and published results.',
       'Answer-key objections: your reasons, cited references and any supporting document you upload.',
@@ -34,7 +35,7 @@ const PRIVACY: Section[] = [
   {
     heading: 'Why we use it',
     items: [
-      'To create and secure your account and let you sign in, verify your email and reset your password.',
+      'To create and secure your account and let you sign in (including with Google, if you choose), verify your email and reset your password.',
       'To process exam applications, issue admit cards, run online exams and publish results.',
       'To let your exam centre confirm your identity on exam day.',
       'To review answer-key objections and helpdesk requests.',
@@ -48,7 +49,7 @@ const PRIVACY: Section[] = [
       'ELTNOY officials who administer examinations, for the purposes above.',
       'Your allotted exam centre, which sees your name, father\'s or guardian\'s name, photograph, signature, roll number and exam timing when it checks you in.',
       'Anyone who has your application number, date of birth and exam code can open your admit card and published result, so keep these details private.',
-      'Service providers that host the website and database, and send email on our behalf, only as needed to provide those services.',
+      'Service providers that host the website and database, and send email on our behalf, only as needed to provide those services. If you use "Continue with Google", Google handles that sign-in under its own privacy policy.',
     ],
     paragraphs: ['We do not sell your information, show advertising, or use third-party analytics or tracking on this website.'],
   },
