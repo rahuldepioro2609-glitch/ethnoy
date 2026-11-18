@@ -207,7 +207,6 @@ const messages: Partial<Dictionary> = {
   'nav.mobile.answerKeys': "উত্তরমালা",
   'nav.mobile.results': "ফলাফল",
   'nav.mobile.institute': "প্রতিষ্ঠান",
-  'nav.mobile.admin': "অ্যাডমিন",
   'nav.mobile.contact': "যোগাযোগ",
   'nav.mobile.about': "পরিচিতি",
   'nav.homeAria': "ELTNOY পরীক্ষা পোর্টাল হোম",
@@ -236,8 +235,6 @@ const messages: Partial<Dictionary> = {
   'nav.instituteZone': "প্রতিষ্ঠান বিভাগ",
   'nav.instituteDashboard': "প্রতিষ্ঠান প্রশাসন ড্যাশবোর্ড",
   'nav.instituteDashboardHint': "স্লট, বায়োমেট্রিক ও পরিদর্শক",
-  'nav.officialDashboard': "অফিসিয়াল প্রশাসন ড্যাশবোর্ড",
-  'nav.officialDashboardHint': "আবেদন, সহায়তা টিকিট ও ফলাফল",
   'nav.results': "ফলাফল",
   'nav.contact': "যোগাযোগ করুন",
   'nav.about': "আমাদের সম্পর্কে",
@@ -727,7 +724,7 @@ const messages: Partial<Dictionary> = {
   'feedback.err.descriptionShort': "অনুগ্রহ করে সমস্যা বা পরামর্শ অন্তত ১০টি অক্ষরে বর্ণনা করুন।",
   'feedback.err.descriptionLong': "বিবরণ ১০০০ অক্ষরের বেশি হতে পারে না।",
   'feedback.err.email': "অনুগ্রহ করে একটি বৈধ ইমেল ঠিকানা দিন।",
-  'instituteForms.badge': "ELTNOY সুপার অ্যাডমিন অনুমোদিত",
+  'instituteForms.badge': "ELTNOY অনুমোদিত",
   'instituteForms.titlePlain': "প্রতিষ্ঠানের পরীক্ষা ও শিক্ষক ফর্ম",
   'instituteForms.intro': "প্রতিষ্ঠান ও ফর্ম পর্যালোচনার পরেই এই তালিকা প্রকাশিত হয়। আবেদন প্রতিষ্ঠানই পরিচালনা করে।",
   'instituteForms.apply': "প্রতিষ্ঠানের ওয়েবসাইটে আবেদন করুন",
@@ -789,6 +786,12 @@ const messages: Partial<Dictionary> = {
   'footer.terms': "ব্যবহারের শর্তাবলি",
   'legal.lastUpdated': "সর্বশেষ হালনাগাদ: {date}",
   'legal.englishOnly': "এই নথিটি শুধু ইংরেজিতে পাওয়া যায়।",
+  'account.changePasswordTitle': "পাসওয়ার্ড পরিবর্তন করুন",
+  'account.changePassword': "পাসওয়ার্ড বদলান",
+  'account.passwordChanged': "পাসওয়ার্ড বদলানো হয়েছে। অন্য ডিভাইস থেকে সাইন আউট করা হয়েছে।",
+  'account.passwordChangeFailed': "আপনার পাসওয়ার্ড বদলানো যায়নি।",
+  'notFound.title': "পৃষ্ঠাটি পাওয়া যায়নি",
+  'notFound.text': "আপনি যে পৃষ্ঠাটি খুঁজছেন সেটি নেই।",
 };
 
 export default messages;

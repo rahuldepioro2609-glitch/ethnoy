@@ -233,3 +233,71 @@ export const AccountEmailCard: React.FC = () => {
     </section>
   );
 };
+
+/** Lets a signed-in user change their password; other devices are signed out. */
+export const ChangePasswordCard: React.FC = () => {
+  const { t } = useTranslation();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setMessage(null);
+    if (next !== confirm) {
+      setError(t('account.passwordsDiffer'));
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      await apiRequest('/api/account/password', { method: 'PUT', body: JSON.stringify({ currentPassword: current, newPassword: next }) });
+      setMessage(t('account.passwordChanged'));
+      setCurrent(''); setNext(''); setConfirm('');
+    } catch (changeError) {
+      setError(changeError instanceof Error ? changeError.message : t('account.passwordChangeFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const field = 'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm font-normal';
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('account.changePasswordTitle')}</h2>
+      {error && <p role="alert" className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-sm text-rose-800">{error}</p>}
+      {message && <p role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-sm text-emerald-900">{message}</p>}
+      <form onSubmit={(event) => void submit(event)} className="mt-3 grid gap-3 sm:grid-cols-3 sm:items-end">
+        <label className="text-sm font-semibold text-slate-700">{t('account.currentPassword')}
+          <input type="password" required autoComplete="current-password" value={current} onChange={(event) => setCurrent(event.target.value)} className={field} />
+        </label>
+        <label className="text-sm font-semibold text-slate-700">{t('account.newPassword')}
+          <input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={next} onChange={(event) => setNext(event.target.value)} className={field} />
+        </label>
+        <label className="text-sm font-semibold text-slate-700">{t('account.confirmPassword')}
+          <input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} className={field} />
+        </label>
+        <div className="sm:col-span-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-slate-500">{t('account.passwordRule')}</p>
+          <button type="submit" disabled={busy} className="rounded-lg bg-[#0B2E59] px-4 py-2.5 text-xs font-bold text-white disabled:opacity-60">
+            {busy ? t('common.pleaseWait') : t('account.changePassword')}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+};
+
+export const NotFoundPage: React.FC<{ onHome: () => void }> = ({ onHome }) => {
+  const { t } = useTranslation();
+  return (
+    <Shell onHome={onHome}>
+      <h1 className="text-2xl font-extrabold text-[#0B2E59]">{t('notFound.title')}</h1>
+      <p className="mt-3 text-sm text-slate-700">{t('notFound.text')}</p>
+      <button onClick={onHome} className="mt-6 w-full rounded-lg bg-[#0B2E59] px-4 py-3 text-sm font-bold text-white">{t('account.backToPortal')}</button>
+    </Shell>
+  );
+};

@@ -209,7 +209,6 @@ const en = {
   'nav.mobile.answerKeys': "Answer Keys",
   'nav.mobile.results': "Results",
   'nav.mobile.institute': "Institute",
-  'nav.mobile.admin': "Admin",
   'nav.mobile.contact': "Contact",
   'nav.mobile.about': "About",
   'nav.homeAria': "ELTNOY Examination Portal home",
@@ -238,8 +237,6 @@ const en = {
   'nav.instituteZone': "Institute Zone",
   'nav.instituteDashboard': "Institute Administration Dashboard",
   'nav.instituteDashboardHint': "Slots, Biometrics & Proctors",
-  'nav.officialDashboard': "Official Administration Dashboard",
-  'nav.officialDashboardHint': "Applications, support tickets and results",
   'nav.results': "Results",
   'nav.contact': "Contact Us",
   'nav.about': "About Us",
@@ -729,7 +726,7 @@ const en = {
   'feedback.err.descriptionShort': "Please provide at least 10 characters describing the issue or suggestion.",
   'feedback.err.descriptionLong': "Description cannot exceed 1000 characters.",
   'feedback.err.email': "Please provide a valid email address.",
-  'instituteForms.badge': "Approved by ELTNOY Super Admin",
+  'instituteForms.badge': "Approved by ELTNOY",
   'instituteForms.titlePlain': "Institute exam & teacher forms",
   'instituteForms.intro': "These listings are published only after institute and form review. Applications are handled by the institute.",
   'instituteForms.apply': "Apply on institute website",
@@ -791,6 +788,12 @@ const en = {
   'footer.terms': "Terms of use",
   'legal.lastUpdated': "Last updated: {date}",
   'legal.englishOnly': "This document is available in English only.",
+  'account.changePasswordTitle': "Change password",
+  'account.changePassword': "Change password",
+  'account.passwordChanged': "Password changed. Other devices have been signed out.",
+  'account.passwordChangeFailed': "Could not change your password.",
+  'notFound.title': "Page not found",
+  'notFound.text': "The page you were looking for does not exist.",
 } as const;
 
 export default en;

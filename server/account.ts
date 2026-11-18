@@ -2,11 +2,12 @@ import bcrypt from 'bcryptjs';
 import type { Express } from 'express';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
-import { hashSessionToken, newSessionToken, requireAuth, requireRoles } from './auth.js';
+import { hashSessionToken, newSessionToken, requireAuth, requireRoles, type AuthenticatedRequest } from './auth.js';
 import { pool } from './db.js';
 import { passwordChangedEmail, passwordResetEmail, portalLink, verificationEmail } from './emailTemplates.js';
 import { accountRecoveryLimiter, asyncRoute, getUser, sendValidationError } from './http.js';
 import { isEmailEnabled, sendEmailInBackground } from './mailer.js';
+import { primaryOrigin, staffPortalAllowed } from './hosting.js';
 
 export const PASSWORD_RESET_MINUTES = 30;
 export const VERIFICATION_HOURS = 48;
@@ -17,7 +18,7 @@ type Queryable = Pick<PoolClient, 'query'>;
 const GENERIC_RESET_MESSAGE = 'If the login ID and email match an account, a reset link has been sent. Check your inbox and spam folder. The link expires in 30 minutes.';
 
 function appOrigin(): string {
-  return process.env.APP_ORIGIN || 'http://localhost:3000';
+  return primaryOrigin();
 }
 
 /** Creates a single-use token, invalidating older unused tokens of the same purpose. */
@@ -55,8 +56,8 @@ export async function sendVerificationEmail(userId: string, name: string, email:
 const tokenSchema = z.string().trim().min(32).max(128).regex(/^[A-Za-z0-9_-]+$/);
 
 export function registerAccountRoutes(app: Express): void {
-  app.get('/api/auth/options', (_request, response) => {
-    response.json({ emailEnabled: isEmailEnabled() });
+  app.get('/api/auth/options', (request, response) => {
+    response.json({ emailEnabled: isEmailEnabled(), staffPortal: staffPortalAllowed(request.get('host')) });
   });
 
   app.post('/api/auth/password-reset/request', accountRecoveryLimiter(), asyncRoute(async (request, response) => {
@@ -197,6 +198,35 @@ export function registerAccountRoutes(app: Express): void {
     const { rows: updated } = await pool.query('SELECT email_verified_at FROM users WHERE id = $1', [user.id]);
     if (!updated[0].email_verified_at) await sendVerificationEmail(user.id, user.name, email);
     response.json({ email, emailVerified: Boolean(updated[0].email_verified_at) });
+  }));
+
+  app.put('/api/account/password', requireAuth, accountRecoveryLimiter(), asyncRoute(async (request, response) => {
+    const parsed = z.object({
+      currentPassword: z.string().min(1).max(128),
+      newPassword: z.string().min(12, 'Use at least 12 characters.').max(128),
+    }).safeParse(request.body);
+    if (!parsed.success) {
+      sendValidationError(response, parsed.error);
+      return;
+    }
+    const user = getUser(request)!;
+    const { rows } = await pool.query('SELECT password_hash, contact_email, display_name, login_id FROM users WHERE id = $1', [user.id]);
+    if (!rows[0] || !(await bcrypt.compare(parsed.data.currentPassword, rows[0].password_hash))) {
+      response.status(403).json({ error: 'Your current password is incorrect.' });
+      return;
+    }
+    if (parsed.data.newPassword === parsed.data.currentPassword) {
+      response.status(400).json({ error: 'Choose a password different from your current one.' });
+      return;
+    }
+    await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [user.id, await bcrypt.hash(parsed.data.newPassword, 12)]);
+    // Sign out every other device; keep this session.
+    await pool.query(
+      'UPDATE auth_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL AND token_hash <> $2',
+      [user.id, (request as AuthenticatedRequest).sessionTokenHash],
+    );
+    sendEmailInBackground(rows[0].contact_email, passwordChangedEmail(rows[0].display_name, rows[0].login_id));
+    response.json({ message: 'Password changed. Other devices have been signed out.' });
   }));
 
   app.post('/api/account/email/verification', requireAuth, accountRecoveryLimiter(), asyncRoute(async (request, response) => {

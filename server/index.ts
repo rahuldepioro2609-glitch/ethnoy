@@ -18,6 +18,7 @@ import { registerObjectionRoutes } from './objections.js';
 import { registerAccountRoutes, sendVerificationEmail } from './account.js';
 import { applicationConfirmationEmail, portalLink } from './emailTemplates.js';
 import { sendEmailInBackground } from './mailer.js';
+import { allowedOrigins, blockStaffPortalOnPublicHosts, bootstrapAdmin, canonicalHostRedirect, primaryOrigin, staffPortalAllowed } from './hosting.js';
 import { DEFAULT_EXAM_TIME_ZONE, isValidTimeZone } from '../src/utils/examSchedule.js';
 
 const app = express();
@@ -33,12 +34,14 @@ app.use(helmet({
     },
   },
 }));
+app.use(canonicalHostRedirect);
+app.use(blockStaffPortalOnPublicHosts);
 app.use(express.json({ limit: '32kb' }));
 app.use((request, response, next) => {
   const origin = request.get('origin');
-  const allowedOrigin = process.env.APP_ORIGIN;
+  const origins = allowedOrigins();
   const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
-  if (isMutation && origin && allowedOrigin && origin !== allowedOrigin) {
+  if (isMutation && origin && origins.length && !origins.includes(origin)) {
     response.status(403).json({ error: 'Request origin is not allowed.' });
     return;
   }
@@ -1402,6 +1405,11 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
   }
 
   const { loginId, password, role } = parsed.data;
+  if (role === 'official' && !staffPortalAllowed(request.get('host'))) {
+    // Same answer as a wrong password, so the public site does not reveal the staff portal.
+    response.status(401).json({ error: 'Invalid login ID, password, or account type.' });
+    return;
+  }
   const { rows } = await pool.query(
     'SELECT id, login_id, display_name, role, password_hash, account_status FROM users WHERE login_id = $1 AND role = $2',
     [loginId.toUpperCase(), role],
@@ -1593,7 +1601,7 @@ app.post('/api/applications', requireAuth, requireRoles('candidate'), publicWrit
     applicationNumber: String(rows[0].application_number),
     examCode: String(exam.rows[0].code),
     examName: String(exam.rows[0].name),
-    dashboardUrl: portalLink(process.env.APP_ORIGIN || 'http://localhost:3000', '/dashboard/candidate'),
+    dashboardUrl: portalLink(primaryOrigin(), '/dashboard/candidate'),
   }));
   response.status(201).json({
     application: {
@@ -2079,6 +2087,7 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
 
 async function startApi(): Promise<void> {
   await pool.query('SELECT 1');
+  await bootstrapAdmin(pool);
   const server = app.listen(port, '0.0.0.0', () => {
     console.log(`ELTNOY API listening on port ${port}.`);
   });

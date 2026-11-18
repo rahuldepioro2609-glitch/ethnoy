@@ -19,7 +19,7 @@ import { NoticeDetailModal } from './components/NoticeDetailModal';
 import { ExamApplyModal } from './components/ExamApplyModal';
 import { CandidateResultModal } from './components/CandidateResultModal';
 import { AnswerKeyObjectionModal } from './components/AnswerKeyObjectionModal';
-import { ResetPasswordPage, VerifyEmailPage } from './components/AccountPages';
+import { NotFoundPage, ResetPasswordPage, VerifyEmailPage } from './components/AccountPages';
 import { PrivacyPage, TermsPage } from './components/LegalPages';
 import { FeedbackSlideOut } from './components/FeedbackSlideOut';
 import { ExamItem, NoticeItem } from './data/portalData';
@@ -104,6 +104,14 @@ export default function App() {
   const [loggedInUser, setLoggedInUser] = useState<{ name: string; role: string; id: string; accountRole: PortalRole } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [systemAlert, setSystemAlert] = useState<string | null>(null);
+
+  // null until known; false on public hosts, where staff pages must not render.
+  const [staffPortal, setStaffPortal] = useState<boolean | null>(null);
+  useEffect(() => {
+    apiRequest<{ staffPortal?: boolean }>('/api/auth/options')
+      .then((options) => setStaffPortal(options.staffPortal !== false))
+      .catch(() => setStaffPortal(false));
+  }, []);
 
   const navigate = (path: string) => {
     window.history.pushState({}, '', path);
@@ -274,9 +282,6 @@ export default function App() {
       case 'result':
         handleOpenResults();
         break;
-      case 'ai-proctoring':
-        navigate('/login/official');
-        break;
       case 'grievance':
         handleOpenGrievance();
         break;
@@ -354,6 +359,14 @@ export default function App() {
     return <ResetPasswordPage onHome={() => navigate('/')} onSignIn={(role) => { setLoggedInUser(null); navigate(`/login/${role}`); }} />;
   }
 
+  const isStaffPath = /^\/(login|dashboard)\/official\/?$/i.test(pathname);
+  if (isStaffPath && staffPortal === null) {
+    return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('common.loading')}</main>;
+  }
+  if (isStaffPath && staffPortal === false) {
+    return <NotFoundPage onHome={() => navigate('/')} />;
+  }
+
   if (pathname === '/privacy') {
     return <PrivacyPage onHome={() => navigate('/')} />;
   }
@@ -422,7 +435,6 @@ export default function App() {
         onOpenResultsPortal={handleOpenResults}
         onOpenAnswerKeyPortal={handleOpenAnswerKey}
         onOpenInstituteDashboard={() => navigate('/login/center')}
-        onOpenAiProctoring={() => navigate('/login/official')}
         examinations={publishedExams}
         activeNavTab={activeNavTab}
         setActiveNavTab={setActiveNavTab}
