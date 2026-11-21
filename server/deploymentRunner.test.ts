@@ -26,7 +26,7 @@ const synthetic: Record<string, string> = {
   ELTNOY_SECRETS_DIR: '/synthetic/secrets-marker-r1', POSTGRES_DB: 'syntheticdbmarkerr', POSTGRES_USER: 'syntheticusermarkerr',
   POSTGRES_TLS_DIR: '/synthetic/pg-tls-r', POSTGRES_CA_FILE: '/synthetic/ca-r.crt', PUBLIC_TLS_CERT_DIR: '/synthetic/public-r',
   ADMIN_TLS_CERT_DIR: '/synthetic/admin-r', ELTNOY_API_IMAGE: 'localhost/eltnoy-api:runner-marker', NGINX_IMAGE: 'synthetic.invalid/nginx@sha256:1',
-  POSTGRES_IMAGE: 'synthetic.invalid/postgres@sha256:1', PUBLIC_BIND_ADDRESS: '10.250.0.20', ADMIN_BIND_ADDRESS: '10.251.0.2',
+  POSTGRES_IMAGE: 'synthetic.invalid/postgres@sha256:1', PUBLIC_BIND_MODE: 'private-eni', PUBLIC_BIND_ADDRESS: '10.250.0.20', ADMIN_BIND_ADDRESS: '10.251.0.2',
   WIREGUARD_INTERFACE_ADDRESS: '10.251.0.2', PUBLIC_APP_SUBNET: '172.30.10.0/24', ADMIN_APP_SUBNET: '172.30.20.0/24',
   NGINX_PUBLIC_APP_ADDRESS: '172.30.10.2', NGINX_ADMIN_APP_ADDRESS: '172.30.20.2', API_PUBLIC_APP_ADDRESS: '172.30.10.3',
   API_ADMIN_APP_ADDRESS: '172.30.20.3',

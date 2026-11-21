@@ -578,11 +578,22 @@ test('shell entry: exported shell functions (BASH_FUNC_*) are refused before any
   const body = `() { : > '${sentinel}'; }`;
   for (const name of ['BASH_FUNC_env%%', 'BASH_FUNC_export%%', 'BASH_FUNC_printf%%', 'BASH_FUNC_[%%', 'BASH_FUNC_command%%', 'BASH_FUNC_unset%%']) {
     const result = runShell('scripts/eltnoy-deploy.sh', ['--deployment-env-file', envFile, 'start', '--dry-run'], { [name]: body });
-    // bash (macOS /bin/sh) refuses in the shell (exit 2); dash imports no functions and the Node
-    // entry refuses the variable (exit 1). Either way nothing is planned or run.
-    assert.equal(result.status, shellIsBash ? 2 : 1, `${name}: ${result.stderr}`);
-    assert.match(result.stderr, /exported shell functions/, name);
-    assert.doesNotMatch(result.stdout, /preflight passed|would run|running/, name);
+    if (shellIsBash) {
+      // bash (macOS /bin/sh) imports exported functions, so the script refuses in the shell (exit 2)
+      // before anything is planned or run.
+      assert.equal(result.status, 2, `${name}: ${result.stderr}`);
+      assert.match(result.stderr, /exported shell functions/, name);
+      assert.doesNotMatch(result.stdout, /preflight passed|would run|running/, name);
+    } else {
+      // dash (Debian/Ubuntu /bin/sh) imports no functions and drops variables whose names are not
+      // valid identifiers, such as BASH_FUNC_name%%, before running Node. Either the Node entry
+      // refuses the variable (exit 1) or it never receives it and the dry run proceeds without it.
+      assert.ok(
+        result.status === 0 || (result.status === 1 && /exported shell functions/.test(result.stderr)),
+        `${name}: ${result.status} ${result.stderr}`,
+      );
+    }
+    // The security property on every shell: the imported function never runs.
     assert.ok(!existsSync(sentinel), `${name}: the imported function never ran`);
   }
 });

@@ -151,14 +151,15 @@ class MemoryMfaStore implements AdminMfaStore {
 // Request/response doubles
 // ---------------------------------------------------------------------------------------------
 
-interface Outcome { status: number; body: Record<string, unknown>; cookies: string[]; sessionCookie: string | null; error?: unknown }
+interface Outcome { status: number; body: Record<string, unknown>; cookies: string[]; sessionCookie: string | null; headers: Record<string, string>; error?: unknown }
 
 function invoke(handler: RequestHandler, request: Partial<Request>): Promise<Outcome> {
   return new Promise((resolve) => {
-    const outcome: Outcome = { status: 200, body: {}, cookies: [], sessionCookie: null };
+    const outcome: Outcome = { status: 200, body: {}, cookies: [], sessionCookie: null, headers: {} };
     const response = {
       headersSent: false,
       status(code: number) { outcome.status = code; return response; },
+      set(name: string, value: string) { outcome.headers[name] = value; return response; },
       json(body: Record<string, unknown>) { outcome.body = body; resolve(outcome); return response; },
       append(name: string, value: string) { if (name === 'Set-Cookie') outcome.cookies.push(value); return response; },
       cookie(name: string, value: string) { outcome.cookies.push(`${name}=${value}`); if (name === auth.SESSION_COOKIE) outcome.sessionCookie = value; return response; },
@@ -326,7 +327,7 @@ function freshStore(): MemoryMfaStore {
 /** Creates a challenge for `userId` through the real password-step helper; returns its raw token. */
 async function startChallenge(userId: string): Promise<string> {
   const outcome = await new Promise<Outcome>((resolve) => {
-    const out: Outcome = { status: 200, body: {}, cookies: [], sessionCookie: null };
+    const out: Outcome = { status: 200, body: {}, cookies: [], sessionCookie: null, headers: {} };
     const response = { append(name: string, value: string) { if (name === 'Set-Cookie') out.cookies.push(value); return response; } };
     void mfa.beginAdminMfaSignIn(response as unknown as Response, userId).then((body) => resolve({ ...out, body: body as Record<string, unknown> }));
   });
@@ -485,6 +486,7 @@ test('enrollment: password, ticket, challenge cookie and TOTP complete without a
     } as Partial<Request>);
     assert.equal(start.status, 200);
     assert.equal(typeof start.body.secretBase32, 'string');
+    assert.equal(start.headers['Cache-Control'], 'no-store', 'the response carrying the TOTP secret is never cached');
     assert.equal(start.sessionCookie, null, 'enrollment start issues no application session');
     assert.equal(database.sessions, 0);
     assert.equal(database.factorChallengeId, auth.hashSessionToken(challengeToken),
