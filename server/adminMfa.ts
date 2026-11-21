@@ -341,8 +341,14 @@ export async function beginAdminMfaEnrolment(
 
 const enrolVerifyBody = z.object({ code: z.string().regex(/^[0-9]{6}$/) }).strict();
 
+/** MFA responses can carry a TOTP setup secret or a sign-in result: never store them in any cache. */
+function preventCaching(response: Response): void {
+  response.set('Cache-Control', 'no-store');
+}
+
 export function createAdminMfaEnrolStartHandler(): RequestHandler {
   return (request: Request, response: Response, next: NextFunction) => {
+    preventCaching(response);
     void (async () => {
       const token = readCookie(request, ADMIN_MFA_COOKIE);
       if (typeof token !== 'string' || !CHALLENGE_TOKEN.test(token)) {
@@ -365,6 +371,7 @@ export function createAdminMfaEnrolStartHandler(): RequestHandler {
 export function createAdminMfaEnrolConfirmHandler(options: AdminMfaVerifyOptions = {}): RequestHandler {
   const clock = options.clock ?? Date.now;
   return (request: Request, response: Response, next: NextFunction) => {
+    preventCaching(response);
     void (async () => {
       const token = readCookie(request, ADMIN_MFA_COOKIE);
       if (typeof token !== 'string' || !CHALLENGE_TOKEN.test(token)) {
@@ -550,6 +557,7 @@ export interface AdminMfaVerifyOptions {
 export function createAdminMfaVerifyHandler(options: AdminMfaVerifyOptions = {}): RequestHandler {
   const clock = options.clock ?? Date.now;
   return (request: Request, response: Response, next: NextFunction) => {
+    preventCaching(response);
     void (async () => {
       const token = readCookie(request, ADMIN_MFA_COOKIE);
       if (typeof token !== 'string' || !CHALLENGE_TOKEN.test(token)) {
