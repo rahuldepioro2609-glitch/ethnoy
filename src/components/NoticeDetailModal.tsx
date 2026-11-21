@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { useEscapeKey } from './useEscapeKey';
 import { X, FileText, Download, Printer, Calendar, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import { NoticeItem } from '../data/portalData';
 
@@ -15,6 +16,7 @@ interface NoticeDetailModalProps {
 import { useTranslation } from '../i18n';
 
 export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, onClose }) => {
+  useEscapeKey(Boolean(notice), onClose);
   const { t } = useTranslation();
   if (!notice) return null;
 
@@ -33,7 +35,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150">
+    <div role="dialog" aria-modal="true" aria-labelledby="notice-detail-title" className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden my-6 flex flex-col">
         {/* Navy Header */}
         <div className="bg-[#0F172A] text-white px-6 py-4 flex items-center justify-between">
@@ -78,7 +80,7 @@ export const NoticeDetailModal: React.FC<NoticeDetailModalProps> = ({ notice, on
             <span className="text-slate-400 text-[11px] font-mono">{notice.fileSize}</span>
           </div>
 
-          <h3 className="text-base font-extrabold text-slate-900 leading-snug">
+          <h3 id="notice-detail-title" className="text-base font-extrabold text-slate-900 leading-snug">
             {notice.title}
           </h3>
 

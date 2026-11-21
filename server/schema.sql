@@ -381,3 +381,11 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS auth_tokens_user_idx ON auth_tokens(user_id, purpose, created_at DESC);
+
+-- Sign in with Google: the Google account (stable "sub" ID) connected to a student or institute.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_email text;
+-- false for accounts created through Google until the user sets a password.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS has_password boolean NOT NULL DEFAULT true;
+CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;
+CREATE INDEX IF NOT EXISTS users_role_email_idx ON users (role, lower(contact_email));

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Bell,
   Calendar,
@@ -30,8 +30,13 @@ interface ThreeColumnDataGridProps {
   examinations: ExamItem[];
   notices: NoticeItem[];
   filterExamId?: string;
+  /** Shows every exam again after the list was narrowed from the menu or search. */
+  onClearExamFilter?: () => void;
   isAuthenticated: boolean;
 }
+
+/** Notices and exams shown before "View all" is pressed. */
+const NOTICE_PREVIEW_COUNT = 6;
 
 export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   onOpenNotice,
@@ -40,12 +45,17 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   examinations,
   notices,
   filterExamId,
+  onClearExamFilter,
   isAuthenticated,
 }) => {
   const { t } = useTranslation();
-  const displayedExams = filterExamId
+  const [showAllNotices, setShowAllNotices] = useState(false);
+  const visibleNotices = showAllNotices ? notices : notices.slice(0, NOTICE_PREVIEW_COUNT);
+  const [showAllExams, setShowAllExams] = useState(false);
+  const matchingExams = filterExamId
     ? examinations.filter((e) => e.id === filterExamId)
     : examinations;
+  const displayedExams = filterExamId || showAllExams ? matchingExams : matchingExams.slice(0, NOTICE_PREVIEW_COUNT);
 
   const renderQuickTileIcon = (type: string) => {
     switch (type) {
@@ -80,18 +90,22 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                   {t('grid.latestNotifications')}
                 </h3>
               </div>
-              <button
-                onClick={() => notices[0] && onOpenNotice(notices[0])}
-                disabled={!notices.length}
-                className="text-xs text-sky-200 hover:text-white transition-colors"
-              >
-                {t('grid.viewAll')}
-              </button>
+              {notices.length > NOTICE_PREVIEW_COUNT && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllNotices((value) => !value)}
+                  aria-expanded={showAllNotices}
+                  aria-controls="public-notice-list"
+                  className="text-xs text-sky-200 hover:text-white transition-colors"
+                >
+                  {showAllNotices ? t('grid.showLatest') : t('grid.viewAllCount', { count: notices.length })}
+                </button>
+              )}
             </div>
 
             {/* Notifications Rows */}
-            <div className="divide-y divide-slate-100 flex-1">
-              {notices.map((notice) => (
+            <div id="public-notice-list" className="divide-y divide-slate-100 flex-1">
+              {visibleNotices.map((notice) => (
                 <button
                   key={notice.id}
                   type="button"
@@ -134,13 +148,20 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                   {t('grid.upcomingExams')}
                 </h3>
               </div>
-              <button
-                onClick={() => displayedExams[0] && onOpenExamApply(displayedExams[0])}
-                disabled={!displayedExams.length}
-                className="text-xs text-emerald-100 hover:text-white transition-colors"
-              >
-                {t('grid.viewAll')}
-              </button>
+              {filterExamId && onClearExamFilter ? (
+                <button type="button" onClick={onClearExamFilter} className="text-xs text-emerald-100 hover:text-white transition-colors">
+                  {t('grid.viewAll')}
+                </button>
+              ) : matchingExams.length > NOTICE_PREVIEW_COUNT && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllExams((value) => !value)}
+                  aria-expanded={showAllExams}
+                  className="text-xs text-emerald-100 hover:text-white transition-colors"
+                >
+                  {showAllExams ? t('grid.showLatest') : t('grid.viewAllCount', { count: matchingExams.length })}
+                </button>
+              )}
             </div>
 
             {/* Examinations Cards */}

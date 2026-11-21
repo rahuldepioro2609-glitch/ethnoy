@@ -82,7 +82,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150">
+    <div role="dialog" aria-modal="true" aria-labelledby="exam-apply-title" className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden my-6 flex flex-col">
         {/* Header */}
         <div className="bg-[#059669] text-white px-6 py-4 flex items-center justify-between">
@@ -94,7 +94,7 @@ export const ExamApplyModal: React.FC<ExamApplyModalProps> = ({ exam, onClose, o
               <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-100">
                 {t('apply.windowLabel')}
               </span>
-              <h2 className="text-sm font-bold truncate max-w-sm">
+              <h2 id="exam-apply-title" className="text-sm font-bold truncate max-w-sm">
                 {exam.name} ({exam.code})
               </h2>
             </div>

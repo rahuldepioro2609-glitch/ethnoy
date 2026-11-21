@@ -552,6 +552,7 @@ export default function App() {
           examinations={publishedExams}
           notices={portalNotices}
           filterExamId={selectedExamFilter}
+          onClearExamFilter={() => setSelectedExamFilter(undefined)}
           isAuthenticated={Boolean(loggedInUser)}
         />
 

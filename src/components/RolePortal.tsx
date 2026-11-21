@@ -28,10 +28,11 @@ import {
 import { apiRequest } from '../api';
 import { OnlineExamRunner } from './OnlineExamRunner';
 import { AdminObjectionsPanel } from './AdminObjectionsPanel';
-import { AccountEmailCard, ChangePasswordCard } from './AccountPages';
+import { AccountEmailCard, ChangePasswordCard, GoogleAccountCard } from './AccountPages';
 import { useTranslation } from '../i18n';
 import { translate } from '../i18n/translate';
 import { BrandLogo } from './BrandLogo';
+import { GoogleSignInButton, useGoogleClientId } from './GoogleSignInButton';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
 
@@ -106,10 +107,27 @@ interface RoleLoginPageProps {
 
 type LoginMode = 'signin' | 'register' | 'forgot';
 
-const inputClass = 'w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100';
+const inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100';
+
+const ROLE_BENEFITS: Record<'candidate' | 'center', string[]> = {
+  candidate: ['login.benefit.candidate1', 'login.benefit.candidate2', 'login.benefit.candidate3'],
+  center: ['login.benefit.center1', 'login.benefit.center2', 'login.benefit.center3'],
+};
+
+/** 0 = empty, 1 = weak, 2 = fair, 3 = strong. Only a hint; the server enforces the 12-character minimum. */
+export function passwordStrength(password: string): 0 | 1 | 2 | 3 {
+  if (!password) return 0;
+  if (password.length < 12) return 1;
+  const kinds = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(password)).length;
+  return password.length >= 16 || kinds >= 3 ? 3 : 2;
+}
+
+const strengthStyles = ['bg-slate-200', 'bg-rose-500', 'bg-amber-500', 'bg-emerald-600'];
+const strengthKeys = ['', 'login.strengthWeak', 'login.strengthFair', 'login.strengthStrong'];
 
 export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLogin }) => {
   const { t } = useTranslation();
+  const googleClientId = useGoogleClientId();
   const [mode, setMode] = useState<LoginMode>('signin');
   const [loginId, setLoginId] = useState('');
   const [fullName, setFullName] = useState('');
@@ -118,18 +136,45 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   const [registeredAddress, setRegisteredAddress] = useState('');
   const [website, setWebsite] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [instituteSubmitted, setInstituteSubmitted] = useState(false);
 
   const isRegistering = mode === 'register';
+  const strength = passwordStrength(password);
+  const passwordsDiffer = isRegistering && confirmPassword.length > 0 && confirmPassword !== password;
+
+  const signInWithGoogle = async (credential: string) => {
+    if (!role || role === 'official') return;
+    setError(null);
+    setMessage(null);
+    setIsSubmitting(true);
+    try {
+      const { user } = await apiRequest<{ user: { loginId: string; name: string; role: PortalRole } }>('/api/auth/google', {
+        method: 'POST',
+        body: JSON.stringify({ credential, role }),
+      });
+      onLogin({ id: user.loginId, name: user.name, role: user.role });
+    } catch (googleError) {
+      setError(googleError instanceof Error ? googleError.message : t('login.genericError'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!role) return;
     setError(null);
     setMessage(null);
+    if (isRegistering && password !== confirmPassword) {
+      setError(t('login.passwordMismatch'));
+      return;
+    }
     setIsSubmitting(true);
     try {
       if (mode === 'forgot') {
@@ -147,7 +192,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
         });
         onLogin({ id: user.loginId, name: user.name, role: user.role });
       } else if (mode === 'register' && role === 'center') {
-        const { message: registrationMessage } = await apiRequest<{ message: string }>('/api/center/register', {
+        await apiRequest<{ message: string }>('/api/center/register', {
           method: 'POST',
           body: JSON.stringify({
             loginId: loginId.trim(),
@@ -159,9 +204,9 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
             password,
           }),
         });
-        setMessage(registrationMessage);
         setPassword('');
-        setMode('signin');
+        setConfirmPassword('');
+        setInstituteSubmitted(true);
       } else {
         const { user } = await apiRequest<{
           user: { id: string; loginId: string; name: string; role: PortalRole };
@@ -181,6 +226,10 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   const changeMode = (next: LoginMode) => {
     setMode(next);
     setIsPasswordVisible(false);
+    setPassword('');
+    setConfirmPassword('');
+    setAcceptedTerms(false);
+    setInstituteSubmitted(false);
     setError(null);
     setMessage(null);
   };
@@ -188,6 +237,8 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   const detail = role ? roleDetails[role] : null;
   const Icon = detail?.icon ?? GraduationCap;
   const accent = accentClasses[detail?.accent ?? 'emerald'];
+  const focusRing = role === 'center' ? 'focus:border-sky-600 focus:ring-sky-100' : '';
+  const linkColor = role === 'center' ? 'text-sky-800' : 'text-emerald-800';
 
   const heading = mode === 'forgot'
     ? t('login.forgotTitle')
@@ -198,7 +249,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
     ? t('login.forgotIntro')
     : isRegistering
       ? t(role === 'candidate' ? 'login.registerStudentIntro' : 'login.registerInstituteIntro')
-      : t(role === 'candidate' ? 'login.signInStudentIntro' : 'login.signInStaffIntro');
+      : t(role === 'candidate' ? 'login.signInStudentIntro' : role === 'center' ? 'login.signInInstituteIntro' : 'login.signInStaffIntro');
   const submitLabel = isSubmitting
     ? t('common.pleaseWait')
     : mode === 'forgot'
@@ -206,6 +257,20 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
       : isRegistering
         ? t(role === 'candidate' ? 'login.createAccount' : 'login.submitForApproval')
         : t('login.secureSignIn');
+  // Google can create student accounts; institutes must register for approval first, then may sign in with Google.
+  const showGoogle = Boolean(googleClientId) && role !== 'official' && (mode === 'signin' || (isRegistering && role === 'candidate'));
+
+  const passwordToggle = (
+    <button
+      type="button"
+      onClick={() => setIsPasswordVisible((visible) => !visible)}
+      aria-label={isPasswordVisible ? t('account.hidePassword') : t('account.showPassword')}
+      aria-pressed={isPasswordVisible}
+      className="absolute inset-y-0 right-0 inline-flex items-center justify-center px-3 text-slate-500 hover:text-[#0B2E59] focus-visible:outline-2 focus-visible:outline-emerald-600"
+    >
+      {isPasswordVisible ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+    </button>
+  );
 
   return (
     <main className="min-h-screen bg-[#eef5fa] text-slate-900">
@@ -220,7 +285,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
         </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-16">
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-14">
         {!role ? (
           <>
             <div className="mx-auto mb-9 max-w-2xl text-center">
@@ -231,12 +296,17 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
             <div className="mx-auto grid max-w-3xl gap-5 md:grid-cols-2">
               {(['candidate', 'center'] as const).map((item) => {
                 const RoleIcon = roleDetails[item].icon;
-                const colorClass = item === 'candidate' ? 'bg-emerald-600' : item === 'center' ? 'bg-sky-600' : 'bg-blue-800';
+                const colorClass = item === 'candidate' ? 'bg-emerald-600' : 'bg-sky-600';
                 return (
                   <a key={item} href={rolePath[item]} className="group rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
                     <div className={`mb-5 inline-flex rounded-xl p-3 text-white ${colorClass}`}><RoleIcon className="h-7 w-7" /></div>
                     <h2 className="text-xl font-extrabold text-[#0B2E59]">{t(`role.${item}.title`)}</h2>
                     <p className="mt-2 min-h-12 text-sm leading-6 text-slate-600">{t(`role.${item}.subtitle`)}</p>
+                    <ul className="mt-4 space-y-1.5">
+                      {ROLE_BENEFITS[item].map((key) => (
+                        <li key={key} className="flex items-start gap-2 text-xs text-slate-600"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />{t(key)}</li>
+                      ))}
+                    </ul>
                     <span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-emerald-700">{t('login.continue')} <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" /></span>
                   </a>
                 );
@@ -244,104 +314,231 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
             </div>
           </>
         ) : (
-          <div className="mx-auto grid max-w-4xl overflow-hidden rounded-3xl bg-white shadow-xl md:grid-cols-[0.9fr_1.1fr]">
-            <section className={`flex min-h-64 flex-col justify-between ${accent.panel} p-8 text-white sm:p-10`}>
-              <div>
+          <div className="mx-auto grid max-w-5xl overflow-hidden rounded-3xl bg-white shadow-xl md:grid-cols-[0.85fr_1.15fr]">
+            <section className={`relative flex flex-col justify-between overflow-hidden ${accent.panel} p-7 text-white sm:p-10`}>
+              <div aria-hidden className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-white/10" />
+              <div aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 h-72 w-72 rounded-full bg-black/10" />
+              <div className="relative">
                 <div className="inline-flex rounded-2xl bg-white/15 p-3"><Icon className="h-8 w-8" /></div>
-                <p className="mt-8 text-sm font-bold uppercase tracking-[0.18em] text-white/75">{t(`role.${role}.label`)}</p>
+                <p className="mt-6 text-sm font-bold uppercase tracking-[0.18em] text-white/75">{t(`role.${role}.label`)}</p>
                 <h1 className="mt-2 text-3xl font-black">{t(`role.${role}.title`)}</h1>
                 <p className="mt-3 max-w-sm text-sm leading-6 text-white/85">{t(`role.${role}.subtitle`)}</p>
+                {role !== 'official' && (
+                  <ul className="mt-7 hidden space-y-3 md:block">
+                    {ROLE_BENEFITS[role].map((key) => (
+                      <li key={key} className="flex items-start gap-3 text-sm text-white/90">
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-white" />
+                        <span>{t(key)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              <p className="mt-8 text-xs text-white/70">{t('login.tagline')}</p>
+              <div className="relative mt-8 hidden md:block">
+                <p className="flex items-center gap-2 text-xs text-white/80"><ShieldCheck className="h-4 w-4" /> {t('login.secureNote')}</p>
+                <p className="mt-3 text-xs text-white/60">{t('login.tagline')}</p>
+              </div>
             </section>
-            <section className="p-7 sm:p-10">
-              <a href="/login" className="mb-7 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('login.allOptions')}</a>
-              <h2 className="text-2xl font-extrabold text-[#0B2E59]">{heading}</h2>
-              <p className="mt-1 text-sm text-slate-500">{intro}</p>
-              <form className="mt-7 space-y-5" onSubmit={(event) => void submit(event)}>
-                {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
-                {message && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{message}</div>}
-                {isRegistering && (
-                  <div>
-                    <label htmlFor="role-register-name" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                      {t(role === 'candidate' ? 'login.studentName' : 'login.instituteName')}
-                    </label>
-                    <input id="role-register-name" autoComplete={role === 'candidate' ? 'name' : 'organization'} value={fullName} onChange={(event) => setFullName(event.target.value)} required minLength={2} maxLength={120} className={inputClass} />
-                  </div>
-                )}
-                <div>
-                  <label htmlFor="role-login-id" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                    {role === 'candidate'
-                      ? t(isRegistering ? 'login.chooseStudentId' : 'login.studentId')
-                      : t(isRegistering ? 'login.chooseInstituteId' : 'login.staffId')}
-                  </label>
-                  <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={isRegistering ? 4 : 1} maxLength={isRegistering ? 50 : 100} pattern={isRegistering ? '[A-Za-z0-9._\\-]+' : undefined} title={isRegistering ? t('login.idRule') : undefined} className={`${inputClass} uppercase`} />
+            <section className="p-6 sm:p-10">
+              <a href="/login" className="mb-6 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('login.allOptions')}</a>
+
+              {mode !== 'forgot' && role !== 'official' && !instituteSubmitted && (
+                <div role="tablist" aria-label={t(`role.${role}.title`)} className="mb-6 grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-sm font-bold">
+                  {(['signin', 'register'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      aria-selected={mode === tab}
+                      onClick={() => mode !== tab && changeMode(tab)}
+                      className={`rounded-lg px-3 py-2 transition ${mode === tab ? 'bg-white text-[#0B2E59] shadow-sm' : 'text-slate-500 hover:text-[#0B2E59]'}`}
+                    >
+                      {t(tab === 'signin' ? 'login.tabSignIn' : 'login.tabRegister')}
+                    </button>
+                  ))}
                 </div>
-                {isRegistering || mode === 'forgot' ? (
-                  <div>
-                    <label htmlFor="role-email" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                      {t(role === 'center' ? 'login.instituteEmail' : 'login.email')}
-                    </label>
-                    <input id="role-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} className={inputClass} />
-                    {isRegistering && role === 'candidate' && <p className="mt-1 text-xs text-slate-500">{t('login.emailHint')}</p>}
-                  </div>
-                ) : null}
-                {isRegistering && role === 'center' && (
-                  <>
+              )}
+
+              {instituteSubmitted ? (
+                <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center">
+                  <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-600" />
+                  <h2 className="mt-3 text-xl font-extrabold text-[#0B2E59]">{t('login.instituteSubmittedTitle')}</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{t('login.instituteSubmittedBody')}</p>
+                  <button type="button" onClick={() => changeMode('signin')} className={`mt-5 inline-flex items-center justify-center gap-2 rounded-lg ${accent.button} px-5 py-2.5 text-sm font-bold text-white hover:brightness-110`}>
+                    {t('login.backToSignIn')}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <h2 className="text-2xl font-extrabold text-[#0B2E59]">{heading}</h2>
+                  <p className="mt-1 text-sm text-slate-500">{intro}</p>
+
+                  {error && <div role="alert" className="mt-5 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
+                  {message && <div role="status" className="mt-5 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{message}</div>}
+
+                  {showGoogle && googleClientId && (
+                    <div className="mt-6">
+                      <GoogleSignInButton
+                        clientId={googleClientId}
+                        text={isRegistering ? 'signup_with' : 'continue_with'}
+                        onCredential={(credential) => void signInWithGoogle(credential)}
+                      />
+                      {role === 'center' && <p className="mt-2 text-center text-xs text-slate-500">{t('login.googleInstituteHint')}</p>}
+                      <div className="my-5 flex items-center gap-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <span className="h-px flex-1 bg-slate-200" />{t('login.or')}<span className="h-px flex-1 bg-slate-200" />
+                      </div>
+                    </div>
+                  )}
+
+                  <form className={`${showGoogle ? '' : 'mt-6'} space-y-4`} onSubmit={(event) => void submit(event)}>
+                    {isRegistering && (
+                      <div>
+                        <label htmlFor="role-register-name" className="mb-1.5 block text-sm font-semibold text-slate-700">
+                          {t(role === 'candidate' ? 'login.studentName' : 'login.instituteName')}
+                        </label>
+                        <input id="role-register-name" autoComplete={role === 'candidate' ? 'name' : 'organization'} value={fullName} onChange={(event) => setFullName(event.target.value)} required minLength={2} maxLength={120} className={`${inputClass} ${focusRing}`} />
+                      </div>
+                    )}
                     <div>
-                      <label htmlFor="institute-registration-number" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.registrationNumber')}</label>
-                      <input id="institute-registration-number" value={registrationNumber} onChange={(event) => setRegistrationNumber(event.target.value)} required minLength={3} maxLength={100} className={inputClass} />
+                      <label htmlFor="role-login-id" className="mb-1.5 block text-sm font-semibold text-slate-700">
+                        {mode === 'signin' && role !== 'official'
+                          ? t('login.idOrEmail')
+                          : role === 'candidate'
+                            ? t(isRegistering ? 'login.chooseStudentId' : 'login.studentId')
+                            : t(isRegistering ? 'login.chooseInstituteId' : 'login.staffId')}
+                      </label>
+                      <input
+                        id="role-login-id"
+                        autoComplete="username"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        value={loginId}
+                        onChange={(event) => setLoginId(event.target.value)}
+                        required
+                        minLength={isRegistering ? 4 : 1}
+                        maxLength={isRegistering ? 50 : 254}
+                        pattern={isRegistering ? '[A-Za-z0-9._\\-]+' : undefined}
+                        title={isRegistering ? t('login.idRule') : undefined}
+                        placeholder={mode === 'signin' && role !== 'official' ? t(role === 'center' ? 'login.idOrEmailPlaceholderInstitute' : 'login.idOrEmailPlaceholder') : undefined}
+                        className={`${inputClass} ${focusRing}`}
+                      />
+                      {isRegistering && <p className="mt-1 text-xs text-slate-500">{t('login.idRule')}</p>}
                     </div>
-                    <div>
-                      <label htmlFor="institute-registered-address" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.registeredAddress')}</label>
-                      <textarea id="institute-registered-address" value={registeredAddress} onChange={(event) => setRegisteredAddress(event.target.value)} required minLength={10} maxLength={500} rows={3} className={inputClass} />
-                    </div>
-                    <div>
-                      <label htmlFor="institute-website" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.website')}</label>
-                      <input id="institute-website" type="url" value={website} onChange={(event) => setWebsite(event.target.value)} maxLength={200} placeholder="https://example.org" className={inputClass} />
-                    </div>
-                  </>
-                )}
-                {mode !== 'forgot' && (
-                  <div>
-                    <div className="mb-1.5 flex items-center justify-between gap-2">
-                      <label htmlFor="role-login-password" className="block text-sm font-semibold text-slate-700">{t('login.password')}</label>
-                      {mode === 'signin' && (
-                        <button type="button" onClick={() => changeMode('forgot')} className="text-xs font-bold text-emerald-800 hover:underline">{t('login.forgotLink')}</button>
-                      )}
-                    </div>
-                    <div className="relative">
-                      <input id="role-login-password" type={isPasswordVisible ? 'text' : 'password'} autoComplete={isRegistering ? 'new-password' : 'current-password'} minLength={isRegistering ? 12 : undefined} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required className={`${inputClass} pr-12`} />
-                      <button
-                        type="button"
-                        onClick={() => setIsPasswordVisible((visible) => !visible)}
-                        aria-label={isPasswordVisible ? t('account.hidePassword') : t('account.showPassword')}
-                        aria-pressed={isPasswordVisible}
-                        className="absolute inset-y-0 right-0 inline-flex items-center justify-center px-3 text-slate-500 hover:text-[#0B2E59] focus-visible:outline-2 focus-visible:outline-emerald-600"
-                      >
-                        {isPasswordVisible ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    {isRegistering || mode === 'forgot' ? (
+                      <div>
+                        <label htmlFor="role-email" className="mb-1.5 block text-sm font-semibold text-slate-700">
+                          {t(role === 'center' ? 'login.instituteEmail' : 'login.email')}
+                        </label>
+                        <input id="role-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} placeholder="name@example.com" className={`${inputClass} ${focusRing}`} />
+                        {isRegistering && role === 'candidate' && <p className="mt-1 text-xs text-slate-500">{t('login.emailHint')}</p>}
+                      </div>
+                    ) : null}
+                    {isRegistering && role === 'center' && (
+                      <>
+                        <div>
+                          <label htmlFor="institute-registration-number" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.registrationNumber')}</label>
+                          <input id="institute-registration-number" value={registrationNumber} onChange={(event) => setRegistrationNumber(event.target.value)} required minLength={3} maxLength={100} className={`${inputClass} ${focusRing}`} />
+                        </div>
+                        <div>
+                          <label htmlFor="institute-registered-address" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.registeredAddress')}</label>
+                          <textarea id="institute-registered-address" autoComplete="street-address" value={registeredAddress} onChange={(event) => setRegisteredAddress(event.target.value)} required minLength={10} maxLength={500} rows={3} className={`${inputClass} ${focusRing}`} />
+                        </div>
+                        <div>
+                          <label htmlFor="institute-website" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.website')}</label>
+                          <input id="institute-website" type="url" autoComplete="url" value={website} onChange={(event) => setWebsite(event.target.value)} maxLength={200} placeholder="https://example.org" className={`${inputClass} ${focusRing}`} />
+                        </div>
+                      </>
+                    )}
+                    {mode !== 'forgot' && (
+                      <div>
+                        <div className="mb-1.5 flex items-center justify-between gap-2">
+                          <label htmlFor="role-login-password" className="block text-sm font-semibold text-slate-700">{t('login.password')}</label>
+                          {mode === 'signin' && (
+                            <button type="button" onClick={() => changeMode('forgot')} className={`text-xs font-bold ${linkColor} hover:underline`}>{t('login.forgotLink')}</button>
+                          )}
+                        </div>
+                        <div className="relative">
+                          <input
+                            id="role-login-password"
+                            type={isPasswordVisible ? 'text' : 'password'}
+                            autoComplete={isRegistering ? 'new-password' : 'current-password'}
+                            minLength={isRegistering ? 12 : undefined}
+                            maxLength={128}
+                            value={password}
+                            onChange={(event) => setPassword(event.target.value)}
+                            required
+                            placeholder={mode === 'signin' ? t('login.passwordPlaceholder') : undefined}
+                            className={`${inputClass} ${focusRing} pr-12`}
+                          />
+                          {passwordToggle}
+                        </div>
+                        {isRegistering && (
+                          <>
+                            <div className="mt-2 flex items-center gap-2" aria-live="polite">
+                              <div className="grid flex-1 grid-cols-3 gap-1">
+                                {[1, 2, 3].map((level) => (
+                                  <span key={level} className={`h-1.5 rounded-full ${strength >= level ? strengthStyles[strength] : 'bg-slate-200'}`} />
+                                ))}
+                              </div>
+                              {strength > 0 && <span className="w-14 text-right text-xs font-semibold text-slate-500">{t(strengthKeys[strength])}</span>}
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500">{t('account.passwordRule')}</p>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {isRegistering && (
+                      <div>
+                        <label htmlFor="role-confirm-password" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.confirmPassword')}</label>
+                        <input
+                          id="role-confirm-password"
+                          type={isPasswordVisible ? 'text' : 'password'}
+                          autoComplete="new-password"
+                          maxLength={128}
+                          value={confirmPassword}
+                          onChange={(event) => setConfirmPassword(event.target.value)}
+                          required
+                          aria-invalid={passwordsDiffer}
+                          aria-describedby={passwordsDiffer ? 'role-confirm-password-error' : undefined}
+                          className={`${inputClass} ${focusRing} ${passwordsDiffer ? 'border-rose-400' : ''}`}
+                        />
+                        {passwordsDiffer && <p id="role-confirm-password-error" className="mt-1 text-xs font-semibold text-rose-700">{t('login.passwordMismatch')}</p>}
+                      </div>
+                    )}
+                    {isRegistering && (
+                      <label className="flex items-start gap-2.5 text-sm text-slate-600">
+                        <input type="checkbox" checked={acceptedTerms} onChange={(event) => setAcceptedTerms(event.target.checked)} required className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 accent-emerald-700" />
+                        <span>{t('login.agreeTerms')}</span>
+                      </label>
+                    )}
+                    <button type="submit" disabled={isSubmitting} className={`flex w-full items-center justify-center gap-2 rounded-lg ${accent.button} px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:brightness-110 disabled:cursor-wait disabled:opacity-60`}>
+                      <LockKeyhole className="h-4 w-4" /> {submitLabel}
+                    </button>
+                  </form>
+
+                  {mode === 'forgot' && (
+                    <>
+                      <button type="button" onClick={() => changeMode('signin')} className={`mt-5 w-full text-center text-sm font-bold ${linkColor} hover:underline`}>{t('login.backToSignIn')}</button>
+                      <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">{t('login.forgotNoEmail')}</p>
+                    </>
+                  )}
+                  {mode !== 'forgot' && role !== 'official' && (
+                    <p className="mt-5 text-center text-sm text-slate-600">
+                      <button type="button" onClick={() => changeMode(isRegistering ? 'signin' : 'register')} className={`font-bold ${linkColor} hover:underline`}>
+                        {isRegistering ? t('login.haveAccount') : t(role === 'candidate' ? 'login.newStudent' : 'login.newInstitute')}
                       </button>
-                    </div>
-                    {isRegistering && <p className="mt-1 text-xs text-slate-500">{t('account.passwordRule')}</p>}
-                  </div>
-                )}
-                <button type="submit" disabled={isSubmitting} className={`flex w-full items-center justify-center gap-2 rounded-lg ${accent.button} px-4 py-3 text-sm font-bold text-white transition hover:brightness-110 disabled:cursor-wait disabled:opacity-60`}>
-                  <LockKeyhole className="h-4 w-4" /> {submitLabel}
-                </button>
-              </form>
-              {mode === 'forgot' ? (
-                <button type="button" onClick={() => changeMode('signin')} className="mt-5 w-full text-center text-sm font-bold text-emerald-800 hover:underline">{t('login.backToSignIn')}</button>
-              ) : role !== 'official' && (
-                <button type="button" onClick={() => changeMode(isRegistering ? 'signin' : 'register')} className="mt-5 w-full text-center text-sm font-bold text-emerald-800 hover:underline">
-                  {isRegistering ? t('login.haveAccount') : t(role === 'candidate' ? 'login.newStudent' : 'login.newInstitute')}
-                </button>
+                    </p>
+                  )}
+                  {role === 'center' && isRegistering && (
+                    <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">{t('login.instituteNotice')}</p>
+                  )}
+                </>
               )}
-              {mode === 'forgot' && (
-                <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">{t('login.forgotNoEmail')}</p>
-              )}
-              {role === 'center' && isRegistering && (
-                <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">{t('login.instituteNotice')}</p>
-              )}
+              <p className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-slate-100 pt-5 text-xs text-slate-500">
+                <a href="/terms" className="hover:text-[#0B2E59] hover:underline">{t('login.termsLink')}</a>
+                <span aria-hidden>·</span>
+                <a href="/privacy" className="hover:text-[#0B2E59] hover:underline">{t('login.privacyLink')}</a>
+              </p>
             </section>
           </div>
         )}
@@ -1236,6 +1433,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               <div className="mt-5 grid gap-5 lg:grid-cols-2">
                 {user.role !== 'center' && <AccountEmailCard />}
                 <ChangePasswordCard />
+                {user.role !== 'official' && <GoogleAccountCard />}
               </div>
             )}
 

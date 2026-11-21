@@ -235,7 +235,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
+    <div role="dialog" aria-modal="true" aria-label="CBT practice test" className="fixed inset-0 z-50 overflow-hidden bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 w-full max-w-6xl h-[92vh] flex flex-col overflow-hidden">
         {/* CBT Navigation Header */}
         <div className="bg-[#0F172A] text-white px-4 sm:px-6 py-3 flex items-center justify-between border-b border-slate-800 shrink-0">
