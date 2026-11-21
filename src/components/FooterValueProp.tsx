@@ -39,7 +39,7 @@ export const FooterValueProp: React.FC<FooterValuePropProps> = ({
 
   return (
     <footer className="bg-white border-t border-slate-200">
-      <section id="about-eltnoy" className="scroll-mt-56 border-b border-slate-200 bg-[#F4F8FC] px-4 py-12 sm:px-6 lg:px-8">
+      <section id="about-eltnoy" className="scroll-mt-56 border-b border-slate-200 bg-[#F7F6F1] px-4 py-12 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-[1440px]">
           <div className="mx-auto max-w-3xl text-center">
             <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-bold uppercase tracking-wider text-emerald-800">

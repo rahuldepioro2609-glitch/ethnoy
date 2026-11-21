@@ -502,6 +502,8 @@ const SESSION_REQUIREMENTS: Readonly<Record<string, SessionRequirement>> = Objec
 export interface SurfaceGate {
   configure(config: SurfaceRuntimeConfig): void;
   isConfigured(): boolean;
+  /** Hostnames are public routing metadata; exposing them lets the SPA reach the matching role surface. */
+  getConfig(): SurfaceRuntimeConfig | null;
   /** Called once both listeners are listening (D9). */
   markReady(): void;
   /** L-1: called on startup failure, fatal listener failure and shutdown. */
@@ -662,6 +664,7 @@ export function createSurfaceGate(options: SurfaceGateOptions = {}): SurfaceGate
       runtime = { config, ranges: { public: [...proxies.ranges.public], admin: [...proxies.ranges.admin] } };
     },
     isConfigured: () => runtime !== null,
+    getConfig: () => runtime?.config ?? null,
     markReady() {
       ready = true;
     },

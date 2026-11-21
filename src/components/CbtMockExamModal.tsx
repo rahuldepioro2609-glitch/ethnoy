@@ -243,7 +243,7 @@ export const CbtMockExamModal: React.FC<CbtMockExamModalProps> = ({ isOpen, onCl
                 </span>
               </div>
               <div className="text-[11px] text-slate-400">
-                Candidate: <strong>AARAV SHARMA (NEA-2026-88419)</strong> · Node: CBT-TERM-04
+                Candidate: <strong>Practice session</strong> · Node: CBT-TERM-04
               </div>
             </div>
           </div>

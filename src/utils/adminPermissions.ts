@@ -25,6 +25,8 @@ export interface AdminPermissions {
   canPublishAnswerKeys: boolean;
   /** A-05: publish or unpublish online exam papers. */
   canPublishOnlineExams: boolean;
+  /** A-17: publish or unpublish public notices. */
+  canPublishNotices: boolean;
   /** A-16: import corrections over published content (returns it to draft). */
   canCorrectPublishedContent: boolean;
   /** A-06 / P3-D1: interim admit-card imports and assignments. */
@@ -52,6 +54,7 @@ export function adminPermissions(user: PermissionSubject | null | undefined): Ad
     canPublishResults: superAdmin,
     canPublishAnswerKeys: superAdmin,
     canPublishOnlineExams: superAdmin,
+    canPublishNotices: superAdmin,
     canCorrectPublishedContent: superAdmin,
     canWriteAdmitCards: superAdmin,
     canAccessHelpdesk: superAdmin,
@@ -67,6 +70,7 @@ export function adminPermissions(user: PermissionSubject | null | undefined): Ad
 export const SUPER_ADMIN_ONLY_TEXT = {
   wallet: 'Recording wallet credits and handling withdrawals is limited to Super Admins. Balances are shown read-only.',
   publishing: 'Publishing and unpublishing is limited to Super Admins.',
+  noticePublishing: 'Notice publishing and unpublishing is limited to Super Admins. All Officials may save drafts.',
   draftImports: 'You can import new drafts. Correcting content that is already published needs a Super Admin, and returns it to draft.',
   admitCards: 'Admit-card uploads publish cards immediately, so they are limited to Super Admins until a draft step is available.',
   helpdesk: 'Helpdesk tickets are limited to Super Admins.',
@@ -77,7 +81,8 @@ export const SUPER_ADMIN_ONLY_TEXT = {
 
 export const ADMIN_DASHBOARD_TABS = [
   'overview', 'institutes', 'institution-documents', 'exams', 'notices', 'admit-cards', 'online-exams',
-  'answer-keys', 'applications', 'feedback', 'attempts', 'results', 'data-export',
+  'answer-keys', 'applications', 'feedback', 'attempts', 'results', 'data-export', 'platform-staff',
+  'institute-verification',
 ] as const;
 
 export type AdminDashboardTab = (typeof ADMIN_DASHBOARD_TABS)[number];
@@ -87,6 +92,10 @@ export function canSeeAdminTab(user: PermissionSubject | null | undefined, tab: 
   const permissions = adminPermissions(user);
   if (tab === 'feedback') return permissions.canAccessHelpdesk;
   if (tab === 'data-export') return permissions.canExportData;
+  // SM-1: Platform Staff management and Organization Staff activation (Q115) are Super Admin only.
+  if (tab === 'platform-staff') return isSuperAdminOfficial(user);
+  // AUTH-1 / SM-2: institutional verification and suspension of Institutes are Super Admin only.
+  if (tab === 'institute-verification') return isSuperAdminOfficial(user);
   return true;
 }
 

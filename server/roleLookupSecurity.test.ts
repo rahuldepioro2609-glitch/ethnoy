@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { expectedOrigin, type Surface } from './surface.js';
+import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
 
 process.env.DATABASE_URL ??= 'postgresql://test:test@127.0.0.1:5432/test';
 
@@ -151,7 +152,7 @@ test('sensitive data export enforces authentication and Super Admin permission',
       display_name: 'Synthetic Official',
       role: 'official',
       account_status: 'approved',
-      is_super_admin: false,
+      is_super_admin: false, ...VERIFIED_PORTAL_SESSION,
     }],
     [hashSessionToken(superAdminToken), {
       id: 'approved-super-admin',
@@ -159,7 +160,7 @@ test('sensitive data export enforces authentication and Super Admin permission',
       display_name: 'Synthetic Super Admin',
       role: 'official',
       account_status: 'approved',
-      is_super_admin: true,
+      is_super_admin: true, ...VERIFIED_PORTAL_SESSION,
     }],
   ]);
   const poolWithMock = pool as unknown as {
@@ -284,6 +285,7 @@ test('candidate admit-card and result lookups enforce session role and ownership
       display_name: 'Candidate A',
       role: 'candidate',
       account_status: 'approved',
+      ...VERIFIED_PORTAL_SESSION,
     }],
     [hashSessionToken(candidateBToken), {
       id: 'candidate-b',
@@ -291,6 +293,7 @@ test('candidate admit-card and result lookups enforce session role and ownership
       display_name: 'Candidate B',
       role: 'candidate',
       account_status: 'approved',
+      ...VERIFIED_PORTAL_SESSION,
     }],
     [hashSessionToken(centerToken), {
       id: 'center-a',
@@ -298,6 +301,7 @@ test('candidate admit-card and result lookups enforce session role and ownership
       display_name: 'Center A',
       role: 'center',
       account_status: 'approved',
+      ...VERIFIED_PORTAL_SESSION,
     }],
   ]);
   const poolWithMock = pool as unknown as {

@@ -12,7 +12,7 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import { AuthenticatedRequest, getTrustedRequestSurface, registrationPasswordSchema, SESSION_TTL_MS, hashSessionToken, newSessionToken, requireAuth, requireRoles, requireSuperAdmin, setSessionCookie } from './auth.js';
 import { createListenerRequestHandler, ListenerStartupError, NO_RECOVERY_HANDLE, resolveActiveListeners, startApiRuntime, type ApiRuntime, type ListenerServer, type ListenerSpec } from './apiListeners.js';
-import { isLoginRoleAllowedOnSurface, type Surface } from './surface.js';
+import { disclosedSurfaceHostnames, isLoginRoleAllowedOnSurface, type Surface } from './surface.js';
 import { createExpressProxyTrust, createRejectionLog, createSurfaceGate, loadSurfaceRuntimeConfig, type SurfaceGate } from './surfaceEnforcement.js';
 import { addWorkbookSheet, readWorkbookSheet, WORKBOOK_MIME_TYPE } from './adminWorkbook.js';
 import {
@@ -44,6 +44,40 @@ import {
 } from './onlineExamRecovery.js';
 import { DEFAULT_EXAM_TIME_ZONE, isValidTimeZone } from '../src/utils/examSchedule.js';
 import { createInstitutionDocumentsRouter } from './institutionDocuments.js';
+import { createPlatformStaffRouters, createPostgresPlatformStaffStore } from './platformStaff.js';
+import {
+  authVerificationStore,
+  createAuthVerificationRouter,
+  nextInstituteChannel,
+  abuseProtectionReadiness,
+  emailProtectionGate,
+  emailProtectionReadiness,
+  initializeAbuseProtection,
+  sendFlowError,
+  smsProtectionGate,
+  startInstituteVerification,
+  startStudentRegistration,
+  startVerification,
+  VerificationFlowError,
+} from './authVerification.js';
+import {
+  configureVerificationServices,
+  EMAIL_PROVIDER_NOT_CONFIGURED,
+  normaliseEmail,
+  normaliseMobile,
+  OTP_PROVIDER_NOT_CONFIGURED,
+  providerStatus,
+  resolveVerificationServices,
+  studentLoginIdForMobile,
+  verificationServices,
+} from './verificationProviders.js';
+// Registers the owner-selected Resend email and Twilio SMS adapters. Channels still fail closed
+// unless each provider's secret/configuration and the independent abuse limits are present.
+import './verificationProviderAdapters.js';
+import { compareAgainstDummyHash } from './staffCommon.js';
+import { beginAdminMfaSignIn, createAdminMfaEnrolConfirmHandler, createAdminMfaEnrolStartHandler, createAdminMfaVerifyHandler, sendAdminMfaError } from './adminMfa.js';
+import { createOrgStaffRouters, createPostgresOrgStaffStore } from './organizationStaff.js';
+import { createInstituteVerificationAdminRouter } from './instituteVerificationAdmin.js';
 import {
   createInstitutionSubmissionRouter,
   createSubmissionCycle,
@@ -181,7 +215,7 @@ app.post('/api/admin/notices', requireAuth, requireRoles('official'), asyncRoute
   const { rows } = await pool.query(
     `INSERT INTO portal_notices
      (id, title, category, summary, full_content, reference_number, is_published, created_by, published_at)
-     VALUES ($1, $2, $3, $4, $5, $6, true, $7, now())
+     VALUES ($1, $2, $3, $4, $5, $6, false, $7, NULL)
      RETURNING id, title, category, summary, full_content, reference_number,
                is_published, created_at, published_at`,
     [randomUUID(), parsed.data.title, parsed.data.category, parsed.data.summary,
@@ -190,7 +224,7 @@ app.post('/api/admin/notices', requireAuth, requireRoles('official'), asyncRoute
   response.status(201).json({ notice: rows[0] });
 }));
 
-app.patch('/api/admin/notices/:id', requireAuth, requireRoles('official'), asyncRoute(async (request, response) => {
+app.patch('/api/admin/notices/:id', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({ isPublished: z.boolean() }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
@@ -877,7 +911,27 @@ app.post('/api/online-exams/:examCode/start', requireAuth, requireRoles('candida
     [randomUUID(), user?.id, examCode.data.toUpperCase(), questions.rows[0].duration_minutes],
   );
   if (!rows[0]) {
-    response.status(409).json({ error: 'An attempt has already been started or submitted for this exam.' });
+    const concurrentAttempt = await pool.query(
+      `SELECT id, started_at, expires_at, submitted_at, responses
+       FROM online_exam_attempts WHERE user_id = $1 AND exam_code = $2`,
+      [user?.id, examCode.data.toUpperCase()],
+    );
+    const active = concurrentAttempt.rows[0];
+    if (!active || active.submitted_at || new Date(active.expires_at).getTime() <= Date.now()) {
+      response.status(409).json({ error: 'An attempt has already been started or submitted for this exam.' });
+      return;
+    }
+    response.json({
+      attempt: active,
+      responses: active.responses ?? {},
+      questions: questions.rows.map(({ question_number, section, question_text, options, points }) => ({
+        questionNumber: question_number,
+        section,
+        questionText: question_text,
+        options,
+        points,
+      })),
+    });
     return;
   }
   response.status(201).json({
@@ -1150,6 +1204,20 @@ app.get('/api/health', asyncRoute(async (request, response) => {
   await pool.query('SELECT 1');
   response.json({ status: 'ok', database: 'connected' });
 }));
+
+// Routing metadata for the SPA, used to move a role flow to the surface that owns its session cookie.
+// Public surfaces (Marketing, Exam, Institution) answer with the public hostnames only: the private
+// Admin hostname is never disclosed to the public site. The Admin surface answers with all four.
+app.get('/api/surface-hostnames', (request, response) => {
+  const config = surfaceGate.getConfig();
+  const surface = getTrustedRequestSurface(request);
+  if (!config || !surface) {
+    response.status(503).json({ error: 'Surface configuration is unavailable.' });
+    return;
+  }
+  response.set('Cache-Control', 'private, max-age=300');
+  response.json({ hostnames: disclosedSurfaceHostnames(surface, config.hostnames) });
+});
 
 app.get('/api/exams', asyncRoute(async (_request, response) => {
   const { rows } = await pool.query(
@@ -1724,45 +1792,62 @@ const accountRegistrationSchema = z.object({
 });
 
 app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response) => {
-  const parsed = accountRegistrationSchema.safeParse(request.body);
+  // AUTH-1 (strict): registration is closed, before any write, until mobile OTP is available.
+  if (!providerStatus().sms.available) {
+    response.status(503).json({ error: 'Student registration is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED });
+    return;
+  }
+  // Mobile-first Student accounts: no Student ID is chosen. Any `loginId` sent by an older client is
+  // ignored (stripped by the schema).
+  const parsed = z.object({
+    name: accountRegistrationSchema.shape.name,
+    password: registrationPasswordSchema,
+    mobile: z.string().trim().max(20),
+  }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
     return;
   }
-  const { loginId, name, password } = parsed.data;
+  const mobile = normaliseMobile(parsed.data.mobile);
+  if (!mobile) {
+    response.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_MOBILE' });
+    return;
+  }
+  const { name, password } = parsed.data;
+  // AUTH C1: no permanent account (and no login ID) exists until the mobile's owner verifies the code.
+  // A temporary, non-exclusive registration claim holds the details; the account, with the
+  // mobile-derived login ID, is created atomically at verification. The answer is the same 202 for a
+  // new, an already registered and an already claimed number. No session before verification.
   const passwordHash = await bcrypt.hash(password, 12);
-  const { rows } = await pool.query(
-    `INSERT INTO users (id, login_id, display_name, role, password_hash, account_status)
-     VALUES ($1, $2, $3, 'candidate', $4, 'approved')
-     ON CONFLICT (login_id) DO NOTHING
-     RETURNING id, login_id, display_name, role`,
-    [randomUUID(), loginId.toUpperCase(), name, passwordHash],
-  );
-  if (!rows[0]) {
-    response.status(409).json({ error: 'That student login ID is already registered. Choose another.' });
-    return;
-  }
-  const token = newSessionToken();
   try {
-    await pool.query(
-      `INSERT INTO auth_sessions (token_hash, user_id, expires_at)
-       VALUES ($1, $2, now() + ($3 * interval '1 second'))`,
-      [hashSessionToken(token), rows[0].id, sessionSeconds],
-    );
-  } catch {
-    // Session row could not be persisted — do not issue a cookie.
-    response.status(503).json({ error: 'Account created but session could not be started. Please sign in.' });
-    return;
+    response.status(202).json(await startStudentRegistration(response, { mobile, displayName: name, passwordHash }));
+  } catch (error) {
+    if (!sendFlowError(response, error)) throw error;
   }
-  setSessionCookie(response, token);
-  response.status(201).json({
-    user: { id: rows[0].id, loginId: rows[0].login_id, name: rows[0].display_name, role: rows[0].role },
-  });
 }));
 
 app.post('/api/center/register', authLimiter, asyncRoute(async (request, response) => {
+  // AUTH-1 (strict): closed, before any write, until both mobile and email verification exist.
+  const providers = providerStatus();
+  if (!providers.sms.available || !providers.email.available) {
+    response.status(503).json({
+      error: 'Institute registration is unavailable: mobile and email verification are not configured.',
+      code: providers.sms.available ? EMAIL_PROVIDER_NOT_CONFIGURED : OTP_PROVIDER_NOT_CONFIGURED,
+    });
+    return;
+  }
+  // AUTH C1.1-b: Institute registration always sends an unverified-destination SMS. Closed before any
+  // write while the SMS limits are unset, or (advisory) while the unverified or total budget is used up.
+  try {
+    const gate = await smsProtectionGate('unverified');
+    if (gate) throw gate;
+  } catch (error) {
+    if (!sendFlowError(response, error)) throw error;
+    return;
+  }
   const parsed = accountRegistrationSchema.extend({
     contactEmail: z.string().trim().email().max(254),
+    contactMobile: z.string().trim().max(20),
     registrationNumber: z.string().trim().min(3).max(100),
     registeredAddress: z.string().trim().min(10).max(500),
     website: z.string().trim().max(200).optional().or(z.literal('')),
@@ -1771,6 +1856,28 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     sendValidationError(response, parsed.error);
     return;
   }
+  const contactMobile = normaliseMobile(parsed.data.contactMobile);
+  const normalisedEmail = normaliseEmail(parsed.data.contactEmail);
+  if (!contactMobile || !normalisedEmail) {
+    response.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number and email address.', code: 'INVALID_CONTACT' });
+    return;
+  }
+  // AUTH C1.1-b C-2: the registration SMS to contactMobile is unverified; if that number's allowance is
+  // already used up (advisory), refuse with 429 BEFORE any account, cycle, capability or verification
+  // row is written. The reservation in deliverCode stays authoritative.
+  try {
+    const destinationGate = await smsProtectionGate('unverified', contactMobile);
+    if (destinationGate) throw destinationGate;
+    // AUTH C1.4-B-1: the email code later goes to contactEmail (anonymous bucket). Refuse BEFORE any
+    // write while the email limits are unset, the email budgets are used up, or that address's
+    // anonymous allowance is used up (advisory; the reservation in deliverCode stays authoritative).
+    const emailGate = await emailProtectionGate('unverified', normalisedEmail);
+    if (emailGate) throw emailGate;
+  } catch (error) {
+    if (!sendFlowError(response, error)) throw error;
+    return;
+  }
+  let createdInstitutionId: string | undefined;
   const { loginId, name, password, contactEmail, registrationNumber, registeredAddress, website } = parsed.data;
   const passwordHash = await bcrypt.hash(password, 12);
   const client = await pool.connect();
@@ -1799,6 +1906,12 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
       sourceType: 'initial_registration',
     });
     issue = await issueSubmissionCapability(client, institutionId, cycleId);
+    // AUTH-1: unverified contact destinations, recorded with the registration (verified separately).
+    await client.query(
+      'INSERT INTO institute_verifications (institution_id, mobile_destination, email_destination) VALUES ($1, $2, $3)',
+      [institutionId, contactMobile, normalisedEmail],
+    );
+    createdInstitutionId = institutionId;
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1813,8 +1926,19 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     client.release();
   }
   if (issue) setInstitutionSubmissionCookie(response, issue);
+  // AUTH-1: start mobile verification immediately (email follows). No portal session is created.
+  let verification: Awaited<ReturnType<typeof startInstituteVerification>> | { error: string; code: string } | null = null;
+  try {
+    verification = await startInstituteVerification(response, createdInstitutionId!, normalisedEmail, {
+      mobileDestination: contactMobile, mobileVerifiedAt: null, emailDestination: normalisedEmail, emailVerifiedAt: null, institutionalStatus: 'pending', suspendedAt: null,
+    });
+  } catch (error) {
+    if (!(error instanceof VerificationFlowError)) throw error;
+    verification = { error: error.message, code: error.code };
+  }
   response.status(201).json({
-    message: 'Institute request submitted. Super Admin will verify the registration details before approval.',
+    message: 'Institute request submitted. Verify your mobile number and email; Super Admin will verify the registration details before approval.',
+    verification,
   });
 }));
 
@@ -1933,40 +2057,164 @@ app.post('/api/center/resubmit', authLimiter, asyncRoute(async (request, respons
 }));
 
 app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) => {
+  // Institutes and Officials sign in with loginId (unchanged). Students sign in with their mobile
+  // number (mobile-first) or, through the "Existing account?" link, with their legacy Student ID.
   const schema = z.object({
-    loginId: z.string().trim().min(1).max(100),
+    loginId: z.string().trim().min(1).max(100).optional(),
+    mobile: z.string().trim().min(1).max(20).optional(),
     password: z.string().min(1).max(128),
     role: z.enum(['candidate', 'center', 'official']),
-  });
+  }).refine((body) => (body.role === 'candidate'
+    ? (body.loginId === undefined) !== (body.mobile === undefined)
+    : body.loginId !== undefined && body.mobile === undefined), { message: 'Provide exactly one sign-in identifier.', path: ['loginId'] });
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
     return;
   }
 
-  const { loginId, password, role } = parsed.data;
+  const { loginId, mobile: mobileInput, password, role } = parsed.data;
   // P1-B: the role must belong to this surface; checked before any user lookup, with the same
   // generic response as invalid credentials.
   if (!isLoginRoleAllowedOnSurface(getTrustedRequestSurface(request) as Surface, role)) {
     response.status(401).json({ error: 'Invalid login ID, password, or account type.' });
     return;
   }
-  const { rows } = await pool.query(
-    'SELECT id, login_id, display_name, role, password_hash, account_status, is_super_admin FROM users WHERE login_id = $1 AND role = $2',
-    [loginId.toUpperCase(), role],
-  );
-  const user = rows[0];
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-    response.status(401).json({ error: 'Invalid login ID, password, or account type.' });
+  // AUTH-1 (strict): Student and Institute sign-in stays closed until real verification providers are
+  // configured. Checked BEFORE any lookup, so the answer reveals nothing about the account.
+  const providers = providerStatus();
+  if (role === 'candidate' && !providers.sms.available) {
+    response.status(503).json({ error: 'Student sign-in is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED });
     return;
+  }
+  if (role === 'center' && (!providers.sms.available || !providers.email.available)) {
+    response.status(503).json({
+      error: 'Institute sign-in is unavailable: mobile and email verification are not configured.',
+      code: providers.sms.available ? EMAIL_PROVIDER_NOT_CONFIGURED : OTP_PROVIDER_NOT_CONFIGURED,
+    });
+    return;
+  }
+  // AUTH C1.1-b: also BEFORE any lookup or password check, so the answer is the same for every
+  // credential. Every Student sign-in sends an SMS (either bucket): limits configured and (advisory)
+  // shared total not used up. An Institute sends an SMS only while its mobile is unverified, so only
+  // the configuration is checked here (exhaustion would otherwise lock out verified Institutes).
+  if (role === 'candidate' || role === 'center') {
+    try {
+      const gate = await smsProtectionGate(role === 'candidate' ? 'any' : 'config');
+      if (gate) throw gate;
+      // AUTH C1.4-B-1: an Institute may need an email code; its limits must be configured (before lookup).
+      if (role === 'center') {
+        const emailGate = await emailProtectionGate('config');
+        if (emailGate) throw emailGate;
+      }
+    } catch (error) {
+      if (!sendFlowError(response, error)) throw error;
+      return;
+    }
+  }
+  const USER_COLUMNS = 'id, login_id, display_name, role, password_hash, account_status, is_super_admin, contact_email';
+  let user: Record<string, any> | undefined;
+  // Mobile-first Student sign-in (password, then OTP to that number). Candidates are the account whose
+  // login ID derives from this mobile plus any Student whose VERIFIED contact is this mobile. Exactly
+  // one match proceeds; none or several fail with the same generic answer (ambiguity is unresolved
+  // policy: there is no cross-account mobile uniqueness). One bcrypt comparison either way.
+  let signInMobile: string | null = null;
+  if (role === 'candidate' && mobileInput !== undefined) {
+    const MOBILE_FAILURE = { error: 'Invalid mobile number or password. If you signed up earlier with a Student ID, use "Existing account?".', code: 'INVALID_MOBILE_CREDENTIALS' };
+    signInMobile = normaliseMobile(mobileInput);
+    let match: Record<string, any> | undefined;
+    if (signInMobile) {
+      try {
+        const derived = await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE login_id = $1 AND role = 'candidate'`, [studentLoginIdForMobile(verificationServices().otpKey!, signInMobile)]);
+        const viaContact = await authVerificationStore().findCandidateIdsByVerifiedMobile(signInMobile, 3);
+        const ids = new Set<string>([...derived.rows.map((row) => String(row.id)), ...viaContact]);
+        if (ids.size === 1) {
+          match = derived.rows[0] ?? (await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1 AND role = 'candidate'`, [[...ids][0]])).rows[0];
+        }
+      } catch (error) {
+        if (!sendFlowError(response, error)) throw error;
+        return;
+      }
+    }
+    const valid = match ? await bcrypt.compare(password, match.password_hash) : await compareAgainstDummyHash(password);
+    if (!match || !valid) {
+      response.status(401).json(MOBILE_FAILURE);
+      return;
+    }
+    user = match;
+  } else {
+    const { rows } = await pool.query(
+      `SELECT ${USER_COLUMNS} FROM users WHERE login_id = $1 AND role = $2`,
+      [loginId!.toUpperCase(), role],
+    );
+    user = rows[0];
+    // AUTH C1.9.1 (D-11): an unknown login ID costs one bcrypt comparison too (against the fixed,
+    // once-per-process dummy hash), so the answer time does not reveal whether the account exists.
+    const valid = user ? await bcrypt.compare(password, user.password_hash) : await compareAgainstDummyHash(password);
+    if (!user || !valid) {
+      response.status(401).json({ error: 'Invalid login ID, password, or account type.' });
+      return;
+    }
   }
   if (user.account_status !== 'approved') {
     response.status(403).json({
       error: user.account_status === 'pending'
         ? 'Institute registration is awaiting Super Admin approval.'
         : 'This account was not approved. Contact the portal administrator.',
+      code: user.account_status === 'pending' ? 'APPROVAL_PENDING' : 'ACCOUNT_REJECTED',
     });
     return;
+  }
+  // AUTH-1: a correct password never yields a Student session by itself (password + mobile OTP).
+  if (user.role === 'candidate') {
+    try {
+      const verifiedMobile = await authVerificationStore().findVerifiedContact(String(user.id), 'sms');
+      // Mobile sign-in sends the code to the number entered (it identified this account); the legacy
+      // path uses the verified contact, or captures one when none exists (unchanged).
+      const destination = signInMobile ?? verifiedMobile;
+      const challenge = await startVerification(response, {
+        purpose: verifiedMobile ? 'student_login' : 'student_mobile_capture', userId: String(user.id), channel: 'sms', destination,
+      });
+      response.status(202).json(challenge);
+    } catch (error) {
+      if (!sendFlowError(response, error)) throw error;
+    }
+    return;
+  }
+  // AUTH C1.9.1 (MFA P3a-1): a correct password NEVER yields an Official or Super Admin session by
+  // itself. The answer is 202 with only a status (no role or Super Admin information): mfa_required
+  // (challenge cookie set; complete at POST /api/auth/mfa/verify) or mfa_enrolment_required (Phase 4).
+  if (user.role === 'official') {
+    try {
+      response.status(202).json(await beginAdminMfaSignIn(response, String(user.id)));
+    } catch (error) {
+      if (!sendAdminMfaError(response, error)) throw error;
+    }
+    return;
+  }
+  // AUTH-1: an Institute needs verified mobile AND email, institutional verification, Official approval
+  // (above) and no suspension before any session.
+  if (user.role === 'center') {
+    try {
+      const state = await authVerificationStore().getInstituteVerification(String(user.id));
+      if (state?.suspendedAt) {
+        response.status(403).json({ error: 'This institute account is suspended.', code: 'INSTITUTE_SUSPENDED' });
+        return;
+      }
+      if (nextInstituteChannel(state)) {
+        response.status(202).json(await startInstituteVerification(response, String(user.id), user.contact_email ?? null, state));
+        return;
+      }
+      if (state!.institutionalStatus !== 'verified') {
+        response.status(403).json(state!.institutionalStatus === 'rejected'
+          ? { error: 'Institutional verification was not successful. Contact the portal administrator.', code: 'INSTITUTIONAL_VERIFICATION_REJECTED' }
+          : { error: 'Institutional verification is pending.', code: 'INSTITUTIONAL_VERIFICATION_PENDING' });
+        return;
+      }
+    } catch (error) {
+      if (!sendFlowError(response, error)) throw error;
+      return;
+    }
   }
 
   const token = newSessionToken();
@@ -1993,6 +2241,13 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
     },
   });
 }));
+
+// AUTH C1.9.1 (MFA P3a-1): second step of Official sign-in (Admin surface only; see server/surface.ts).
+app.post('/api/auth/mfa/verify', authLimiter, createAdminMfaVerifyHandler());
+// AUTH C1.9.1 (MFA P4): enrollment remains unauthenticated at the application-session layer; both
+// endpoints require the short-lived enrollment-purpose challenge cookie created after password success.
+app.post('/api/auth/mfa/enrol/start', authLimiter, createAdminMfaEnrolStartHandler());
+app.post('/api/auth/mfa/enrol/confirm', authLimiter, createAdminMfaEnrolConfirmHandler());
 
 app.get('/api/auth/me', requireAuth, asyncRoute(async (request, response) => {
   const user = getUser(request);
@@ -2624,6 +2879,19 @@ const serverDirectory = fileURLToPath(new URL('.', import.meta.url));
 const builtClient = resolve(serverDirectory, '../dist');
 app.use('/api', createInstitutionDocumentsRouter());
 app.use('/api/institution-document-submission', createInstitutionSubmissionRouter());
+// SM-1: the two independent staff modules. Their tables are installed by the supported migration
+// runner; missing tables still fail closed with STAFF_NOT_INSTALLED until that runner is applied.
+const platformStaff = createPlatformStaffRouters({ store: createPostgresPlatformStaffStore(pool) });
+app.use('/api', platformStaff.staffRouter);
+app.use('/api', platformStaff.adminRouter);
+// AUTH-1: Student and Institute verification and Google sign-in (all providers disabled unless configured).
+app.use('/api', createAuthVerificationRouter());
+// AUTH-1 / SM-2: Super Admin institutional verification and suspension (separate from Official approval).
+app.use('/api', createInstituteVerificationAdminRouter());
+const organizationStaff = createOrgStaffRouters({ store: createPostgresOrgStaffStore(pool) });
+app.use('/api', organizationStaff.ownerRouter);
+app.use('/api', organizationStaff.staffRouter);
+app.use('/api', organizationStaff.adminRouter);
 if (existsSync(builtClient)) {
   app.use(express.static(builtClient));
   app.get('*', (request, response, next) => {
@@ -2726,13 +2994,48 @@ export async function startApi(deps: StartApiDependencies = productionStartApiDe
   }
   const { config } = surfaceConfig;
   const activeListeners = listenerSelection.listeners;
+  // AUTH-1: verification providers. Missing or incomplete configuration leaves a channel DISABLED
+  // (Student and Institute sign-in then answer 503). Only availability is logged, never values.
+  // Google sign-in is enabled only if its redirect URI is on exactly the configured Exam hostname.
+  const verification = resolveVerificationServices(deps.env, config.hostnames.exam);
+  configureVerificationServices(verification);
+  const availability = providerStatus(verification);
+  deps.log(JSON.stringify({ event: 'auth.verification_providers', sms: availability.sms.available, email: availability.email.available, google: availability.google.available }));
+  // C1.3-A: SMS abuse-protection settings, validated now by the same resolver requests use and
+  // installed for them (one source of truth). Statuses only: no value, path or secret is logged.
+  // Limits alone never enable SMS: delivery also needs a registered provider (separate flag).
+  // An invalid configuration does not stop startup; every SMS simply stays refused.
+  const smsProtection = initializeAbuseProtection(deps.env);
+  deps.log(JSON.stringify({
+    event: 'auth.sms_protection',
+    ...abuseProtectionReadiness(smsProtection),
+    smsProviderAvailable: availability.sms.available,
+    smsDeliveryEnabled: availability.sms.available && smsProtection.sms !== null,
+  }));
+  // AUTH C1.4-B-1: email limits, statuses only; limits alone never enable email (provider is separate).
+  deps.log(JSON.stringify({
+    event: 'auth.email_protection',
+    ...emailProtectionReadiness(smsProtection),
+    emailProviderAvailable: availability.email.available,
+    emailDeliveryEnabled: availability.email.available && smsProtection.email !== null,
+  }));
   deps.gate.configure(config);
   // Express trusts only the direct peer, and only if it is a configured proxy (same matching as
   // the gate, which has already required a proxy of the receiving listener).
   deps.setTrustProxy(createExpressProxyTrust(config));
 
   // Only the configured listener(s); an instance never opens a listener it was not assigned.
-  const specs: ListenerSpec[] = activeListeners.map((name) => ({ name, port: config.listenerPorts[name], host: '0.0.0.0' }));
+  // The all-in-one local process (public,admin, accepted only in development) binds loopback so it is
+  // never reachable from the LAN; public via 127.0.0.1 and Admin via ::1 keep the two proxy peers
+  // distinct. A single-listener instance (one per container under Compose) binds the container
+  // interface so its own Nginx can reach it; the trusted-proxy gate still applies.
+  const developmentListenerHosts = { public: '127.0.0.1', admin: '::1' } as const;
+  const localAllInOne = config.mode === 'development' && activeListeners.includes('public') && activeListeners.includes('admin');
+  const specs: ListenerSpec[] = activeListeners.map((name) => ({
+    name,
+    port: config.listenerPorts[name],
+    host: localAllInOne ? developmentListenerHosts[name] : '0.0.0.0',
+  }));
   // Recovery is owned by the public instance; an Admin-only instance gets a handle that never runs.
   const ownsRecovery = activeListeners.includes('public');
 

@@ -26,21 +26,28 @@ import {
   CandidateScorecard,
 } from '../utils/resultLogic';
 import { ApiError, apiRequest } from '../api';
+import type { ExamItem } from '../data/portalData';
 
 interface CandidateResultModalProps {
   isOpen: boolean;
   onClose: () => void;
   defaultRollNumber?: string;
+  /** Published exams from GET /api/exams (loaded by App). Empty when none are published or loading failed. */
+  publishedExams: ExamItem[];
 }
 
 export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
   isOpen,
   onClose,
   defaultRollNumber = '',
+  publishedExams,
 }) => {
   const [rollInput, setRollInput] = useState(defaultRollNumber);
   const [dobInput, setDobInput] = useState('');
-  const [selectedExam, setSelectedExam] = useState('ENT-2025');
+  // No default exam: the candidate must choose one of the API-provided published exams.
+  const [selectedExam, setSelectedExam] = useState('');
+  const examsAvailable = publishedExams.length > 0;
+  const examSelected = publishedExams.some((exam) => exam.code === selectedExam);
   const [activeScorecard, setActiveScorecard] = useState<CandidateScorecard | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
@@ -51,6 +58,10 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
 
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (!examSelected) {
+      setLookupError(examsAvailable ? 'Select an examination.' : 'Result lookup is unavailable: no published examination is available right now.');
+      return;
+    }
     if (!rollInput.trim() || !dobInput) {
       setLookupError('Enter your roll/application number and date of birth.');
       return;
@@ -132,7 +143,7 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
                 type="text"
                 value={rollInput}
                 onChange={(e) => setRollInput(e.target.value)}
-                placeholder="e.g. ENT-2025-9981"
+                placeholder="Roll number or application number"
                 className="w-full text-xs font-semibold px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] focus:border-transparent uppercase"
               />
             </div>
@@ -156,26 +167,35 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
               </label>
               <select
                 id="res-exam"
-                value={selectedExam}
+                value={examSelected ? selectedExam : ''}
                 onChange={(e) => setSelectedExam(e.target.value)}
-                className="w-full text-xs font-medium px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] focus:border-transparent"
+                disabled={!examsAvailable}
+                required
+                className="w-full text-xs font-medium px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] focus:border-transparent disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <option value="ENT-2025">ELTNOY National Test (ENT-2025)</option>
-                <option value="EST-2025">Scholarship Assessment (EST-2025)</option>
-                <option value="ETET-2025">Teacher Eligibility Test (ETET-2025)</option>
+                <option value="" disabled>{examsAvailable ? 'Select an examination' : 'No published examination available'}</option>
+                {publishedExams.map((exam) => (
+                  <option key={exam.id} value={exam.code}>{exam.name} ({exam.code})</option>
+                ))}
               </select>
             </div>
 
             <div className="sm:col-span-2">
               <button
                 type="submit"
-                disabled={isSearching}
+                disabled={isSearching || !examSelected}
                 className="w-full py-2 px-3 bg-[#16A34A] hover:bg-[#15803D] disabled:opacity-60 text-white text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-xs"
               >
                 <Search className="w-3.5 h-3.5" />
                 <span>{isSearching ? 'Searching…' : 'Search'}</span>
               </button>
             </div>
+
+            {!examsAvailable && (
+              <p role="status" className="sm:col-span-12 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
+                Result lookup is unavailable right now: no published examination is available, or the examination list could not be loaded. Please try again later.
+              </p>
+            )}
           </form>
 
           <div className="mt-3 text-xs">

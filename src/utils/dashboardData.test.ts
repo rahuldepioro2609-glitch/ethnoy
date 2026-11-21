@@ -2,8 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DashboardSectionLoader,
+  getDashboardSectionContentState,
   type DashboardSectionStatusMap,
 } from './dashboardData.js';
+
+test('missing dashboard section data stays loading until a request succeeds', () => {
+  assert.equal(getDashboardSectionContentState(undefined), 'loading');
+  assert.equal(getDashboardSectionContentState({ state: 'loading' }), 'loading');
+  assert.equal(getDashboardSectionContentState({ state: 'error', error: 'unavailable' }), 'error');
+  assert.equal(getDashboardSectionContentState({ state: 'success' }), 'success');
+});
 
 test('dashboard sections load independently and failed sections can be retried', async () => {
   let data: Record<string, unknown> = {};

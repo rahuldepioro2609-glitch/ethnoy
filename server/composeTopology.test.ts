@@ -206,6 +206,45 @@ test('images: both API services use the same image; Nginx and PostgreSQL need di
   assert.doesNotMatch(composeText, /@sha256:|:stable-alpine|postgres:17\b(?![^\n]*#)/, 'no literal tag or invented digest');
 });
 
+test('internal-testing Compose stack has an isolated project, database, volumes, networks and services', () => {
+  const internalText = readFileSync(new URL('../internal-testing.compose.yml', import.meta.url), 'utf8');
+  const internal = parseYaml(internalText);
+  const internalServices = internal.services as Record<string, YamlMap>;
+  const internalNetworks = internal.networks as Record<string, YamlMap>;
+  const internalVolumes = internal.volumes as Record<string, YamlMap>;
+  assert.equal(internal.name, 'eltnoy-internal-testing');
+  assert.notEqual(internal.name, compose.name);
+  assert.deepEqual(Object.keys(internalServices).sort(), [
+    'it_api_admin', 'it_api_public', 'it_migrate', 'it_nginx_admin', 'it_nginx_public', 'it_postgres',
+  ]);
+  assert.deepEqual(Object.keys(internalNetworks).sort(), [
+    'it_admin_app', 'it_admin_ingress', 'it_db_admin', 'it_db_ops', 'it_db_public',
+    'it_public_app', 'it_public_ingress',
+  ]);
+  assert.equal(asMap(internalVolumes.it_postgres_data).name, 'eltnoy-internal-testing-postgres-data');
+  assert.equal(asMap(internalVolumes.it_documents).name, 'eltnoy-internal-testing-documents');
+  const productionDatabaseVolume = asMap(asMap(compose.volumes).postgres_data);
+  assert.equal(productionDatabaseVolume.name, undefined, 'production volume is Compose project scoped');
+  assert.notEqual(asMap(internalVolumes.it_postgres_data).name, 'eltnoy-production_postgres_data');
+  for (const name of ['it_public_app', 'it_admin_app', 'it_db_public', 'it_db_admin', 'it_db_ops']) {
+    assert.equal(internalNetworks[name].internal, 'true', name);
+  }
+  assert.deepEqual(Object.keys(asMap(internalServices.it_api_public.networks)).sort(), ['it_db_public', 'it_public_app']);
+  assert.deepEqual(Object.keys(asMap(internalServices.it_api_admin.networks)).sort(), ['it_admin_app', 'it_db_admin']);
+  assert.deepEqual(Object.keys(asMap(internalServices.it_nginx_public.networks)).sort(), ['it_public_app', 'it_public_ingress']);
+  assert.deepEqual(Object.keys(asMap(internalServices.it_nginx_admin.networks)).sort(), ['it_admin_app', 'it_admin_ingress']);
+  assert.deepEqual(Object.keys(asMap(internalServices.it_postgres.networks)).sort(), ['it_db_admin', 'it_db_ops', 'it_db_public']);
+  for (const name of ['it_api_public', 'it_api_admin', 'it_postgres', 'it_migrate']) {
+    assert.equal(internalServices[name].ports, undefined, `${name} publishes no host port`);
+  }
+  const internalTextActive = internalText.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n');
+  assert.match(internalTextActive, /postgresql:\/\/eltnoy_app@it_postgres:5432\/\$\{INTERNAL_TEST_DATABASE_NAME/);
+  assert.match(internalTextActive, /postgresql:\/\/eltnoy_migrator@it_postgres:5432\/\$\{INTERNAL_TEST_DATABASE_NAME/);
+  assert.match(internalTextActive, /DATABASE_SSL: "true"/);
+  assert.match(internalTextActive, /DATABASE_SSL_REJECT_UNAUTHORIZED: "true"/);
+  assert.doesNotMatch(internalTextActive, /eltnoy-production|\.env\.production|\n\s+postgres_data:/);
+});
+
 test('API instances: identical hardening; one listener each; recovery only on api_public; application role only', () => {
   const hardening = (name: string) => ['restart', 'user', 'read_only', 'tmpfs', 'cap_drop', 'security_opt', 'secrets', 'command', 'depends_on'].map((key) => JSON.stringify(service(name)[key]));
   assert.deepEqual(hardening('api_admin'), hardening('api_public'));
@@ -287,7 +326,7 @@ test('M-1/M-2: both API services receive the preflight inputs from required vari
   for (const name of ['api_public', 'api_admin']) {
     assert.equal(requiredVariable(env(name).ELTNOY_API_IMAGE), 'ELTNOY_API_IMAGE', name);
     assert.equal(env(name).ELTNOY_API_IMAGE, service('api_public').image, `${name}: the validated reference is the image both services run`);
-    for (const variable of ['PUBLIC_BIND_ADDRESS', 'ADMIN_BIND_ADDRESS', 'WIREGUARD_INTERFACE_ADDRESS']) {
+    for (const variable of ['PUBLIC_BIND_MODE', 'PUBLIC_BIND_ADDRESS', 'ADMIN_BIND_ADDRESS', 'WIREGUARD_INTERFACE_ADDRESS']) {
       assert.equal(requiredVariable(env(name)[variable]), variable, `${name}: ${variable}`);
     }
     // The preflight runs before the API starts, so an invalid value keeps this API unhealthy.
@@ -299,4 +338,39 @@ test('M-1/M-2: both API services receive the preflight inputs from required vari
   assert.ok(asList(service('nginx_public').ports).every((entry) => entry.startsWith('${PUBLIC_BIND_ADDRESS:?')));
   assert.equal(asMap(asMap(service('nginx_admin').depends_on).api_admin).condition, 'service_healthy');
   assert.equal(asMap(asMap(service('nginx_public').depends_on).api_public).condition, 'service_healthy');
+});
+
+test('AUTH C1.3-B: the nine SMS/claim settings are forwarded, optional and empty by default, to api_public only', () => {
+  const names = [
+    'AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS',
+    'AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS',
+    'AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS',
+    'AUTH_SMS_DAILY_MAX_SENDS', 'AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS', 'AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS',
+  ];
+  for (const name of names) {
+    assert.equal(env('api_public')[name], `\${${name}:-}`, `${name}: optional, empty default on api_public`);
+    assert.equal(env('api_admin')[name], undefined, `${name}: never on api_admin`);
+    assert.doesNotMatch(composeText, new RegExp(`\\$\\{${name}:\\?`), `${name}: never a required substitution`);
+  }
+  // No other service receives any AUTH_* setting or provider credentials.
+  for (const name of ['api_admin', 'nginx_public', 'nginx_admin', 'migrate', 'postgres']) {
+    const keys = service(name).environment === undefined ? [] : Object.keys(env(name));
+    assert.deepEqual(keys.filter((key) => key.startsWith('AUTH_')), [], name);
+  }
+  for (const name of ['AUTH_SMS_PROVIDER', 'AUTH_EMAIL_PROVIDER', 'AUTH_OTP_HMAC_KEY_FILE']) assert.match(composeText, new RegExp(name), `${name} is wired only for api_public`);
+});
+
+test('AUTH C1.4-B-2: the six email settings are forwarded, optional and empty by default, to api_public only', () => {
+  const names = [
+    'AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS', 'AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS',
+    'AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS', 'AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS',
+    'AUTH_EMAIL_DAILY_MAX_SENDS', 'AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS',
+  ];
+  for (const name of names) {
+    assert.equal(env('api_public')[name], `\${${name}:-}`, `${name}: optional, empty default on api_public`);
+    assert.equal(env('api_admin')[name], undefined, `${name}: never on api_admin`);
+    assert.doesNotMatch(composeText, new RegExp(`\\$\\{${name}:\\?`), `${name}: never a required substitution`);
+    assert.doesNotMatch(composeText, new RegExp(`\\$\\{${name}:-[^}]`), `${name}: no default value`);
+  }
+  assert.equal(env('api_public').AUTH_EMAIL_PROVIDER, '${AUTH_EMAIL_PROVIDER:-}');
 });

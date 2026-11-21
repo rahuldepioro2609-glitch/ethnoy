@@ -4,7 +4,7 @@
 // live Express route stack. Importing the application starts no listener; the shared pool's `query`
 // and `connect` are trapped so that no database connection can be opened. No real data is used.
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import test from 'node:test';
@@ -39,6 +39,8 @@ const {
   unresolvedPolicyRows,
   unresolvedAccess,
   decideForEntry,
+  disclosedSurfaceHostnames,
+  PUBLIC_SURFACES,
 } = surfaceModule;
 type Surface = (typeof SURFACES)[number];
 type RoutePolicyEntry = (typeof ROUTE_POLICY)[number];
@@ -81,28 +83,30 @@ test('pinned hostnames map exactly to the four surfaces', () => {
     marketing: 'eltnoy.com',
     exam: 'exam.eltnoy.com',
     institution: 'institution.eltnoy.com',
-    admin: 'admin.eltnoy.com',
+    admin: 'admin.eltnoy.in',
   });
   assert.equal(surfaceForHostname('eltnoy.com'), 'marketing');
   assert.equal(surfaceForHostname('exam.eltnoy.com'), 'exam');
   assert.equal(surfaceForHostname('institution.eltnoy.com'), 'institution');
-  assert.equal(surfaceForHostname('admin.eltnoy.com'), 'admin');
+  assert.equal(surfaceForHostname('admin.eltnoy.in'), 'admin');
   assert.deepEqual(validateSurfaceHostnames(PINNED_SURFACE_HOSTNAMES), []);
   assert.ok(Object.isFrozen(PINNED_SURFACE_HOSTNAMES));
 });
 
 test('hostname case is normalised and nothing else is', () => {
-  assert.equal(surfaceForHostname('ADMIN.ELTNOY.COM'), 'admin');
+  assert.equal(surfaceForHostname('ADMIN.ELTNOY.IN'), 'admin');
   assert.equal(surfaceForHostname('Exam.Eltnoy.Com'), 'exam');
   assert.deepEqual(parseOriginalHost('Institution.ELTNOY.com'), { ok: true, hostname: 'institution.eltnoy.com' });
-  assert.equal(surfaceForHostname('admin.eltnoy.com.'), null, 'trailing dot is not normalised away');
-  assert.equal(surfaceForHostname(' admin.eltnoy.com'), null, 'whitespace is not trimmed');
+  assert.equal(surfaceForHostname('admin.eltnoy.in.'), null, 'trailing dot is not normalised away');
+  assert.equal(surfaceForHostname(' admin.eltnoy.in'), null, 'whitespace is not trimmed');
 });
 
 test('unknown hostnames fail closed (no suffix, prefix or wildcard matching)', () => {
   for (const hostname of [
-    'www.eltnoy.com', 'eltnoy.org', 'admin.eltnoy.co', 'evil.com', 'admin.eltnoy.com.evil.com', 'evil-admin.eltnoy.com',
-    'adminx.eltnoy.com', 'x.admin.eltnoy.com', 'exam-eltnoy.com', 'localhost', '127.0.0.1', 'eltnoy',
+    'www.eltnoy.com', 'eltnoy.org', 'admin.eltnoy.co', 'evil.com', 'admin.eltnoy.in.evil.com', 'evil-admin.eltnoy.in',
+    'adminx.eltnoy.com', 'x.admin.eltnoy.in', 'exam-eltnoy.com', 'localhost', '127.0.0.1', 'eltnoy',
+    // Admin moved from the public domain to the private eltnoy.in domain: the old name fails closed.
+    'admin.eltnoy.com', 'eltnoy.in', 'www.eltnoy.in', 'exam.eltnoy.in', 'admin.eltnoy.co.in',
   ]) {
     assert.equal(surfaceForHostname(hostname), null, hostname);
     for (const surface of SURFACES) assert.equal(isOriginalHostValidForSurface(hostname, surface), false, `${hostname} on ${surface}`);
@@ -112,15 +116,15 @@ test('unknown hostnames fail closed (no suffix, prefix or wildcard matching)', (
 test('malformed, missing, multi-valued and port-qualified original hosts are rejected', () => {
   const cases: Array<[unknown, string]> = [
     [undefined, 'missing'], [null, 'missing'], ['', 'empty'],
-    [['admin.eltnoy.com'], 'multiple_values'], [['admin.eltnoy.com', 'exam.eltnoy.com'], 'multiple_values'],
-    ['admin.eltnoy.com,exam.eltnoy.com', 'multiple_values'], ['admin.eltnoy.com, admin.eltnoy.com', 'multiple_values'],
-    ['admin.eltnoy.com:443', 'port_not_allowed'], ['admin.eltnoy.com:4003', 'port_not_allowed'], ['eltnoy.com:80', 'port_not_allowed'],
-    ['admin.eltnoy.com:', 'port_not_allowed'],
-    ['[::1]', 'malformed'], ['[::1]:443', 'malformed'], ['user@admin.eltnoy.com', 'malformed'], ['admin.eltnoy.com/x', 'malformed'],
-    ['admin.eltnoy.com\\x', 'malformed'], ['admin.eltnoy.com\r\nx: y', 'malformed'], ['admin eltnoy.com', 'malformed'],
-    ['admin..eltnoy.com', 'malformed'], ['.admin.eltnoy.com', 'malformed'], ['admin.eltnoy.com.', 'malformed'],
-    ['-admin.eltnoy.com', 'malformed'], ['admin_.eltnoy.com', 'malformed'], ['*.eltnoy.com', 'malformed'],
-    ['admin.eltnoy.com\u0000', 'malformed'], [42, 'malformed'], [{}, 'malformed'],
+    [['admin.eltnoy.in'], 'multiple_values'], [['admin.eltnoy.in', 'exam.eltnoy.com'], 'multiple_values'],
+    ['admin.eltnoy.in,exam.eltnoy.com', 'multiple_values'], ['admin.eltnoy.in, admin.eltnoy.in', 'multiple_values'],
+    ['admin.eltnoy.in:443', 'port_not_allowed'], ['admin.eltnoy.in:4003', 'port_not_allowed'], ['eltnoy.com:80', 'port_not_allowed'],
+    ['admin.eltnoy.in:', 'port_not_allowed'],
+    ['[::1]', 'malformed'], ['[::1]:443', 'malformed'], ['user@admin.eltnoy.in', 'malformed'], ['admin.eltnoy.in/x', 'malformed'],
+    ['admin.eltnoy.in\\x', 'malformed'], ['admin.eltnoy.in\r\nx: y', 'malformed'], ['admin eltnoy.com', 'malformed'],
+    ['admin..eltnoy.com', 'malformed'], ['.admin.eltnoy.in', 'malformed'], ['admin.eltnoy.in.', 'malformed'],
+    ['-admin.eltnoy.in', 'malformed'], ['admin_.eltnoy.com', 'malformed'], ['*.eltnoy.com', 'malformed'],
+    ['admin.eltnoy.in\u0000', 'malformed'], [42, 'malformed'], [{}, 'malformed'],
   ];
   for (const [raw, reason] of cases) {
     assert.deepEqual(parseOriginalHost(raw), { ok: false, reason }, JSON.stringify(raw));
@@ -134,7 +138,7 @@ test('original host must name exactly the surface of the receiving listener', ()
       assert.equal(isOriginalHostValidForSurface(PINNED_SURFACE_HOSTNAMES[other], surface), surface === other, `${other} host on ${surface}`);
     }
   }
-  assert.equal(isOriginalHostValidForSurface('admin.eltnoy.com', 'nope' as Surface), false);
+  assert.equal(isOriginalHostValidForSurface('admin.eltnoy.in', 'nope' as Surface), false);
 });
 
 test('hostname configuration validation rejects unsafe configuration', () => {
@@ -142,8 +146,8 @@ test('hostname configuration validation rejects unsafe configuration', () => {
   assert.notDeepEqual(validateSurfaceHostnames({ ...PINNED_SURFACE_HOSTNAMES, admin: undefined }), []);
   assert.notDeepEqual(validateSurfaceHostnames({ ...PINNED_SURFACE_HOSTNAMES, admin: '*.eltnoy.com' }), []);
   assert.notDeepEqual(validateSurfaceHostnames({ ...PINNED_SURFACE_HOSTNAMES, admin: 'exam.eltnoy.com' }), []);
-  assert.notDeepEqual(validateSurfaceHostnames({ ...PINNED_SURFACE_HOSTNAMES, admin: 'Admin.eltnoy.com' }), []);
-  assert.notDeepEqual(validateSurfaceHostnames({ ...PINNED_SURFACE_HOSTNAMES, admin: 'admin.eltnoy.com:443' }), []);
+  assert.notDeepEqual(validateSurfaceHostnames({ ...PINNED_SURFACE_HOSTNAMES, admin: 'Admin.eltnoy.in' }), []);
+  assert.notDeepEqual(validateSurfaceHostnames({ ...PINNED_SURFACE_HOSTNAMES, admin: 'admin.eltnoy.in:443' }), []);
   assert.notDeepEqual(validateSurfaceHostnames({ ...PINNED_SURFACE_HOSTNAMES, staff: 'staff.eltnoy.com' }), []);
 });
 
@@ -199,7 +203,7 @@ test('login role is restricted per surface before any lookup; Marketing accepts 
 test('exact Origin per surface; cross-surface Origins rejected', () => {
   assert.equal(expectedOrigin('exam'), 'https://exam.eltnoy.com');
   assert.equal(expectedOrigin('institution'), 'https://institution.eltnoy.com');
-  assert.equal(expectedOrigin('admin'), 'https://admin.eltnoy.com');
+  assert.equal(expectedOrigin('admin'), 'https://admin.eltnoy.in');
   for (const surface of ['exam', 'institution', 'admin'] as const) {
     for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'post']) {
       assert.deepEqual(evaluateOrigin({ surface, method, origin: expectedOrigin(surface) }), { allowed: true, reason: 'exact_match' });
@@ -212,13 +216,13 @@ test('exact Origin per surface; cross-surface Origins rejected', () => {
 
 test('Origin variants that are not byte-exact are rejected', () => {
   for (const origin of [
-    'http://admin.eltnoy.com', 'https://admin.eltnoy.com:443', 'https://admin.eltnoy.com/', 'https://ADMIN.eltnoy.com',
-    'https://admin.eltnoy.com.evil.com', 'https://evil.com', 'https://www.eltnoy.com', 'admin.eltnoy.com', 'https://admin.eltnoy.com/path',
+    'http://admin.eltnoy.in', 'https://admin.eltnoy.in:443', 'https://admin.eltnoy.in/', 'https://ADMIN.eltnoy.in',
+    'https://admin.eltnoy.in.evil.com', 'https://evil.com', 'https://www.eltnoy.com', 'admin.eltnoy.in', 'https://admin.eltnoy.in/path',
   ]) {
     assert.equal(evaluateOrigin({ surface: 'admin', method: 'POST', origin }).allowed, false, origin);
   }
-  assert.deepEqual(evaluateOrigin({ surface: 'admin', method: 'POST', origin: 'https://admin.eltnoy.com, https://admin.eltnoy.com' }), { allowed: false, reason: 'multiple_values' });
-  assert.deepEqual(evaluateOrigin({ surface: 'admin', method: 'POST', origin: ['https://admin.eltnoy.com'] }), { allowed: false, reason: 'multiple_values' });
+  assert.deepEqual(evaluateOrigin({ surface: 'admin', method: 'POST', origin: 'https://admin.eltnoy.in, https://admin.eltnoy.in' }), { allowed: false, reason: 'multiple_values' });
+  assert.deepEqual(evaluateOrigin({ surface: 'admin', method: 'POST', origin: ['https://admin.eltnoy.in'] }), { allowed: false, reason: 'multiple_values' });
 });
 
 test('null and missing Origin are rejected for state-changing requests on every surface', () => {
@@ -234,7 +238,7 @@ test('null and missing Origin are rejected for state-changing requests on every 
     }
   }
   assert.deepEqual(evaluateOrigin({ surface: 'marketing', method: 'POST', origin: 'https://eltnoy.com' }), { allowed: false, reason: 'marketing_is_not_a_portal' });
-  assert.deepEqual(evaluateOrigin({ surface: 'staff' as Surface, method: 'POST', origin: 'https://admin.eltnoy.com' }), { allowed: false, reason: 'unknown_surface' });
+  assert.deepEqual(evaluateOrigin({ surface: 'staff' as Surface, method: 'POST', origin: 'https://admin.eltnoy.in' }), { allowed: false, reason: 'unknown_surface' });
 });
 
 // ---------------------------------------------------------------------------
@@ -266,14 +270,15 @@ test('POST /api/mock-exams/submit: Exam candidate only', () => {
 // ---------------------------------------------------------------------------
 
 const A1_MATRIX: Record<string, Record<Surface, string>> = {
-  '/api/notices': { marketing: 'allow:anonymous', exam: 'deny:404', institution: 'deny:404', admin: 'deny:404' },
+  '/api/surface-hostnames': { marketing: 'allow:anonymous', exam: 'allow:anonymous', institution: 'allow:anonymous', admin: 'allow:anonymous' },
+  '/api/notices': { marketing: 'allow:anonymous', exam: 'allow:anonymous', institution: 'deny:404', admin: 'deny:404' },
   '/api/exams': { marketing: 'allow:anonymous', exam: 'allow:candidate', institution: 'deny:404', admin: 'deny:404' },
-  '/api/institute-forms': { marketing: 'allow:anonymous', exam: 'deny:404', institution: 'deny:404', admin: 'deny:404' },
+  '/api/institute-forms': { marketing: 'allow:anonymous', exam: 'allow:anonymous', institution: 'deny:404', admin: 'deny:404' },
   '/api/answer-keys/exams': { marketing: 'deny:404', exam: 'allow:candidate', institution: 'deny:404', admin: 'deny:404' },
   '/api/answer-keys': { marketing: 'deny:404', exam: 'allow:candidate', institution: 'deny:404', admin: 'deny:404' },
 };
 
-test('A-1: all 20 endpoint/surface combinations match the approved matrix', () => {
+test('A-1: all endpoint/surface combinations match the approved matrix', () => {
   let cells = 0;
   for (const [routePath, expected] of Object.entries(A1_MATRIX)) {
     assert.deepEqual(outcomes('GET', routePath), expected, routePath);
@@ -283,10 +288,10 @@ test('A-1: all 20 endpoint/surface combinations match the approved matrix', () =
     }
     cells += SURFACES.length;
   }
-  assert.equal(cells, 20);
+  assert.equal(cells, 24);
 });
 
-test('A-1: Marketing serves notices, exams and institute forms anonymously, and no answer keys', () => {
+test('A-1: Marketing and Exam serve public notices and institute forms; exams and answer keys follow their auth policy', () => {
   for (const routePath of ['/api/notices', '/api/exams', '/api/institute-forms']) {
     const decision = decideRequest('marketing', 'GET', routePath);
     assert.equal(decision.outcome, 'allow', routePath);
@@ -294,6 +299,11 @@ test('A-1: Marketing serves notices, exams and institute forms anonymously, and 
   }
   for (const routePath of ['/api/answer-keys/exams', '/api/answer-keys']) {
     assert.equal(decideRequest('marketing', 'GET', routePath).outcome, 'deny', routePath);
+  }
+  for (const routePath of ['/api/notices', '/api/institute-forms']) {
+    const decision = decideRequest('exam', 'GET', routePath);
+    assert.equal(decision.outcome, 'allow', routePath);
+    if (decision.outcome === 'allow') assert.equal(decision.auth, 'anonymous', routePath);
   }
 });
 
@@ -311,8 +321,8 @@ test('A-1: exams and both answer-key routes require a Candidate on Exam', () => 
   assert.equal(find('GET', '/api/answer-keys').routeClass, 'candidate');
 });
 
-test('A-1: Institution and Admin are denied all five routes', () => {
-  for (const routePath of Object.keys(A1_MATRIX)) {
+test('A-1: Institution and Admin receive only public hostname metadata, not Marketing content', () => {
+  for (const routePath of Object.keys(A1_MATRIX).filter((path) => path !== '/api/surface-hostnames')) {
     for (const surface of ['institution', 'admin'] as const) {
       for (const method of ['GET', 'HEAD']) {
         const decision = decideRequest(surface, method, routePath);
@@ -321,6 +331,29 @@ test('A-1: Institution and Admin are denied all five routes', () => {
       }
     }
   }
+  for (const surface of ['institution', 'admin'] as const) {
+    assert.equal(decideRequest(surface, 'GET', '/api/surface-hostnames').outcome, 'allow', surface);
+  }
+});
+
+test('public surfaces never disclose the private Admin hostname; Admin may disclose all four', () => {
+  assert.deepEqual([...PUBLIC_SURFACES], ['marketing', 'exam', 'institution']);
+  for (const surface of PUBLIC_SURFACES) {
+    const disclosed = disclosedSurfaceHostnames(surface, PINNED_SURFACE_HOSTNAMES);
+    assert.deepEqual(Object.keys(disclosed).sort(), ['exam', 'institution', 'marketing'], surface);
+    assert.equal(disclosed.admin, undefined, `${surface} must not disclose the Admin hostname`);
+    assert.ok(!Object.values(disclosed).includes(PINNED_SURFACE_HOSTNAMES.admin), surface);
+    assert.ok(Object.isFrozen(disclosed));
+  }
+  assert.deepEqual(disclosedSurfaceHostnames('admin', PINNED_SURFACE_HOSTNAMES), { ...PINNED_SURFACE_HOSTNAMES });
+});
+
+test('the hostname metadata route answers with the receiving surface\'s disclosed hostnames', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  const handler = source.slice(source.indexOf("app.get('/api/surface-hostnames'"), source.indexOf("app.get('/api/exams'"));
+  assert.match(handler, /const surface = getTrustedRequestSurface\(request\);/);
+  assert.match(handler, /hostnames: disclosedSurfaceHostnames\(surface, config\.hostnames\)/);
+  assert.doesNotMatch(handler, /hostnames: config\.hostnames/, 'never the full hostname map');
 });
 
 test('A-1: /api/exams carries explicit mixed-authentication metadata and is enforced centrally only', () => {
@@ -406,11 +439,60 @@ test('every /api/admin route and every super-admin route is Admin only', () => {
   }
 });
 
-test('no route is allowed on the Admin surface without an Official session, except login/me/logout', () => {
+test('no route is allowed on Admin without an Official or Platform Staff session, except public config and sign-in', () => {
+  // The public hostname map is non-sensitive routing metadata; Platform Staff uses its own
+  // session, and all other Admin routes require an Official session or a login step.
+  const staffSignIn = 'POST /api/platform-staff/auth/login';
+  const publicConfig = 'GET /api/surface-hostnames';
   for (const policyEntry of ROUTE_POLICY) {
     const access = policyEntry.access.admin;
     if (access.decision !== 'allow') continue;
-    assert.ok(['official', 'super_admin', 'login', 'session'].includes(access.auth), `${policyEntry.method} ${policyEntry.path}`);
+    const key = `${policyEntry.method} ${policyEntry.path}`;
+    if (key === staffSignIn || key === publicConfig) {
+      assert.equal(access.auth, 'anonymous', key);
+      continue;
+    }
+    if (access.auth === 'platform_staff') {
+      assert.ok(policyEntry.path.startsWith('/api/platform-staff/') && policyEntry.routeClass === 'platform_staff', key);
+      continue;
+    }
+    assert.ok(['official', 'super_admin', 'login', 'session'].includes(access.auth), key);
+  }
+  assert.deepEqual(
+    ROUTE_POLICY.filter((policyEntry) => policyEntry.access.admin.decision === 'allow' && (policyEntry.access.admin as { auth: string }).auth === 'anonymous')
+      .map((policyEntry) => `${policyEntry.method} ${policyEntry.path}`).sort(),
+    [publicConfig, staffSignIn].sort(),
+  );
+});
+
+test('SM-1: staff session kinds are confined to their own module, surface and route guard', async () => {
+  const routeByKey = new Map(ROUTES.map((route) => [`${route.method} ${route.path}`, route]));
+  for (const policyEntry of ROUTE_POLICY) {
+    const allowed = SURFACES.filter((surface) => policyEntry.access[surface].decision === 'allow');
+    const auths = new Set(allowed.map((surface) => (policyEntry.access[surface] as { auth: string }).auth));
+    const names = routeByKey.get(`${policyEntry.method} ${policyEntry.path}`)!.handlers.map((handler) => handler.name ?? '');
+    const key = `${policyEntry.method} ${policyEntry.path}: ${names.join(',')}`;
+    if (auths.has('platform_staff')) {
+      assert.deepEqual(allowed, ['admin'], key);
+      assert.ok(policyEntry.path.startsWith('/api/platform-staff/'), key);
+      assert.ok(names.some((name) => name.startsWith('requirePlatformStaff')), key);
+      assert.ok(!names.includes('requireAuth'), `${key}: never a portal session`);
+    }
+    if (auths.has('org_staff')) {
+      assert.deepEqual(allowed, ['institution'], key);
+      assert.ok(policyEntry.path.startsWith('/api/org-staff/'), key);
+      assert.ok(names.includes('requireOrgStaff'), key);
+      assert.ok(!names.includes('requireAuth'), `${key}: never a portal session`);
+    }
+    if (policyEntry.path.startsWith('/api/platform-staff/') || policyEntry.path.startsWith('/api/org-staff/')) {
+      assert.ok(auths.has('platform_staff') || auths.has('org_staff') || auths.has('anonymous'), key);
+    }
+    if (policyEntry.path.startsWith('/api/admin/platform-staff') || policyEntry.path.startsWith('/api/admin/organization-staff')) {
+      assert.deepEqual([...auths], ['super_admin'], `${key}: staff management is Super Admin only`);
+    }
+    if (policyEntry.path.startsWith('/api/center/staff')) {
+      assert.deepEqual([...auths], ['center'], `${key}: organization staff management is the Organization Owner's`);
+    }
   }
 });
 
@@ -447,7 +529,7 @@ test('percent-encoded separators, backslashes and control characters are rejecte
   for (const target of [
     '/api/admin%2Fnotices', '/api/admin%2fnotices', '/api/admin/notices/a%2Fb', '/api%5cadmin/notices', '/api\\admin\\notices',
     '/api/admin/notices%00', '/api/admin/notices\u0000', '/api/admin/notices\r\n', '/api/admin/ notices', 'api/admin/notices', '',
-    '*', 'https://admin.eltnoy.com/api/admin/notices',
+    '*', 'https://admin.eltnoy.in/api/admin/notices',
   ]) {
     assert.equal(parseRequestPath(target).ok, false, JSON.stringify(target));
     assert.equal(decideRequest('admin', 'GET', target).outcome, 'deny', JSON.stringify(target));
@@ -803,4 +885,20 @@ test('importing the application opened no listener and no database connection', 
   const servers = handles.filter((handle) => handle?.constructor?.name === 'Server');
   assert.equal(servers.length, 0, 'no listening server');
   assert.equal((pool as unknown as { totalCount: number }).totalCount, 0, 'no pool clients');
+});
+
+test('production domains: public eltnoy.com and private Admin eltnoy.in, matched by label, never by substring', () => {
+  const { PRODUCTION_DOMAINS, isProductionDomainHostname } = surfaceModule;
+  assert.deepEqual([...PRODUCTION_DOMAINS], ['eltnoy.com', 'eltnoy.in']);
+  for (const host of [...Object.values(PINNED_SURFACE_HOSTNAMES), 'admin.eltnoy.com', 'EltNoy.In', 'staging.admin.eltnoy.in']) {
+    assert.equal(isProductionDomainHostname(host), true, host);
+  }
+  for (const host of ['eltnoy.co.in', 'noteltnoy.in', 'eltnoy.in.example.test', 'eltnoy.com.evil.com', 'admin.example.test']) {
+    assert.equal(isProductionDomainHostname(host), false, host);
+  }
+  // The Admin hostname is on a different registrable domain from every public surface.
+  const registrable = (host: string) => host.split('.').slice(-2).join('.');
+  for (const surface of PUBLIC_SURFACES) {
+    assert.notEqual(registrable(PINNED_SURFACE_HOSTNAMES[surface]), registrable(PINNED_SURFACE_HOSTNAMES.admin), surface);
+  }
 });

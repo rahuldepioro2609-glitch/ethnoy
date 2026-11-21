@@ -25,16 +25,27 @@ import {
   UserRound,
   Wallet,
 } from 'lucide-react';
-import { apiRequest } from '../api';
+import { ApiError, apiRequest, apiRequestWithMeta } from '../api';
+import { VerificationStep } from './VerificationStep';
+import { AdminMfaChallenge } from './AdminMfaChallenge';
+import { AdminMfaEnrollment } from './AdminMfaEnrollment';
+import { adminMfaStartStatus } from '../utils/adminMfa';
+import { StudentAuthPanel } from './StudentAuthPanel';
+import { StudentGoogleLinkCard } from './StudentGoogleLinkCard';
+import { googleNotice, isChallenge, signInAvailable, unavailableMessage, verificationMessage, type ProviderStatus, type VerificationChallengeView } from '../utils/authVerification';
 import { OnlineExamRunner } from './OnlineExamRunner';
 import { BrandLogo } from './BrandLogo';
 import { useLanguage } from '../utils/languageContext';
 import { NO_LINKED_APPLICATIONS_MESSAGE } from '../utils/candidateDashboard';
 import { describeOnlineExamAttempt } from '../utils/onlineExamDashboard';
 import { adminPermissions, canLoadAdminSection, canSeeAdminTab, SUPER_ADMIN_ONLY_TEXT, withdrawalPaymentState } from '../utils/adminPermissions';
-import { DashboardSectionLoader, type DashboardSectionStatusMap } from '../utils/dashboardData';
+import { DashboardSectionLoader, getDashboardSectionContentState, type DashboardSectionStatusMap } from '../utils/dashboardData';
 import { InstitutionDocumentManagement } from './InstitutionDocumentManagement';
 import { PendingInstitutionSubmission } from './PendingInstitutionSubmission';
+import { PlatformStaffAdminPanel } from './staff/PlatformStaffAdminPanel';
+import { OrganizationStaffOwnerPanel } from './staff/OrganizationStaffOwnerPanel';
+import { InstituteVerificationPanel } from './admin/InstituteVerificationPanel';
+import { ErrorState, LoadingState } from './ui';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
 
@@ -102,6 +113,68 @@ const rolePath: Record<PortalRole, string> = {
   official: '/login/official',
 };
 
+const StudentEmailContactPanel: React.FC = () => {
+  const [email, setEmail] = useState('');
+  const [verifiedEmail, setVerifiedEmail] = useState<string | null>(null);
+  const [challenge, setChallenge] = useState<VerificationChallengeView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const result = await apiRequest<{ email: string | null }>('/api/auth/student/email');
+      setVerifiedEmail(result.email);
+      if (result.email) setEmail(result.email);
+    } catch {
+      setError('Could not load your verified email address. Please refresh and try again.');
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const result = (await apiRequestWithMeta<Record<string, unknown>>('/api/auth/student/email', {
+        method: 'POST', body: JSON.stringify({ email: email.trim() }),
+      })).data;
+      if (isChallenge(result)) setChallenge(result);
+      else if (result.status === 'already_verified') setVerifiedEmail(String(result.email));
+      else setError('The server did not start email verification. Please try again.');
+    } catch (caught) {
+      setError(caught instanceof ApiError ? verificationMessage(caught.code, caught.message) : 'Could not start email verification. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      {challenge ? (
+        <VerificationStep
+          challenge={challenge}
+          onSignedIn={() => setChallenge(null)}
+          onContactsVerified={() => { setChallenge(null); void load(); }}
+          onRestart={(message) => { setChallenge(null); setError(message); }}
+        />
+      ) : (
+        <>
+          <h2 className="text-lg font-extrabold text-[#0B2E59]">Student email</h2>
+          <p className="mt-1 text-sm text-slate-600">{verifiedEmail ? `Verified: ${verifiedEmail}` : 'Add an email address and verify the code we send to it.'}</p>
+          <form onSubmit={(event) => void submit(event)} className="mt-4 flex flex-col gap-3 sm:flex-row">
+            <label className="sr-only" htmlFor="student-contact-email">Email address</label>
+            <input id="student-contact-email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email address" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
+            <button type="submit" disabled={busy || !email.trim()} className="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">{busy ? 'Please wait…' : verifiedEmail ? 'Change email' : 'Send verification code'}</button>
+          </form>
+          {error && <p role="alert" className="mt-3 text-sm text-rose-700">{error}</p>}
+        </>
+      )}
+    </section>
+  );
+};
+
 interface RoleLoginPageProps {
   role?: PortalRole;
   onBack: () => void;
@@ -125,6 +198,51 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   const [isRegistering, setIsRegistering] = useState(false);
   const [showSubmissionAccess, setShowSubmissionAccess] = useState(false);
   const [submissionAccessMessage, setSubmissionAccessMessage] = useState('');
+  // AUTH-1: server-reported provider availability and an in-progress verification (server-started only).
+  const [mobile, setMobile] = useState('');
+  const [providers, setProviders] = useState<ProviderStatus | null>(null);
+  const [verification, setVerification] = useState<VerificationChallengeView | null>(null);
+  // AUTH C1.9.2: Official / Super Admin authenticator step (shown only after the server's 202 mfa_required).
+  const [adminMfaPending, setAdminMfaPending] = useState(false);
+  const [adminMfaEnrolmentPending, setAdminMfaEnrolmentPending] = useState(false);
+
+  useEffect(() => {
+    if (role !== 'candidate' && role !== 'center') return;
+    let cancelled = false;
+    const closed = { available: false, reason: null };
+    apiRequestWithMeta<ProviderStatus>('/api/auth/providers')
+      .then(({ data }) => { if (!cancelled) setProviders(data); })
+      .catch(() => { if (!cancelled) setProviders({ sms: closed, email: closed, google: closed }); });
+    const notice = googleNotice(window.location.search);
+    if (notice) setError(notice);
+    if (role === 'candidate' && new URLSearchParams(window.location.search).get('verification') === 'pending') {
+      apiRequestWithMeta<VerificationChallengeView>('/api/auth/verification')
+        .then(({ data }) => { if (!cancelled && isChallenge(data)) setVerification(data); })
+        .catch(() => undefined);
+    }
+    return () => { cancelled = true; };
+  }, [role]);
+
+  const describeError = (caught: unknown, fallback: string) => (caught instanceof ApiError
+    ? verificationMessage(caught.code, caught.message)
+    : caught instanceof Error ? caught.message : fallback);
+
+  /** After the SERVER reports a verified session, confirm it through /api/auth/me as before. */
+  const finishVerifiedSignIn = async () => {
+    try {
+      const { user } = await apiRequest<{
+        user: { id: string; loginId: string; name: string; role: PortalRole; isSuperAdmin: boolean };
+      }>('/api/auth/me');
+      setVerification(null);
+      setAdminMfaPending(false);
+      setAdminMfaEnrolmentPending(false);
+      onLogin({ id: user.loginId, name: user.name, role: user.role, isSuperAdmin: user.isSuperAdmin });
+    } catch (caught) {
+      setVerification(null);
+      setAdminMfaPending(false);
+      setError(describeError(caught, 'Sign in failed. Please try again.'));
+    }
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -132,17 +250,34 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
     setError(null);
     setIsSubmitting(true);
     try {
-      await apiRequest('/api/auth/login', {
+      const result = await apiRequestWithMeta<Record<string, unknown>>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ loginId: loginId.trim(), password, role }),
       });
+      // AUTH-1: Students (and Institutes still verifying contacts) get a verification step, not a session.
+      if (result.status === 202 && isChallenge(result.data)) {
+        setPassword('');
+        setVerification(result.data);
+        return;
+      }
+      // AUTH C1.9.2: an Official's password never yields a session. The server answers 202 and either
+      // started an authenticator challenge (its cookie is HttpOnly; nothing is read here) or reports that
+      // no authenticator is set up (enrolment is not available in the portal yet).
+      if (role === 'official' && result.status === 202) {
+        setPassword('');
+        const start = adminMfaStartStatus(result.data);
+        if (start === 'mfa_required') setAdminMfaPending(true);
+        else if (start === 'mfa_enrolment_required') setAdminMfaEnrolmentPending(true);
+        else setError('Sign in failed. Please try again.');
+        return;
+      }
       // Verify the session was durably persisted before updating UI state.
       const { user } = await apiRequest<{
         user: { id: string; loginId: string; name: string; role: PortalRole; isSuperAdmin: boolean };
       }>('/api/auth/me');
       onLogin({ id: user.loginId, name: user.name, role: user.role, isSuperAdmin: user.isSuperAdmin });
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : 'Sign in failed. Please try again.');
+      setError(describeError(loginError, 'Sign in failed. Please try again.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -150,40 +285,31 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
 
   const register = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!role || role === 'official') return;
+    // Students register in StudentAuthPanel; this form serves Institutes only.
+    if (role !== 'center') return;
     setError(null);
     setMessage(null);
     setIsSubmitting(true);
     try {
-      if (role === 'candidate') {
-        await apiRequest('/api/auth/register', {
-          method: 'POST',
-          body: JSON.stringify({ loginId: loginId.trim(), name: fullName.trim(), password }),
-        });
-        // Verify the session was durably persisted before updating UI state.
-        const { user } = await apiRequest<{
-          user: { id: string; loginId: string; name: string; role: PortalRole; isSuperAdmin: boolean };
-        }>('/api/auth/me');
-        onLogin({ id: user.loginId, name: user.name, role: user.role, isSuperAdmin: user.isSuperAdmin });
-      } else {
-        const { message: registrationMessage } = await apiRequest<{ message: string }>('/api/center/register', {
-          method: 'POST',
-          body: JSON.stringify({
-            loginId: loginId.trim(),
-            name: fullName.trim(),
-            contactEmail: contactEmail.trim(),
-            registrationNumber: registrationNumber.trim(),
-            registeredAddress: registeredAddress.trim(),
-            website: website.trim(),
-            password,
-          }),
-        });
-        setSubmissionAccessMessage(registrationMessage);
-        setShowSubmissionAccess(true);
-        setPassword('');
-      }
+      const { message: registrationMessage, verification: started } = await apiRequest<{ message: string; verification?: unknown }>('/api/center/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          loginId: loginId.trim(),
+          name: fullName.trim(),
+          contactEmail: contactEmail.trim(),
+          contactMobile: mobile.trim(),
+          registrationNumber: registrationNumber.trim(),
+          registeredAddress: registeredAddress.trim(),
+          website: website.trim(),
+          password,
+        }),
+      });
+      setSubmissionAccessMessage(registrationMessage);
+      setShowSubmissionAccess(true);
+      setPassword('');
+      if (isChallenge(started)) setVerification(started);
     } catch (registrationError) {
-      setError(registrationError instanceof Error ? registrationError.message : 'Could not submit registration.');
+      setError(describeError(registrationError, 'Could not submit registration.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -245,7 +371,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   const accent = accentClasses[detail?.accent ?? 'emerald'];
 
   return (
-    <main className="min-h-screen bg-[#eef5fa] text-slate-900">
+    <main className="min-h-screen bg-[#EEF6F1] text-slate-900">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-2">
           <div className="flex items-center gap-3">
@@ -265,8 +391,8 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
               <h1 className="mt-2 text-3xl font-black text-[#0B2E59] sm:text-4xl">{t('Choose your portal')}</h1>
               <p className="mt-3 text-slate-600">{t('Select the account type shown on your ELTNOY credentials.')}</p>
             </div>
-            <div className="grid gap-5 md:grid-cols-3">
-              {(['candidate', 'center', 'official'] as const).map((item) => {
+            <div className="grid gap-5 md:grid-cols-2">
+              {(['candidate', 'center'] as const).map((item) => {
                 const itemDetail = roleDetails[item];
                 const RoleIcon = itemDetail.icon;
                 const colorClass = item === 'candidate' ? 'bg-emerald-600' : item === 'center' ? 'bg-sky-600' : 'bg-blue-800';
@@ -293,7 +419,56 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
               <p className="mt-8 text-xs text-white/70">{t('Your Future, Our Mission')}</p>
             </section>
             <section className="p-7 sm:p-10">
-              {role === 'center' && showSubmissionAccess ? (
+              {verification ? (
+                <VerificationStep
+                  challenge={verification}
+                  onSignedIn={() => void finishVerifiedSignIn()}
+                  onContactsVerified={(verifiedMessage) => {
+                    setVerification(null);
+                    setShowSubmissionAccess(false);
+                    setIsRegistering(false);
+                    setMessage(verifiedMessage);
+                  }}
+                  onRestart={(restartMessage) => {
+                    setVerification(null);
+                    setError(restartMessage);
+                  }}
+                />
+              ) : role === 'official' && adminMfaPending ? (
+                <AdminMfaChallenge
+                  buttonClass={accent.button}
+                  onSignedIn={() => void finishVerifiedSignIn()}
+                  onRestart={(restartMessage) => {
+                    setAdminMfaPending(false);
+                    setError(restartMessage);
+                  }}
+                />
+              ) : role === 'official' && adminMfaEnrolmentPending ? (
+                <AdminMfaEnrollment
+                  buttonClass={accent.button}
+                  onSignedIn={() => void finishVerifiedSignIn()}
+                  onRestart={(restartMessage) => {
+                    setAdminMfaEnrolmentPending(false);
+                    setError(restartMessage);
+                  }}
+                />
+              ) : role === 'candidate' ? (
+                // AUTH-1: Student sign-in (mobile + password, then OTP; Google; legacy Student ID link).
+                // Every option stays visible; unavailable providers are shown explicitly.
+                <StudentAuthPanel providers={providers} initialError={error} buttonClass={accent.button} onChallenge={setVerification} />
+              ) : role === 'center' && !isResubmitting && !showSubmissionAccess && signInAvailable(role, providers) === false ? (
+                <div className="space-y-5">
+                  <a href="/login" className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('All login options')}</a>
+                  <h2 className="text-2xl font-extrabold text-[#0B2E59]">{t('Institute sign-in is unavailable')}</h2>
+                  <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">{t(unavailableMessage(role))}</div>
+                  {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
+                  {role === 'center' && (
+                    <button type="button" onClick={startInstituteResubmission} className="w-full text-center text-sm font-bold text-sky-800 hover:underline">
+                      {t('Rejected application? Correct details and resubmit')}
+                    </button>
+                  )}
+                </div>
+              ) : role === 'center' && showSubmissionAccess ? (
                 <PendingInstitutionSubmission
                   message={submissionAccessMessage}
                   onReturnToLogin={() => {
@@ -308,18 +483,14 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
                 <>
               <a href="/login" className="mb-7 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('All login options')}</a>
               <h2 className="text-2xl font-extrabold text-[#0B2E59]">
-                {t(isResubmitting ? 'Correct and resubmit institute details' : isRegistering ? (role === 'candidate' ? 'Create student account' : 'Request institute access') : 'Sign in to your account')}
+                {t(isResubmitting ? 'Correct and resubmit institute details' : isRegistering ? 'Request institute access' : 'Sign in to your account')}
               </h2>
               <p className="mt-1 text-sm text-slate-500">
                 {t(isResubmitting
                   ? 'Use the existing rejected institute login ID and password. Corrected details will be submitted under the same account for review; this does not restore portal access.'
                   : isRegistering
-                  ? role === 'candidate'
-                    ? 'Create an account first. You can then sign in and submit exam applications.'
-                    : 'Submit your institute details. Portal access starts only after Super Admin approval.'
-                  : role === 'candidate'
-                    ? 'Sign in before starting or continuing an exam application.'
-                    : 'Enter the credentials provided by your portal administrator.')}
+                  ? 'Submit your institute details. Portal access starts only after Super Admin approval.'
+                  : 'Enter the credentials provided by your portal administrator.')}
               </p>
               <form className="mt-7 space-y-5" onSubmit={(event) => void (isResubmitting ? resubmitInstitute(event) : isRegistering ? register(event) : submit(event))}>
                 {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
@@ -327,17 +498,24 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
                 {isRegistering && (
                   <div>
                     <label htmlFor="role-register-name" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                      {t(role === 'candidate' ? 'Student full name' : isResubmitting ? 'Corrected institute name' : 'Institute name')}
+                      {t(isResubmitting ? 'Corrected institute name' : 'Institute name')}
                     </label>
                     <input id="role-register-name" autoComplete="name" value={fullName} onChange={(event) => setFullName(event.target.value)} required maxLength={120} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
                   </div>
                 )}
                 <div>
                   <label htmlFor="role-login-id" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                    {t(role === 'candidate' ? (isRegistering ? 'Choose student login ID' : 'Student login ID') : (isRegistering ? 'Choose institute / center ID' : 'Staff / Center ID'))}
+                    {t(isRegistering ? 'Choose institute / center ID' : 'Staff / Center ID')}
                   </label>
                   <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={4} maxLength={50} pattern="[A-Za-z0-9._-]+" title="Use 4-50 letters, numbers, dots, underscores or hyphens." className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm uppercase outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
                 </div>
+                {isRegistering && !isResubmitting && (
+                  <div>
+                    <label htmlFor="role-register-mobile" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Institute contact mobile number')}</label>
+                    <input id="role-register-mobile" type="tel" inputMode="numeric" autoComplete="tel-national" value={mobile} onChange={(event) => setMobile(event.target.value)} required maxLength={16} placeholder="10-digit mobile number" className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-600/15" />
+                    <p className="mt-1 text-xs text-slate-500">{t('A one-time code will be sent to this number. You can sign in only after it is verified.')}</p>
+                  </div>
+                )}
                 {isRegistering && role === 'center' && (
                   <div>
                     <label htmlFor="institute-contact-email" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Contact email')}</label>
@@ -380,13 +558,13 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
                   </>
                 )}
                 <button type="submit" disabled={isSubmitting} className={`flex w-full items-center justify-center gap-2 rounded-lg ${accent.button} px-4 py-3 text-sm font-bold text-white transition hover:brightness-110 disabled:cursor-wait disabled:opacity-60`}>
-                  <LockKeyhole className="h-4 w-4" /> {t(isSubmitting ? 'Please wait…' : isResubmitting ? 'Resubmit corrected details' : isRegistering ? (role === 'candidate' ? 'Create account' : 'Submit for approval') : 'Secure sign in')}
+                  <LockKeyhole className="h-4 w-4" /> {t(isSubmitting ? 'Please wait…' : isResubmitting ? 'Resubmit corrected details' : isRegistering ? 'Submit for approval' : 'Secure sign in')}
                 </button>
               </form>
               {role !== 'official' && (
                 <div className="mt-5 space-y-3">
                   <button type="button" onClick={() => changeRegistrationMode(!isRegistering)} className="w-full text-center text-sm font-bold text-emerald-800 hover:underline">
-                    {t(isRegistering ? 'Already registered? Sign in' : role === 'candidate' ? 'New student? Create an account' : 'Institute needs access? Register for approval')}
+                    {t(isRegistering ? 'Already registered? Sign in' : 'Institute needs access? Register for approval')}
                   </button>
                   {role === 'center' && !isResubmitting && (
                     <button
@@ -404,11 +582,6 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
                   )}
                 </div>
               )}
-              {role === 'candidate' && isRegistering && (
-                <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-                  {t('Email/SMS verification and password recovery are not configured. Do not use a password you use elsewhere.')}
-                </p>
-              )}
                 </>
               )}
             </section>
@@ -419,7 +592,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   );
 };
 
-type DashboardTab = 'overview' | 'exams' | 'institutes' | 'institution-documents' | 'applications' | 'feedback' | 'attempts' | 'results' | 'admit-cards' | 'online-exams' | 'answer-keys' | 'notices' | 'data-export';
+type DashboardTab = 'overview' | 'exams' | 'institutes' | 'institution-documents' | 'applications' | 'feedback' | 'attempts' | 'results' | 'admit-cards' | 'online-exams' | 'answer-keys' | 'notices' | 'data-export' | 'platform-staff' | 'institute-verification';
 
 interface RoleDashboardProps {
   user: PortalUser;
@@ -691,10 +864,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
         body: JSON.stringify(noticeDraft),
       });
       setNoticeDraft(emptyNoticeDraft);
-      setNotice('Notice published. It is now available in Latest Updates and Public Notices.');
+      setNotice('Notice saved as a draft. A Super Admin can publish it after review.');
       await refresh();
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : 'Could not publish notice.');
+      setError(createError instanceof Error ? createError.message : 'Could not save notice draft.');
     } finally {
       setIsSavingNotice(false);
     }
@@ -945,7 +1118,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const detail = roleDetails[user.role];
   const theme = dashboardTheme[user.role];
   const navTabs: { id: DashboardTab; label: string }[] = user.role === 'official'
-    ? [{ id: 'overview', label: 'Overview' }, { id: 'institutes', label: 'Institute approvals & wallet' }, { id: 'institution-documents', label: 'Institution documents' }, { id: 'exams', label: 'Exam forms' }, { id: 'notices', label: 'Latest updates' }, { id: 'admit-cards', label: 'Admit cards' }, { id: 'online-exams', label: 'Online exams' }, { id: 'answer-keys', label: 'Answer keys' }, { id: 'applications', label: 'Applications' }, { id: 'feedback', label: 'Helpdesk' }, { id: 'attempts', label: 'Mock tests' }, { id: 'results', label: 'Results' }, { id: 'data-export', label: 'Excel data' }]
+    ? [{ id: 'overview', label: 'Overview' }, { id: 'institutes', label: 'Institute approvals & wallet' }, { id: 'institution-documents', label: 'Institution documents' }, { id: 'exams', label: 'Exam forms' }, { id: 'notices', label: 'Latest updates' }, { id: 'admit-cards', label: 'Admit cards' }, { id: 'online-exams', label: 'Online exams' }, { id: 'answer-keys', label: 'Answer keys' }, { id: 'applications', label: 'Applications' }, { id: 'feedback', label: 'Helpdesk' }, { id: 'attempts', label: 'Mock tests' }, { id: 'results', label: 'Results' }, { id: 'data-export', label: 'Excel data' }, { id: 'platform-staff', label: 'Staff management' }, { id: 'institute-verification', label: 'Institutional verification' }]
     : [{ id: 'overview', label: 'Overview' }];
   const permissions = adminPermissions(user);
   const visibleNavTabs = navTabs.filter((item) => canSeeAdminTab(user, item.id));
@@ -972,6 +1145,26 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
     ? value
     : '—';
+  const candidateSectionState = (section: string) => getDashboardSectionContentState(
+    sectionStatuses[`candidate:${section}`],
+  );
+  const candidateSectionStatus = (section: string, label: string) => {
+    const state = candidateSectionState(section);
+    if (state === 'loading') {
+      return <LoadingState label={`Loading ${label.toLowerCase()}…`} className="justify-start px-0 py-5" />;
+    }
+    if (state === 'error') {
+      return (
+        <ErrorState
+          title={`${label} unavailable`}
+          description="We couldn't load this section. Please try again."
+          onRetry={() => { void retryLoadRef.current[`candidate:${section}`]?.(); }}
+          className="mt-4"
+        />
+      );
+    }
+    return null;
+  };
 
   useEffect(() => {
     const profile = record('profile');
@@ -1059,7 +1252,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               <section className="space-y-5">
                 <form onSubmit={(event) => void createPortalNotice(event)} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div>
-                    <h2 className="text-lg font-extrabold text-[#0B2E59]">Publish a portal update</h2>
+                    <h2 className="text-lg font-extrabold text-[#0B2E59]">Create a portal notice draft</h2>
                     <p className="mt-1 text-sm text-slate-600">Published notices appear automatically in the scrolling Latest Updates bar, Public Notices, and site search.</p>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -1081,8 +1274,8 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                       <input required minLength={3} maxLength={80} pattern="[A-Za-z0-9._/-]+" value={noticeDraft.referenceNumber} onChange={(event) => setNoticeDraft((draft) => ({ ...draft, referenceNumber: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-mono font-normal" placeholder="ELTNOY/NOTICE/2026/001" />
                     </label>
                   </div>
-                  <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Publishing is immediate. Check dates, application links, and notice text before publishing. You can unpublish an item below.</p>
-                  <button disabled={isSavingNotice} type="submit" className="rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-600 disabled:opacity-60">{isSavingNotice ? 'Publishing…' : 'Publish update'}</button>
+                  <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">{SUPER_ADMIN_ONLY_TEXT.noticePublishing}</p>
+                  <button disabled={isSavingNotice} type="submit" className="rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-600 disabled:opacity-60">{isSavingNotice ? 'Saving…' : 'Save notice draft'}</button>
                 </form>
 
                 <section className="space-y-3">
@@ -1095,12 +1288,14 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="font-bold text-slate-900">{String(item.title)}</h3>
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${item.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{item.is_published ? 'Published' : 'Unpublished'}</span>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${item.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{item.is_published ? 'Published' : 'Draft'}</span>
                         </div>
                         <p className="mt-1 text-xs text-slate-500">{String(item.category)} · {String(item.reference_number)} · {new Date(String(item.created_at)).toLocaleString()}</p>
                         <p className="mt-2 text-sm text-slate-600">{String(item.summary)}</p>
                       </div>
-                      <button type="button" onClick={() => void publishAdminRecord(`/api/admin/notices/${encodeURIComponent(String(item.id))}`, !Boolean(item.is_published), 'Notice')} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">{item.is_published ? 'Unpublish' : 'Publish'}</button>
+                      {permissions.canPublishNotices
+                        ? <button type="button" onClick={() => void publishAdminRecord(`/api/admin/notices/${encodeURIComponent(String(item.id))}`, !Boolean(item.is_published), 'Notice')} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">{item.is_published ? 'Unpublish' : 'Publish'}</button>
+                        : <span className="text-xs text-slate-500">{SUPER_ADMIN_ONLY_TEXT.noticePublishing}</span>}
                     </article>
                   )) : <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">No portal updates yet. Publish the first notice above.</p>}
                 </section>
@@ -1172,6 +1367,9 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 </section>
               </section>
             )}
+
+            {user.role === 'official' && user.isSuperAdmin && tab === 'platform-staff' && <PlatformStaffAdminPanel />}
+            {user.role === 'official' && user.isSuperAdmin && tab === 'institute-verification' && <InstituteVerificationPanel />}
 
             {user.role === 'official' && user.isSuperAdmin && tab === 'data-export' && (
               <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -1410,9 +1608,9 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
             {(user.role === 'candidate' || user.role === 'center' || tab === 'overview') && (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {(user.role === 'candidate' ? [
-                  { label: 'Applications', value: list('applications').length, icon: FileText },
-                  { label: 'Mock tests', value: list('attempts').length, icon: ClipboardCheck },
-                  { label: 'Published results', value: list('results').length, icon: Award },
+                  { label: 'Applications', value: candidateSectionState('portal') === 'success' ? list('applications').length : '—', icon: FileText },
+                  { label: 'Mock tests', value: candidateSectionState('attempts') === 'success' ? list('attempts').length : '—', icon: ClipboardCheck },
+                  { label: 'Published results', value: candidateSectionState('portal') === 'success' ? list('results').length : '—', icon: Award },
                 ] : user.role === 'center' ? [
                   { label: 'Recorded check-ins', value: list('checkins').length, icon: ClipboardCheck },
                   { label: 'Center code', value: user.id, icon: Building2 },
@@ -1428,19 +1626,34 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               </div>
             )}
 
+            {user.role === 'candidate' && <div className="mt-5"><StudentGoogleLinkCard /></div>}
+            {user.role === 'candidate' && <StudentEmailContactPanel />}
+
             {user.role === 'candidate' && (
               <div className="mt-5 grid gap-5 lg:grid-cols-2">
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">My applications</h2>
-                  {list('applications').length ? <div className="mt-4 space-y-3">{list('applications').map((item) => <article key={String(item.application_number)} className="rounded-lg border border-slate-100 bg-slate-50 p-4"><div className="flex flex-wrap justify-between gap-2"><strong>{String(item.exam_code)}</strong><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold capitalize text-amber-800">{String(item.status)}</span></div><p className="mt-2 text-sm text-slate-600">Application {String(item.application_number)}</p>{item.roll_number !== null && item.roll_number !== undefined && <p className="mt-1 text-sm text-slate-600">Roll no. {String(item.roll_number)} · {String(item.center_name)}</p>}</article>)}</div> : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{t(NO_LINKED_APPLICATIONS_MESSAGE)}</p>}
+                  {candidateSectionStatus('portal', 'Applications') ?? (
+                    list('applications').length
+                      ? <div className="mt-4 space-y-3">{list('applications').map((item) => <article key={String(item.application_number)} className="rounded-lg border border-slate-100 bg-slate-50 p-4"><div className="flex flex-wrap justify-between gap-2"><strong>{String(item.exam_code)}</strong><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold capitalize text-amber-800">{String(item.status)}</span></div><p className="mt-2 text-sm text-slate-600">Application {String(item.application_number)}</p>{item.roll_number !== null && item.roll_number !== undefined && <p className="mt-1 text-sm text-slate-600">Roll no. {String(item.roll_number)} · {String(item.center_name)}</p>}</article>)}</div>
+                      : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{t(NO_LINKED_APPLICATIONS_MESSAGE)}</p>
+                  )}
                   <button onClick={onOpenAdmitCard} className="mt-4 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600">Open admit card lookup</button>
                 </section>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">My results and practice</h2>
-                  {list('results').length ? <p className="mt-3 text-sm text-emerald-800">{list('results').length} result(s) published for your account.</p> : <p className="mt-3 text-sm text-slate-600">No official result has been published for this account.</p>}
+                  {candidateSectionStatus('portal', 'Results') ?? (
+                    list('results').length
+                      ? <p className="mt-3 text-sm text-emerald-800">{list('results').length} result(s) published for your account.</p>
+                      : <p className="mt-3 text-sm text-slate-600">No official result has been published for this account.</p>
+                  )}
                   <button onClick={onOpenResults} className="mt-4 rounded-lg border border-emerald-700 px-4 py-2.5 text-sm font-bold text-emerald-800 hover:bg-emerald-50">Check official result</button>
                   <h3 className="mt-6 font-bold text-slate-800">Practice test history</h3>
-                  {list('attempts').length ? <ul className="mt-3 space-y-2 text-sm text-slate-600">{list('attempts').slice(0, 5).map((attempt) => <li key={String(attempt.id)} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>{String(attempt.correct)} correct of {String(attempt.total_questions)}</span><strong>{String(attempt.percentage)}%</strong></li>)}</ul> : <p className="mt-2 text-sm text-slate-500">No practice attempts yet.</p>}
+                  {candidateSectionStatus('attempts', 'Practice history') ?? (
+                    list('attempts').length
+                      ? <ul className="mt-3 space-y-2 text-sm text-slate-600">{list('attempts').slice(0, 5).map((attempt) => <li key={String(attempt.id)} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>{String(attempt.correct)} correct of {String(attempt.total_questions)}</span><strong>{String(attempt.percentage)}%</strong></li>)}</ul>
+                      : <p className="mt-2 text-sm text-slate-500">No practice attempts yet.</p>
+                  )}
                 </section>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">Online examinations</h2>
@@ -1460,7 +1673,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                         );
                       })}
                     </div>
-                  ) : <p className="mt-3 text-sm text-slate-500">No published online exams are available for your approved applications.</p>}
+                  ) : candidateSectionStatus('online-exams', 'Online examinations') ?? <p className="mt-3 text-sm text-slate-500">No published online exams are available for your approved applications.</p>}
                 </section>
               </div>
             )}
@@ -1562,6 +1775,8 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
             {user.role === 'center' && (
               <InstitutionDocumentManagement role="center" />
             )}
+
+            {user.role === 'center' && <OrganizationStaffOwnerPanel />}
 
             {user.role === 'official' && tab === 'applications' && <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Candidate / exam</th><th className="p-4">Submitted</th><th className="p-4">Status</th><th className="p-4">Admit card</th></tr></thead><tbody className="divide-y divide-slate-100">{list('applications').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono font-bold">{String(item.application_number)}</td><td className="p-4">{String(item.candidate_name)}<span className="block text-xs text-slate-500">{String(item.exam_code)}</span></td><td className="p-4 text-slate-500">{new Date(String(item.created_at)).toLocaleDateString()}</td><td className="p-4"><select aria-label={`Status for ${String(item.application_number)}`} value={String(item.status)} onChange={(event) => void updateApplication(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1"><option value="submitted">Submitted</option><option value="under_review">Under review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></td><td className="p-4 text-xs">{item.admit_card_published ? 'Published' : 'Not published'}</td></tr>)}</tbody></table></section>}
 

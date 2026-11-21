@@ -1,6 +1,6 @@
 # ELTNOY master policy register
 
-**Status:** Internal working register. Do not publish or share externally. Last updated 2026-11-03.
+**Status:** Internal working register. Do not publish or share externally. Last updated 2026-11-14 (sections SM and AU added; code-status notes on sections R and A).
 **Supersedes:** `docs/policy/eltnoy-policy-register.md`. Every entry there is carried over below with its ID unchanged.
 **Companion documents:** `policy-conflict-and-gap-register.md`, `../architecture/data-model-final-proposal.md`.
 
@@ -272,6 +272,8 @@ No document anywhere records numbered questions. The only mention of "Q1–Q114"
 | R-13 | Disposition of N3, N4, N5, R1, S1, the retry window and the `0.0.0.0` bind | PENDING_CONFIRMATION | — | Client / Eng | Online exams, deployment | Gap register | Phase 7 report §11 | V |
 | R-14 | Cleaning up the isolated test environment (run `20261103140212-96b1f2`) | PENDING_CONFIRMATION | — | Client | Testing | It holds credential files that need removal | Not authorized | V |
 
+**Code-status note (2026-11-14, V-code):** R-04 is committed (`5c8dd41`, 2026-11-04), so the "uncommitted" wording above and C-17 are historical. R-03: the P0-3 enforcement batch is committed (`df9b93e`, 2026-11-04); see the note under section A for what it covers. Rows are kept as recorded on 2026-11-03.
+
 ## E. Further P0-4 decisions (verified)
 
 | ID | Policy meaning | Status | Built? | Role | Source | Ver. |
@@ -307,12 +309,14 @@ The source is the client instruction of 2026-11-03 03:17Z ("The client has appro
 | A-14 | Helpdesk tickets: Super Admin only | DISCUSSION_APPROVED | **No** | SA | Helpdesk | — | V |
 | A-15 | Linking legacy application ownership: Super Admin only | DISCUSSION_APPROVED | **No** | SA | Applications | Affects `/api/admin/applications/:id/verify-ownership` | V |
 | A-16 | Correcting a published result or admit card returns it to draft and requires republishing | DISCUSSION_APPROVED | **No** | SA | Exam module | — | V |
-| A-17 | Publishing public notices: Super Admin only. All Officials may create notices as drafts. | DISCUSSION_APPROVED | **No** | SA / Official | Notices | — | V |
+| A-17 | Publishing public notices: Super Admin only. All Officials may create notices as drafts. | IMPLEMENTATION_APPROVED (client approval 2026-11-16) | Yes | SA / Official | Notices | Enforcement approved for sprint implementation | V |
 | A-18 | Exam creation and draft imports stay open to all Officials (subject to A-16) | IMPLEMENTATION_APPROVED (preserve) | Yes | Official | Exam module | — | V |
 | A-19 | Authorization is enforced on the backend; frontend visibility alone is never enough. Route tests cover unauthenticated users, wrong roles, ordinary Officials and Super Admin. | IMPLEMENTATION_APPROVED (standard) | Partly | Eng | All | Applies to every milestone | V |
 | A-20 | Don't claim mixed-version safety for the admit-card draft change; use a controlled deployment | DISCUSSION_APPROVED | — | Eng | Deployment | — | V |
 | A-21 | ~~Restrict candidate personal-data access to Super Admin~~ | SUPERSEDED by A-08 | — | — | — | — | V |
 | A-22 | ~~Don't assume every financial or publishing action becomes Super Admin-only~~ (audit-stage instruction) | SUPERSEDED by A-02 to A-06 | — | — | — | — | V |
+
+**Code-status note (2026-11-16):** A-17 is now enforced: all Officials may create unpublished notice drafts; only Super Admins may publish or unpublish them. Other code-status details below were last reviewed 2026-11-14: commit `df9b93e` (2026-11-04) enforces Super Admin-only access for A-02 (credits), A-03 (withdrawals, maker-checker), A-04 (result corrections; direct POST and imports never publish), A-05, A-06 (interim P3-D1: admit-card import and assignment are Super Admin-only and still publish immediately; the draft step is not built), A-07, A-09, A-14 and A-15, with route tests in `server/adminAuthorization.test.ts` (matrix from line 307). **Not built:** A-08 (contact hiding), A-10, A-11 (`audit_events`), A-12 (general audit viewer), A-16 for admit cards. The "Built?" column above reflects 2026-11-03 except for A-17.
 
 ## P. Product direction and design (2026-11-03)
 
@@ -383,6 +387,28 @@ The full text is in `../architecture/data-model-final-proposal.md` §13. Status 
 | ID | Policy meaning | Status | Role | Modules | Implications | Ver. |
 |---|---|---|---|---|---|---|
 | N-07 | **C-20 resolved by the client: Option C, a structured Examination Session Management module** supporting: (1) structured sessions; (2) multiple invigilators per session; (3) multiple assigned centers; (4) session-specific role permissions; (5) candidate allocation; (6) QR and manual attendance; (7) session monitoring; (8) emergency pause and incident reporting; (9) assignment and reassignment audit history; (10) session-wise reports. **Mandatory rules:** invigilators access only assigned sessions; backend enforcement; assignment and reassignment need authorized permissions; existing exam workflows preserved; free-text shifts not silently migrated; existing center-based attendance records preserved; backward compatibility and data mapping defined; optional and modular; no student data exposed across unauthorized centers. | DISCUSSION_APPROVED (design only; schema implementation needs separate approval) | Client | Exam module, staff, attendance | Design in `../architecture/examination-session-module.md`. Decisions ES-D1 to ES-D12; conflict C-22. | V |
+
+## AU. Student authentication decisions (AUTH-1, 2026-11-14)
+
+**Source:** client answers in the Claude Code session of 2026-11-14 (Student login UX), confirmed with the safety constraints of the same instruction (no AUTH-1 migration or backfill; no new cross-account mobile uniqueness rule or constraint).
+
+| ID | Policy meaning | Status | Role | Modules | Implications | Ver. |
+|---|---|---|---|---|---|---|
+| AU-01 | **Students sign in with mobile number + password, then a one-time code to that mobile.** The mobile replaces the Student ID as the identifier; the factors stay password + mobile OTP. Registration asks for name, mobile and password (no Student ID). | IMPLEMENTATION_APPROVED (built in the working tree, uncommitted) | Client | AUTH-1 | `POST /api/auth/login` `{ mobile, password, role }` and `POST /api/auth/register`. New accounts get a login ID derived from the mobile with the server OTP key (`M-…`), never the number (A-08), so the existing UNIQUE `users.login_id` is the duplicate check | V |
+| AU-02 | **Existing accounts keep the Student ID + password + mobile OTP path behind a small "Existing account?" link.** | IMPLEMENTATION_APPROVED (built, uncommitted) | Client | AUTH-1 | Unchanged legacy flow; a mobile is captured when none is verified | V |
+| AU-03 | **No cross-account mobile uniqueness is introduced.** Mobile sign-in proceeds only when exactly one Student account is tied to the number (by derived login ID or by verified contact); otherwise it is refused with the generic failure. Whether a number may serve several accounts stays open (gap register M-28). | IMPLEMENTATION_APPROVED (built, uncommitted) | Client | AUTH-1 | No database constraint; no migration; Google stays sign-in-only for linked accounts and still ends with the mobile code | V |
+
+## SM. Staff Management decisions (SM-2, 2026-11-14)
+
+**Source:** client instructions in the Claude Code session of 2026-11-14 (SM-2 review and implementation phases). Detail, evidence and implementation status: `docs/reviews/SM2_POLICY_DECISION_REGISTER.md`.
+
+| ID | Policy meaning | Status | Role | Modules | Implications | Ver. |
+|---|---|---|---|---|---|---|
+| SM2-P01 | **Organization Staff invitation codes expire 72 hours after issue.** Fixed approved value; not a deployment setting. Refines Q116 ("expiring"). | IMPLEMENTATION_APPROVED (built in the working tree, uncommitted) | Org | Organization Staff | `ORG_STAFF_INVITATION_TTL_HOURS = 72` in `server/organizationStaff.ts`. Revoke and re-issue are **not** approved (see M-21) | V |
+| SM2-P02 | **Platform Staff use the Admin surface only, and the Admin surface is reachable only over WireGuard.** | DISCUSSION_APPROVED (policy approved; the infrastructure work and its validation need separate approval) | SA / Eng | Platform Staff, deployment | Application surface binding exists. Host firewall L-5 and the P1-F checks are outstanding (`docs/reviews/SM2_WIREGUARD_DEPLOYMENT_PLAN.md`) | V |
+| SM2-P03 | **Super Admin MFA is mandatory before Staff Management go-live.** Settles the Super Admin part of M-14 / SEC-07. No SaaS without approval (S-07). | DISCUSSION_APPROVED (policy approved; implementation, factor and recovery design need separate approval) | SA | Authentication | Not built. Self-hosted plan: `docs/reviews/SM2_MFA_IMPLEMENTATION_PLAN.md`. Remaining scope (Officials, staff, Owners) is M-14 | V |
+| SM2-P04 | **Institutional verification (verify or reject) and suspension (suspend or lift) of Institutes are Super Admin-only decisions, separate from Official approval (`users.account_status`), each audited with actor, target, action and reason.** | IMPLEMENTATION_APPROVED (built in the working tree, uncommitted) | SA | Organizations, AUTH-1 | `server/instituteVerificationAdmin.ts`; existing `institute_verifications` columns; audit in `auth_verification_events`. The transition rule is an engineering choice awaiting confirmation (M-27). Rollout for existing institutes is M-26 | V |
+| SM2-P05 | **Privileged MFA scope and recovery (2026-11-15):**<br>• **Scope:** mandatory TOTP MFA (RFC 6238, an authenticator application, with single-use recovery codes) for **every Super Admin and every Official**. Platform Staff are a separate future phase; Institute and Organization Staff are out of scope.<br>• **Excluded factors:** email and SMS OTP never substitute for privileged MFA. WebAuthn is a future enhancement.<br>• **Reset:** initiated by an MFA-verified Super Admin other than the target. A **Super Admin target needs two-person authorization** (the initiator and the approver are different Super Admins). An **ordinary Official target needs one Super Admin other than the target**, MFA-verified with fresh step-up (D-1, approved for AUTH C1.8). No self-reset or self-approval. It is audited with reason, initiator, approver, target and time; it revokes all the target's sessions; fresh enrolment is mandatory.<br>• **No disable switch.**<br>• **Break-glass:** an operator CLI only when a second Super Admin is unavailable, with strict host controls, a reason, an incident record and an audit event. It is not an ordinary alternative.<br>Extends SM2-P03; settles the Officials part of M-14 and the recovery part of M-24. | DISCUSSION_APPROVED (design finalised; each implementation phase needs separate approval) | SA / Off | Authentication | Specification: `docs/reviews/SM2_MFA_IMPLEMENTATION_PLAN.md` (revision 2, amended by AUTH C1.8.4). D-1 settled; open items D-2 to D-11 in its §13. AUTH C1.8.4 adds database commit-time integrity for resets (no partial reset, no orphan reset ticket, no factor disabled outside its workflow). **O-1 open:** the database cannot distinguish the operator CLI from the API, which share credentials; this must be resolved before MFA Phase 7. **O-4:** ticket-required enrolment is a mandatory Phase 4 requirement | V |
 
 ## Superseded records
 

@@ -1,0 +1,88 @@
+# Internal-testing PUBLIC Nginx template. Render only with the dedicated wrapper after hostname
+# validation. Never combine with internal-testing-admin.conf: both use default_server.
+server_tokens off;
+
+upstream eltnoy_internal_testing_public_listener {
+    server it-api-public:4000;
+}
+
+map $http_host $eltnoy_internal_testing_original_host {
+    default "";
+    "~*^@@INTERNAL_TEST_MARKETING_REGEX@@$" "@@INTERNAL_TEST_MARKETING_HOSTNAME@@";
+    "~*^@@INTERNAL_TEST_EXAM_REGEX@@$" "@@INTERNAL_TEST_EXAM_HOSTNAME@@";
+    "~*^@@INTERNAL_TEST_INSTITUTION_REGEX@@$" "@@INTERNAL_TEST_INSTITUTION_HOSTNAME@@";
+}
+
+server {
+    listen 8080 default_server;
+    server_name _;
+    location = /_internal-health {
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+    location / { return 444; }
+}
+
+server {
+    listen 8080;
+    server_name @@INTERNAL_TEST_MARKETING_HOSTNAME@@;
+    if ($eltnoy_internal_testing_original_host != "@@INTERNAL_TEST_MARKETING_HOSTNAME@@") { return 421; }
+    location / { return 301 https://@@INTERNAL_TEST_MARKETING_HOSTNAME@@$request_uri; }
+}
+
+server {
+    listen 8080;
+    server_name @@INTERNAL_TEST_EXAM_HOSTNAME@@;
+    if ($eltnoy_internal_testing_original_host != "@@INTERNAL_TEST_EXAM_HOSTNAME@@") { return 421; }
+    location / { return 301 https://@@INTERNAL_TEST_EXAM_HOSTNAME@@$request_uri; }
+}
+
+server {
+    listen 8080;
+    server_name @@INTERNAL_TEST_INSTITUTION_HOSTNAME@@;
+    if ($eltnoy_internal_testing_original_host != "@@INTERNAL_TEST_INSTITUTION_HOSTNAME@@") { return 421; }
+    location / { return 301 https://@@INTERNAL_TEST_INSTITUTION_HOSTNAME@@$request_uri; }
+}
+
+server {
+    listen 8443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+    return 444;
+}
+
+server {
+    listen 8443 ssl;
+    server_name @@INTERNAL_TEST_MARKETING_HOSTNAME@@;
+    include /etc/nginx/includes/eltnoy-tls.conf;
+    if ($eltnoy_internal_testing_original_host != "@@INTERNAL_TEST_MARKETING_HOSTNAME@@") { return 421; }
+    location / {
+        include /etc/nginx/includes/eltnoy-proxy.conf;
+        proxy_pass http://eltnoy_internal_testing_public_listener;
+    }
+}
+
+server {
+    listen 8443 ssl;
+    server_name @@INTERNAL_TEST_EXAM_HOSTNAME@@;
+    include /etc/nginx/includes/eltnoy-tls.conf;
+    if ($eltnoy_internal_testing_original_host != "@@INTERNAL_TEST_EXAM_HOSTNAME@@") { return 421; }
+    location / {
+        include /etc/nginx/includes/eltnoy-proxy.conf;
+        proxy_pass http://eltnoy_internal_testing_public_listener;
+    }
+}
+
+server {
+    listen 8443 ssl;
+    server_name @@INTERNAL_TEST_INSTITUTION_HOSTNAME@@;
+    include /etc/nginx/includes/eltnoy-tls.conf;
+    if ($eltnoy_internal_testing_original_host != "@@INTERNAL_TEST_INSTITUTION_HOSTNAME@@") { return 421; }
+    location / {
+        include /etc/nginx/includes/eltnoy-proxy.conf;
+        proxy_pass http://eltnoy_internal_testing_public_listener;
+    }
+}

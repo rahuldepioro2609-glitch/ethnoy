@@ -194,7 +194,7 @@ test('includes: every referenced include exists, is local to deploy/nginx/includ
   assert.deepEqual([...referencedIncludes].sort(), ['deploy/nginx/includes/eltnoy-proxy.conf', 'deploy/nginx/includes/eltnoy-tls.conf']);
 });
 
-test('hostnames: public serves only the three public hostnames; Admin only admin.eltnoy.com', () => {
+test('hostnames: public serves only the three public hostnames; Admin only admin.eltnoy.in', () => {
   for (const name of ['public', 'admin'] as const) {
     const named = servers(CONFIGS[name].tree).filter((server) => !isDefault(server));
     const hostnames = named.flatMap((server) => children(server, 'server_name').flatMap((directive) => directive.args));
@@ -208,6 +208,12 @@ test('hostnames: public serves only the three public hostnames; Admin only admin
   const publicNames = servers(CONFIGS.public.tree).flatMap((server) => children(server, 'server_name').flatMap((directive) => directive.args));
   const adminNames = servers(CONFIGS.admin.tree).flatMap((server) => children(server, 'server_name').flatMap((directive) => directive.args));
   assert.ok(!publicNames.includes(PINNED_SURFACE_HOSTNAMES.admin), 'the Admin hostname is not served by the public configuration');
+  assert.equal(PINNED_SURFACE_HOSTNAMES.admin, 'admin.eltnoy.in', 'Admin is pinned to the private eltnoy.in domain');
+  const text = (name: ConfigName) => readFileSync(new URL(CONFIGS[name].path, ROOT), 'utf8');
+  for (const name of ['public', 'admin'] as const) {
+    assert.ok(!text(name).includes('admin.eltnoy.com'), `${name}: no reference to the legacy Admin hostname`);
+  }
+  assert.ok(!text('public').includes('eltnoy.in'), 'the public configuration never names the private Admin domain');
   for (const host of EXPECTED_HOSTS.public) assert.ok(!adminNames.includes(host), `${host} is not served by the Admin configuration`);
 });
 
@@ -280,7 +286,8 @@ test('hosts: the original-host map is an exact, case-insensitive, port-free allo
         assert.equal(evaluateMap(name, bad), '', `${name}: ${JSON.stringify(bad)} rejected`);
       }
     }
-    for (const bad of ['', 'evil.com', 'localhost', '127.0.0.1', 'www.eltnoy.com', name === 'public' ? 'admin.eltnoy.com' : 'exam.eltnoy.com']) {
+    // The legacy admin.eltnoy.com is served by neither configuration (Admin moved to the private eltnoy.in).
+    for (const bad of ['', 'evil.com', 'localhost', '127.0.0.1', 'www.eltnoy.com', 'admin.eltnoy.com', 'eltnoy.in', 'www.eltnoy.in', name === 'public' ? 'admin.eltnoy.in' : 'exam.eltnoy.com']) {
       assert.equal(evaluateMap(name, bad), '', `${name}: ${JSON.stringify(bad)} rejected`);
     }
   }

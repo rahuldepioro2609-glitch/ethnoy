@@ -183,7 +183,7 @@ test('production public-only instance: starts only port 4000, owns recovery, ser
   assert.equal(run.gate.isReady(), true);
   assert.equal(run.recoveryStarts(), 1, 'the public instance owns recovery');
   run.servers[0].handler(fakeIncoming(4000, PUBLIC_PROXY, 'exam.eltnoy.com'), fakeServerResponse());
-  run.servers[0].handler(fakeIncoming(4000, ADMIN_PROXY, 'admin.eltnoy.com'), fakeServerResponse());
+  run.servers[0].handler(fakeIncoming(4000, ADMIN_PROXY, 'admin.eltnoy.in'), fakeServerResponse());
   assert.deepEqual(run.handled.map((entry) => entry.identify), [{ passed: true, status: 200 }, { passed: false, status: 421 }]);
 });
 
@@ -197,7 +197,7 @@ test('production Admin-only instance: starts only port 4001 and never starts rec
   assert.deepEqual(run.log, ['trust-proxy', 'database:check', 'create:1', 'listen:4001', 'listening:4001']);
   assert.equal(run.recoveryStarts(), 0, 'the recovery dependency is never called');
   assert.equal(runtime.recovery.handle()?.enabled, false, 'a handle that never runs');
-  run.servers[0].handler(fakeIncoming(4001, ADMIN_PROXY, 'admin.eltnoy.com'), fakeServerResponse());
+  run.servers[0].handler(fakeIncoming(4001, ADMIN_PROXY, 'admin.eltnoy.in'), fakeServerResponse());
   run.servers[0].handler(fakeIncoming(4001, PUBLIC_PROXY, 'exam.eltnoy.com'), fakeServerResponse());
   assert.deepEqual(run.handled.map((entry) => entry.identify), [{ passed: true, status: 200 }, { passed: false, status: 421 }]);
   // Shutdown closes only this instance's listener, then the pool.
@@ -278,8 +278,9 @@ test('development public,admin: binds public then Admin; readiness only after bo
   const runtime = await startApi(run.deps);
   assert.ok(runtime, 'startApi returned a running runtime');
   assert.equal(run.servers.length, 2, 'the listener factory was invoked for both listeners');
-  assert.deepEqual(run.servers[0].listenCalls, [{ port: 4000, host: '0.0.0.0' }]);
-  assert.deepEqual(run.servers[1].listenCalls, [{ port: 4001, host: '0.0.0.0' }]);
+  // The local all-in-one process binds loopback only: public on 127.0.0.1, Admin on ::1.
+  assert.deepEqual(run.servers[0].listenCalls, [{ port: 4000, host: '127.0.0.1' }]);
+  assert.deepEqual(run.servers[1].listenCalls, [{ port: 4001, host: '::1' }]);
   assert.deepEqual(run.log, [
     'trust-proxy', 'database:check', 'create:1', 'listen:4000', 'listening:4000', 'create:2', 'listen:4001', 'listening:4001', 'recovery:start',
   ]);
@@ -293,6 +294,15 @@ test('development public,admin: binds public then Admin; readiness only after bo
   assert.ok(run.servers.every((server) => server.listening));
   assert.deepEqual([...run.signals.keys()].sort(), ['SIGINT', 'SIGTERM']);
   assert.deepEqual(run.exitCodes, []);
+});
+
+test('development single-listener instance (one per container) binds the container interface, not loopback', async () => {
+  for (const [listener, port] of [['public', 4000], ['admin', 4001]] as const) {
+    const run = harness({ env: { ...DEV_DUAL, [API_LISTENERS_SETTING]: listener } });
+    const runtime = await startApi(run.deps);
+    assert.ok(runtime, listener);
+    assert.deepEqual(run.servers.map((server) => server.listenCalls), [[{ port, host: '0.0.0.0' }]], listener);
+  }
 });
 
 test('development public,admin: each listener assigns its own server-side identity; headers cannot change it', async () => {
@@ -385,6 +395,108 @@ test('startApi: invalid online-exam settings stop before the database check and 
   assert.deepEqual(run.log, ['trust-proxy', 'pool:end']);
   assert.deepEqual(run.exitCodes, [1]);
   assert.equal(run.recoveryStarts(), 0);
+});
+
+// ---------------------------------------------------------------------------
+// C1.3-A: SMS abuse-protection settings validated and logged at startup (statuses only)
+// ---------------------------------------------------------------------------
+
+const SMS_LIMITS = {
+  AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS: '3611', AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS: '13',
+  AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS: '1811', AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS: '15',
+  AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS: '7211', AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS: '14',
+  AUTH_SMS_DAILY_MAX_SENDS: '511', AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '311', AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS: '611',
+};
+
+async function startupProtectionLog(env: Record<string, string>) {
+  const run = harness({ env });
+  const lines: string[] = [];
+  run.deps.log = (line: string) => { lines.push(line); };
+  const runtime = await startApi(run.deps);
+  const entry = structured(lines).find((parsed) => parsed.event === 'auth.sms_protection');
+  return { runtime, run, lines, entry };
+}
+
+/** The structured (JSON) startup log lines; plain-text lines such as the listening banner are skipped. */
+function structured(lines: string[]): Array<Record<string, unknown>> {
+  return lines.filter((line) => line.trimStart().startsWith('{')).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+test('C1.3-A startup: SMS limits are validated and logged as statuses; nothing configured means fail closed, and startup continues', async () => {
+  const verificationModule = await import('./authVerification.js');
+  const { runtime, run, entry } = await startupProtectionLog(PROD_PUBLIC);
+  assert.ok(runtime, 'an unset SMS configuration never stops the API');
+  assert.equal(run.exitCodes.length, 0);
+  assert.ok(entry, 'auth.sms_protection is logged');
+  assert.equal(entry.smsProtectionConfigured, false);
+  assert.equal(entry.registrationClaimTtlConfigured, false);
+  assert.deepEqual(Object.values(entry.smsSettings as Record<string, string>), Array(8).fill('missing'));
+  assert.deepEqual([entry.smsProviderAvailable, entry.smsDeliveryEnabled], [false, false]);
+  // Request-time protection is exactly what startup resolved (no second reading of the environment).
+  assert.equal(verificationModule.abuseProtection().sms, null);
+});
+
+test('C1.3-A startup: valid limits are reported configured, but SMS delivery stays disabled without a provider; no value or secret path is logged', async () => {
+  const verificationModule = await import('./authVerification.js');
+  const env = { ...PROD_PUBLIC, ...SMS_LIMITS, AUTH_SMS_PROVIDER: 'unregistered-vendor', AUTH_OTP_HMAC_KEY_FILE: '/nonexistent/c13a/otp-key-path' };
+  const { runtime, lines, entry } = await startupProtectionLog(env);
+  assert.ok(runtime);
+  assert.ok(entry);
+  assert.equal(entry.smsProtectionConfigured, true);
+  assert.equal(entry.registrationClaimTtlConfigured, true);
+  assert.deepEqual(Object.values(entry.smsSettings as Record<string, string>), Array(8).fill('valid'));
+  assert.equal(entry.smsProviderAvailable, false, 'no provider is registered in this build');
+  assert.equal(entry.smsDeliveryEnabled, false, 'limits alone never enable SMS');
+  const providers = structured(lines).find((parsed) => parsed.event === 'auth.verification_providers');
+  assert.deepEqual(providers, { event: 'auth.verification_providers', sms: false, email: false, google: false }, 'provider availability is reported separately and unchanged');
+  const logged = lines.join('\n');
+  for (const value of Object.values(SMS_LIMITS)) assert.ok(!logged.includes(value), `numeric value ${value} is never logged`);
+  for (const secret of ['/nonexistent/c13a/otp-key-path', 'unregistered-vendor', 'postgresql://']) assert.ok(!logged.includes(secret), `${secret} is never logged`);
+  // Startup and request time agree: the installed configuration is the one requests use.
+  const installed = verificationModule.abuseProtection();
+  assert.deepEqual(installed.sms, verificationModule.resolveAbuseProtection(env).sms);
+  verificationModule.configureAbuseProtection(undefined);
+});
+
+test('C1.3-A startup: an invalid or inconsistent setting is flagged by name and keeps SMS closed', async () => {
+  const verificationModule = await import('./authVerification.js');
+  for (const [name, value, status] of [
+    ['AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS', '0', 'invalid'],
+    ['AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS', '2.5', 'invalid'],
+    ['AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS', '512', 'inconsistent'],
+  ] as const) {
+    const { runtime, entry } = await startupProtectionLog({ ...PROD_PUBLIC, ...SMS_LIMITS, [name]: value });
+    assert.ok(runtime, `${name}: startup continues`);
+    assert.equal(entry?.smsProtectionConfigured, false, name);
+    assert.equal((entry?.smsSettings as Record<string, string>)[name], status, name);
+    assert.equal(verificationModule.abuseProtection().sms, null, `${name}: request-time SMS stays refused`);
+  }
+  verificationModule.configureAbuseProtection(undefined);
+});
+
+test('C1.4-B-1 startup: email limits are logged separately as statuses; email delivery stays disabled without a provider; no value logged', async () => {
+  const verificationModule = await import('./authVerification.js');
+  const EMAIL = {
+    AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS: '3641', AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS: '41',
+    AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS: '7241', AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: '51',
+    AUTH_EMAIL_DAILY_MAX_SENDS: '541', AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '341',
+  };
+  for (const [env, configured, status] of [[{}, false, 'missing'], [EMAIL, true, 'valid']] as const) {
+    const run = harness({ env: { ...PROD_PUBLIC, ...env } });
+    const lines: string[] = [];
+    run.deps.log = (line: string) => { lines.push(line); };
+    assert.ok(await startApi(run.deps), 'email configuration never stops startup');
+    const entry = structured(lines).find((parsed) => parsed.event === 'auth.email_protection');
+    assert.ok(entry);
+    assert.equal(entry.emailProtectionConfigured, configured);
+    assert.deepEqual(Object.values(entry.emailSettings as Record<string, string>), Array(6).fill(status));
+    assert.deepEqual([entry.emailProviderAvailable, entry.emailDeliveryEnabled], [false, false], 'limits alone never enable email');
+    const sms = structured(lines).find((parsed) => parsed.event === 'auth.sms_protection');
+    assert.ok(sms && !('emailSettings' in sms), 'the SMS readiness line is unchanged');
+    for (const value of Object.values(EMAIL)) assert.ok(!lines.join('\n').includes(value), `value ${value} is never logged`);
+    assert.equal(verificationModule.abuseProtection().email === null, !configured, 'request time uses the startup configuration');
+  }
+  verificationModule.configureAbuseProtection(undefined);
 });
 
 test('startApi: production dependencies are built lazily and these tests opened no socket', () => {

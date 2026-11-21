@@ -93,7 +93,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
   };
 
   return (
-    <section className="relative overflow-hidden bg-gradient-to-r from-[#edf7ff] via-[#e5f4fd] to-[#ebfbf3] border-b border-slate-200/80">
+    <section className="relative overflow-hidden bg-gradient-to-r from-[#F7F6F1] via-[#F1F7F2] to-[#EAF6EF] border-b border-slate-200/80">
       {/* Soft teal/cyan decorative diagonal shapes matching reference mockup */}
       <div className="absolute inset-0 pointer-events-none opacity-40">
         <div className="absolute -right-20 -top-20 w-96 h-96 rounded-full bg-teal-200/40 blur-3xl" />

@@ -38,7 +38,7 @@ test('Compose probes each Nginx without a Host override and without disabling TL
 
 test('normal HTTP requests still redirect to HTTPS and TLS policy remains enabled', () => {
   assert.match(configs.public, /location \/ \{\s*return 301 https:\/\/exam\.eltnoy\.com\$request_uri;/);
-  assert.match(configs.admin, /location \/ \{\s*return 301 https:\/\/admin\.eltnoy\.com\$request_uri;/);
+  assert.match(configs.admin, /location \/ \{\s*return 301 https:\/\/admin\.eltnoy\.in\$request_uri;/);
   for (const config of Object.values(configs)) assert.match(config, /listen 8443 ssl;/);
   assert.match(tlsPolicy, /ssl_protocols TLSv1\.2 TLSv1\.3;/);
 });

@@ -1,3 +1,8 @@
+# UNSUPPORTED FOR ELTNOY PRODUCTION. Static-only preview configuration; behaviour left unchanged.
+# It publishes only the built frontend (dist/) and runs no API. The catch-all redirect below
+# ("/*" -> "/index.html", status 200) also matches /api/*, so every API request receives the HTML
+# page instead of JSON (sign-in, dashboards and forms fail). ELTNOY production needs the API with
+# P1-B surface isolation behind the two Nginx surfaces; see docs/operations/production-operator-runbook.md §14.
 [build]
   command = "npm ci && npm run build"
   publish = "dist"

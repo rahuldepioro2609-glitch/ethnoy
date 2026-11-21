@@ -10,8 +10,10 @@ export interface DeploymentConfig {
   adminTlsCertDir?: string;
   /** M-1: the API image reference used by api_public (built locally) and api_admin (reused). */
   apiImage?: string;
-  /** M-2: host address the public Nginx publishes on (the private ENI address). */
+  /** M-2: host address the public Nginx publishes on (private ENI by default, explicit direct VPS mode otherwise). */
   publicBindAddress?: string;
+  /** Explicitly selects the public Nginx host binding model. */
+  publicBindMode?: string;
   /** M-2: host address the Admin Nginx publishes on; must equal wireguardInterfaceAddress. */
   adminBindAddress?: string;
   /** M-2: the address assigned to the host's WireGuard interface (wg0), declared by the operator. */
@@ -122,6 +124,7 @@ export const DEPLOYMENT_CONFIG_ENVIRONMENT = {
   adminTlsCertDir: 'ADMIN_TLS_CERT_DIR',
   apiImage: 'ELTNOY_API_IMAGE',
   publicBindAddress: 'PUBLIC_BIND_ADDRESS',
+  publicBindMode: 'PUBLIC_BIND_MODE',
   adminBindAddress: 'ADMIN_BIND_ADDRESS',
   wireguardInterfaceAddress: 'WIREGUARD_INTERFACE_ADDRESS',
 } as const satisfies Record<keyof DeploymentConfig, string>;
@@ -169,10 +172,19 @@ export function validateDeploymentConfig(config: DeploymentConfig): string[] {
     errors.push('ELTNOY_API_IMAGE must be a local-only reference of the form localhost/eltnoy-api:<tag>; registry, Docker Hub, digest and untagged references are not accepted.');
   }
 
-  // M-2: Nginx bind addresses. The public Nginx binds to the private ENI address; the Admin Nginx
-  // binds only to the operator-declared WireGuard interface address, which it must equal exactly.
-  const publicBind = checkBindAddress('PUBLIC_BIND_ADDRESS', config.publicBindAddress, ['private'],
-    'must be a private (RFC 1918) host address on the private interface; public and shared addresses are not accepted.', errors);
+  // M-2: public-ingress binding. Cloud/VPC deployments bind the private ENI by default. A directly
+  // addressed VPS may bind its public interface only when the operator explicitly selects
+  // PUBLIC_BIND_MODE=direct-vps; the host firewall and DOCKER-USER Admin guard remain required.
+  const publicBindMode = config.publicBindMode;
+  if (publicBindMode !== 'private-eni' && publicBindMode !== 'direct-vps') {
+    errors.push('PUBLIC_BIND_MODE must be set to private-eni or direct-vps.');
+  }
+  const publicBindClasses = publicBindMode === 'direct-vps' ? ['public'] as const : ['private'] as const;
+  const publicBindRule = publicBindMode === 'direct-vps'
+    ? 'must be a public IPv4 address assigned to this VPS; private, shared, loopback and wildcard addresses are not accepted.'
+    : 'must be a private (RFC 1918) host address on the private interface; public and shared addresses are not accepted.';
+  const publicBind = checkBindAddress('PUBLIC_BIND_ADDRESS', config.publicBindAddress, publicBindClasses,
+    publicBindRule, errors);
   const wireguard = checkBindAddress('WIREGUARD_INTERFACE_ADDRESS', config.wireguardInterfaceAddress, ['private', 'shared'],
     'must be a private (RFC 1918) or shared (100.64.0.0/10) WireGuard tunnel address; public addresses are not accepted.', errors);
   const adminBind = checkBindAddress('ADMIN_BIND_ADDRESS', config.adminBindAddress, ['private', 'shared'],

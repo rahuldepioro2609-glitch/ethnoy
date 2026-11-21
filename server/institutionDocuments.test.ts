@@ -14,6 +14,7 @@ import { hashSessionToken, setTrustedRequestSurface } from './auth.js';
 import { expectedOrigin, type Surface } from './surface.js';
 import { pool } from './db.js';
 import { INSTITUTION_DOCUMENT_CATEGORIES } from '../src/utils/institutionDocuments.js';
+import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
 
 const tokens = {
   center: 'C'.repeat(43),
@@ -203,7 +204,7 @@ function installAuthenticationRows() {
         display_name: `Synthetic ${role}`,
         role,
         account_status: 'approved',
-        is_super_admin: roleName === 'superAdmin',
+        is_super_admin: roleName === 'superAdmin', ...VERIFIED_PORTAL_SESSION,
       }],
     };
   };

@@ -17,6 +17,7 @@ import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { expectedOrigin, type Surface } from './surface.js';
+import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:1/p03_route_tests';
 
@@ -39,11 +40,11 @@ const [
 type AccountName = 'candidate' | 'center' | 'official' | 'superA' | 'superB';
 
 const ACCOUNTS: Record<AccountName, { token: string; row: Record<string, unknown> }> = {
-  candidate: { token: 'P'.repeat(43), row: { id: 'synthetic-candidate', role: 'candidate', is_super_admin: false } },
-  center: { token: 'Q'.repeat(43), row: { id: 'synthetic-center', role: 'center', is_super_admin: false } },
-  official: { token: 'R'.repeat(43), row: { id: 'synthetic-official', role: 'official', is_super_admin: false } },
-  superA: { token: 'S'.repeat(43), row: { id: 'synthetic-super-a', role: 'official', is_super_admin: true } },
-  superB: { token: 'T'.repeat(43), row: { id: 'synthetic-super-b', role: 'official', is_super_admin: true } },
+  candidate: { token: 'P'.repeat(43), row: { id: 'synthetic-candidate', role: 'candidate', is_super_admin: false, ...VERIFIED_PORTAL_SESSION } },
+  center: { token: 'Q'.repeat(43), row: { id: 'synthetic-center', role: 'center', is_super_admin: false, ...VERIFIED_PORTAL_SESSION } },
+  official: { token: 'R'.repeat(43), row: { id: 'synthetic-official', role: 'official', is_super_admin: false, ...VERIFIED_PORTAL_SESSION } },
+  superA: { token: 'S'.repeat(43), row: { id: 'synthetic-super-a', role: 'official', is_super_admin: true, ...VERIFIED_PORTAL_SESSION } },
+  superB: { token: 'T'.repeat(43), row: { id: 'synthetic-super-b', role: 'official', is_super_admin: true, ...VERIFIED_PORTAL_SESSION } },
 };
 
 const SESSIONS = new Map(Object.values(ACCOUNTS).map(({ token, row }) => [hashSessionToken(token), {
@@ -304,6 +305,24 @@ interface MatrixEntry {
 const OPAQUE_ID = '00000000-0000-4000-8000-000000000001';
 
 const MATRIX: MatrixEntry[] = [
+  // SM-1: Platform Staff management and Organization Staff activation — Super Admin only.
+  { method: 'get', path: '/api/admin/platform-staff', policy: 'super_admin', ref: 'SM-1 Platform Staff (Super Admin only)' },
+  { method: 'post', path: '/api/admin/platform-staff', policy: 'super_admin', ref: 'SM-1 Platform Staff (Super Admin only)' },
+  { method: 'post', path: '/api/admin/platform-staff/:id/deactivate', policy: 'super_admin', ref: 'SM-1 Platform Staff (Super Admin only)', params: { id: OPAQUE_ID } },
+  { method: 'put', path: '/api/admin/platform-staff/:id/assignment', policy: 'super_admin', ref: 'SM-1 Platform Staff (Super Admin only)', params: { id: OPAQUE_ID } },
+  { method: 'get', path: '/api/admin/platform-staff/departments', policy: 'super_admin', ref: 'SM-1 Platform Staff (Super Admin only)' },
+  { method: 'post', path: '/api/admin/platform-staff/departments', policy: 'super_admin', ref: 'SM-1 Platform Staff (Super Admin only)' },
+  { method: 'get', path: '/api/admin/platform-staff/roles', policy: 'super_admin', ref: 'SM-1 Platform Staff (Super Admin only; D-08 catalogue empty)' },
+  { method: 'post', path: '/api/admin/platform-staff/roles', policy: 'super_admin', ref: 'SM-1 Platform Staff (Super Admin only; D-08 catalogue empty)' },
+  { method: 'get', path: '/api/admin/platform-staff/audit', policy: 'super_admin', ref: 'SM-1 / A-12 (audit read: Super Admin only)' },
+  { method: 'get', path: '/api/admin/organization-staff', policy: 'super_admin', ref: 'SM-1 / Q115 (Super Admin activation)' },
+  { method: 'post', path: '/api/admin/organization-staff/:id/activate', policy: 'super_admin', ref: 'SM-1 / Q115 (Super Admin activation)', params: { id: OPAQUE_ID } },
+  { method: 'get', path: '/api/admin/institute-verifications', policy: 'super_admin', ref: 'AUTH-1 / SM-2 institutional verification (Super Admin only)' },
+  { method: 'get', path: '/api/admin/institute-verifications/decisions', policy: 'super_admin', ref: 'AUTH-1 / SM-2 / A-12 (decision audit read: Super Admin only)' },
+  { method: 'post', path: '/api/admin/institute-verifications/:institutionId/verify', policy: 'super_admin', ref: 'AUTH-1 / SM-2 institutional verification (Super Admin only)', params: { institutionId: OPAQUE_ID } },
+  { method: 'post', path: '/api/admin/institute-verifications/:institutionId/reject', policy: 'super_admin', ref: 'AUTH-1 / SM-2 institutional verification (Super Admin only)', params: { institutionId: OPAQUE_ID } },
+  { method: 'post', path: '/api/admin/institute-verifications/:institutionId/suspend', policy: 'super_admin', ref: 'AUTH-1 / SM-2 institute suspension (Super Admin only)', params: { institutionId: OPAQUE_ID } },
+  { method: 'post', path: '/api/admin/institute-verifications/:institutionId/restore', policy: 'super_admin', ref: 'AUTH-1 / SM-2 institute suspension (Super Admin only)', params: { institutionId: OPAQUE_ID } },
   // Super Admin only
   { method: 'get', path: '/api/admin/data-export', policy: 'super_admin', ref: 'A-07 (preserved)' },
   { method: 'post', path: '/api/admin/admit-cards/import', policy: 'super_admin', ref: 'A-06 / P3-D1 (interim)' },
@@ -329,8 +348,8 @@ const MATRIX: MatrixEntry[] = [
   { method: 'patch', path: '/api/admin/institutes/:id', policy: 'official', ref: 'A-01 (preserved)', params: { id: 'center-1' } },
   { method: 'post', path: '/api/admin/exams', policy: 'official', ref: 'A-18 (preserved)' },
   { method: 'patch', path: '/api/admin/exams/:id', policy: 'official', ref: 'P3-D6 (excluded from this batch)', params: { id: 'exam-1' } },
-  { method: 'post', path: '/api/admin/notices', policy: 'official', ref: 'P3-D6 (excluded from this batch)' },
-  { method: 'patch', path: '/api/admin/notices/:id', policy: 'official', ref: 'P3-D6 (excluded from this batch)', params: { id: 'notice-1' } },
+  { method: 'post', path: '/api/admin/notices', policy: 'official', ref: 'A-17 (all Officials create drafts)' },
+  { method: 'patch', path: '/api/admin/notices/:id', policy: 'super_admin', ref: 'A-17 (Super Admin publication only)', params: { id: 'notice-1' } },
   { method: 'get', path: '/api/admin/applications', policy: 'official', ref: 'P3-D6 (A-08 excluded from this batch)' },
   { method: 'patch', path: '/api/admin/applications/:id', policy: 'official', ref: 'A-08 status workflow (preserved)', params: { id: 'app-1' } },
   { method: 'patch', path: '/api/admin/institute-forms/:id', policy: 'official', ref: 'not covered by P0-3 (PERM gap)', params: { id: 'form-1' } },
@@ -455,6 +474,62 @@ for (const entry of MATRIX) {
     }
   });
 }
+
+const validNoticeDraft = {
+  title: 'Synthetic examination schedule update',
+  category: 'Circular',
+  summary: 'Synthetic notice draft summary for an authorization test.',
+  fullContent: 'Synthetic notice content. No real candidate or production information.',
+  referenceNumber: 'SYNTHETIC/NOTICE/2026/001',
+};
+
+test('A-17: every Official creates notices as unpublished drafts', async () => {
+  for (const account of ['official', 'superA'] as const) {
+    const { outcome, db } = await withDatabase((text, values) => {
+      if (!text.includes('INSERT INTO portal_notices')) return undefined;
+      assert.match(text, /VALUES\s*\(\$1,\s*\$2,\s*\$3,\s*\$4,\s*\$5,\s*\$6,\s*false,\s*\$7,\s*NULL\)/);
+      assert.equal(values[6], ACCOUNTS[account].row.id);
+      return {
+        rows: [{
+          id: 'synthetic-notice',
+          title: validNoticeDraft.title,
+          is_published: false,
+          published_at: null,
+        }],
+        rowCount: 1,
+      };
+    }, async (db) => ({
+      outcome: await invoke('post', '/api/admin/notices', { account, body: validNoticeDraft }),
+      db,
+    }));
+
+    assert.equal(outcome.status, 201);
+    assert.equal((outcome.body.notice as Record<string, unknown>).is_published, false);
+    assert.equal(db.calls.length, 1);
+  }
+});
+
+test('A-17: Super Admin can publish a notice', async () => {
+  const { outcome, db } = await withDatabase((text, values) => {
+    if (!text.includes('UPDATE portal_notices')) return undefined;
+    assert.equal(values[1], true);
+    return {
+      rows: [{ id: 'synthetic-notice', is_published: true }],
+      rowCount: 1,
+    };
+  }, async (db) => ({
+    outcome: await invoke('patch', '/api/admin/notices/:id', {
+      account: 'superA',
+      params: { id: 'synthetic-notice' },
+      body: { isPublished: true },
+    }),
+    db,
+  }));
+
+  assert.equal(outcome.status, 200);
+  assert.equal((outcome.body.notice as Record<string, unknown>).is_published, true);
+  assert.equal(db.calls.length, 1);
+});
 
 // ---------------------------------------------------------------------------
 // 2. Withdrawals: maker-checker (A-03, P3-D2, P3-D3)

@@ -4,6 +4,8 @@ import test from 'node:test';
 import bcrypt from 'bcryptjs';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { expectedOrigin, type Surface } from './surface.js';
+import { RecordingEmailProvider, RecordingSmsProvider, testServices, VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
+import { configureVerificationServices, DISABLED_SERVICES } from './verificationProviders.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 
@@ -187,7 +189,7 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
     display_name: institution.display_name,
     role: 'center',
     account_status: institution.account_status,
-    is_super_admin: false,
+    is_super_admin: false, ...VERIFIED_PORTAL_SESSION,
   };
   let connectionCount = 0;
   let lockTail = Promise.resolve();
@@ -213,7 +215,7 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
             display_name: institution.display_name,
             role: 'center',
             account_status: institution.account_status,
-            is_super_admin: false,
+            is_super_admin: false, ...VERIFIED_PORTAL_SESSION,
           }] : [],
         };
       }
@@ -229,7 +231,7 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
                 role: 'center',
                 password_hash: institution.password_hash,
                 account_status: institution.account_status,
-                is_super_admin: false,
+                is_super_admin: false, ...VERIFIED_PORTAL_SESSION,
               }]
               : [],
           };
@@ -436,6 +438,17 @@ test('resubmission requires the existing institute credentials and never creates
     assert.equal(database.institution.account_status, 'rejected');
 
     const loginHandlers = findPostRouteHandlers('/api/auth/login').slice(1);
+    // AUTH-1: without providers, institute sign-in is closed (503) before any lookup.
+    const closed = await invokePostRoute(loginHandlers, { loginId: correctedDetails.loginId, password, role: 'center' });
+    assert.equal(closed.status, 503);
+    assert.equal(closed.cookieSet, false);
+    // With (test-double) providers, the rejected account is still refused with 403 and no session.
+    configureVerificationServices(testServices({ sms: new RecordingSmsProvider(), email: new RecordingEmailProvider() }));
+    // AUTH C1.1-b: sign-in also needs the (test-only) SMS limits, checked before any lookup. Imported
+    // here, after this file has set its environment, so the shared pool is configured as before.
+    const { configureAbuseProtection } = await import('./authVerification.js');
+    const { testAbuseProtection } = await import('./authTestSupport.js');
+    configureAbuseProtection(testAbuseProtection());
     const login = await invokePostRoute(loginHandlers, {
       loginId: correctedDetails.loginId,
       password,
@@ -445,6 +458,8 @@ test('resubmission requires the existing institute credentials and never creates
     assert.equal(login.cookieSet, false);
     assert.equal(database.institution.account_status, 'rejected');
   } finally {
+    configureVerificationServices(DISABLED_SERVICES);
+    (await import('./authVerification.js')).configureAbuseProtection(undefined);
     database.restore();
   }
 });

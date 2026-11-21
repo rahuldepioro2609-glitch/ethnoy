@@ -545,7 +545,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                         type="text"
                         value={applicationNumber}
                         onChange={(e) => setApplicationNumber(e.target.value)}
-                        placeholder="App No. (e.g. NEA-2026)"
+                        placeholder="Application number"
                         className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                     </div>

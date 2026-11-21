@@ -9,6 +9,7 @@ import {
 } from './deploymentConfig.js';
 
 const verifiedTls: DeploymentConfig = {
+  publicBindMode: 'private-eni',
   databaseSsl: 'true',
   databaseSslRejectUnauthorized: 'true',
   postgresCaFile: '/certs/ca.crt',
@@ -135,7 +136,7 @@ test('M-1: a missing image reference fails closed with no default', () => {
 
 const bindErrors = (overrides: Partial<DeploymentConfig>) =>
   validateDeploymentConfig({ ...verifiedTls, deploymentMode: 'production', ...overrides })
-    .filter((error) => /BIND_ADDRESS|WIREGUARD_INTERFACE_ADDRESS/.test(error));
+    .filter((error) => /BIND_MODE|BIND_ADDRESS|WIREGUARD_INTERFACE_ADDRESS/.test(error));
 
 test('M-2: valid IPv4 configurations are accepted (private public bind; Admin equals the WireGuard address)', () => {
   for (const config of [
@@ -188,10 +189,14 @@ test('M-2: invalid literals, hostnames, ports and CIDR ranges are rejected (no D
   }
 });
 
-test('M-2: a public (non-RFC 1918) address is rejected as the public bind address', () => {
+test('M-2: a public bind address is rejected by default and accepted only in explicit direct-vps mode', () => {
   for (const address of ['203.0.113.10', '198.51.100.7', '8.8.8.8', '100.64.0.10']) {
     assert.ok(bindErrors({ publicBindAddress: address }).some((error) => error.startsWith('PUBLIC_BIND_ADDRESS must be a private (RFC 1918) host address')), address);
   }
+  assert.deepEqual(bindErrors({ publicBindMode: 'direct-vps', publicBindAddress: '8.8.8.8' }), []);
+  assert.ok(bindErrors({ publicBindMode: 'direct-vps', publicBindAddress: '10.0.0.1' }).some((error) => error.startsWith('PUBLIC_BIND_ADDRESS must be a public IPv4 address')));
+  assert.ok(bindErrors({ publicBindMode: 'direct-vps', publicBindAddress: '100.64.0.10' }).some((error) => error.startsWith('PUBLIC_BIND_ADDRESS must be a public IPv4 address')));
+  assert.ok(bindErrors({ publicBindMode: 'unknown', publicBindAddress: '8.8.8.8' }).includes('PUBLIC_BIND_MODE must be set to private-eni or direct-vps.'));
   // Public addresses are rejected for the WireGuard and Admin addresses too.
   assert.ok(bindErrors({ adminBindAddress: '203.0.113.10', wireguardInterfaceAddress: '203.0.113.10' }).some((error) => error.startsWith('WIREGUARD_INTERFACE_ADDRESS must be a private')));
 });
@@ -206,6 +211,8 @@ test('M-2: the Admin bind address must equal the WireGuard interface address and
 });
 
 test('M-2: missing configuration fails closed with no default; errors never echo configured values', () => {
+  assert.ok(bindErrors({ publicBindMode: undefined }).includes('PUBLIC_BIND_MODE must be set to private-eni or direct-vps.'));
+  assert.ok(bindErrors({ publicBindMode: '' }).includes('PUBLIC_BIND_MODE must be set to private-eni or direct-vps.'));
   for (const [field, name] of [['publicBindAddress', 'PUBLIC_BIND_ADDRESS'], ['adminBindAddress', 'ADMIN_BIND_ADDRESS'], ['wireguardInterfaceAddress', 'WIREGUARD_INTERFACE_ADDRESS']] as const) {
     assert.ok(bindErrors({ [field]: undefined }).includes(`${name} must be set.`), name);
     assert.ok(bindErrors({ [field]: '' }).includes(`${name} must be set.`), name);
@@ -299,6 +306,7 @@ const syntheticEnvironment: Record<string, string> = {
   ADMIN_TLS_CERT_DIR: '/certs/nginx-admin',
   ELTNOY_API_IMAGE: 'localhost/eltnoy-api:1.0.0',
   PUBLIC_BIND_ADDRESS: '10.250.0.10',
+  PUBLIC_BIND_MODE: 'private-eni',
   ADMIN_BIND_ADDRESS: '10.251.0.1',
   WIREGUARD_INTERFACE_ADDRESS: '10.251.0.1',
 };
@@ -314,6 +322,7 @@ test('F-4: every configuration field is read from its documented environment var
     adminTlsCertDir: 'ADMIN_TLS_CERT_DIR',
     apiImage: 'ELTNOY_API_IMAGE',
     publicBindAddress: 'PUBLIC_BIND_ADDRESS',
+    publicBindMode: 'PUBLIC_BIND_MODE',
     adminBindAddress: 'ADMIN_BIND_ADDRESS',
     wireguardInterfaceAddress: 'WIREGUARD_INTERFACE_ADDRESS',
   });
@@ -356,4 +365,140 @@ test('F-4: the mapping preserves validation behaviour (same errors as a hand-bui
     validateDeploymentConfig(deploymentConfigFromEnvironment(environment)),
     validateDeploymentConfig({ ...verifiedTls, deploymentMode: 'production', publicBindAddress: '8.8.8.8', apiImage: 'docker.io/library/eltnoy-api:1' }),
   );
+});
+
+// ---------------------------------------------------------------------------
+// AUTH C1.3-B: SMS limits and claim lifetime in the deployment preflight (pure shared resolver)
+// ---------------------------------------------------------------------------
+
+const C13B_SMS_NAMES = [
+  'AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS',
+  'AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS',
+  'AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS',
+  'AUTH_SMS_DAILY_MAX_SENDS', 'AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS',
+];
+// TEST-ONLY distinctive values, so the tests can prove that no value is ever printed.
+const C13B_VALID: Record<string, string> = {
+  AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS: '36023', AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS: '323',
+  AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS: '18023', AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS: '523',
+  AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS: '72023', AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS: '423',
+  AUTH_SMS_DAILY_MAX_SENDS: '50023', AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '30023',
+};
+
+test('AUTH C1.3-B preflight: the eight SMS settings are all-or-nothing; the claim lifetime is validated on its own', async () => {
+  const { validateSmsProtectionDeployment } = await import('./smsProtectionConfig.js');
+  const ttl = 'AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS';
+  assert.deepEqual(validateSmsProtectionDeployment({}), [], 'all unset: accepted (SMS closed)');
+  assert.deepEqual(validateSmsProtectionDeployment(Object.fromEntries([...C13B_SMS_NAMES, ttl].map((name) => [name, '']))), [], 'all empty: accepted');
+  assert.deepEqual(validateSmsProtectionDeployment(C13B_VALID), [], 'all eight valid, claim lifetime unset: accepted');
+  assert.deepEqual(validateSmsProtectionDeployment({ ...C13B_VALID, [ttl]: '623' }), [], 'everything valid');
+  // Partial: each missing name is reported.
+  for (const present of C13B_SMS_NAMES) {
+    const errors = validateSmsProtectionDeployment({ [present]: C13B_VALID[present] });
+    assert.equal(errors.length, 7, present);
+    assert.ok(!errors.some((error) => error.startsWith(`${present} `)), `${present} itself is valid`);
+  }
+  const sevenOfEight = { ...C13B_VALID };
+  delete sevenOfEight.AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS;
+  assert.deepEqual(validateSmsProtectionDeployment(sevenOfEight), ['AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS is missing: the eight AUTH_SMS_* settings must be set together (all of them or none).']);
+  for (const bad of ['0', '-5', '1.5', 'ten', '1e3', ' ']) {
+    const errors = validateSmsProtectionDeployment({ ...C13B_VALID, AUTH_SMS_DAILY_MAX_SENDS: bad, AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '1' });
+    assert.equal(errors.length, 1, JSON.stringify(bad));
+    assert.match(errors[0], bad.trim() === '' ? /^AUTH_SMS_DAILY_MAX_SENDS is missing/ : /^AUTH_SMS_DAILY_MAX_SENDS is invalid: it must be a positive whole number\.$/);
+  }
+  assert.deepEqual(validateSmsProtectionDeployment({ ...C13B_VALID, AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '50024' }), ['AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS is inconsistent: it must not exceed AUTH_SMS_DAILY_MAX_SENDS.']);
+  assert.deepEqual(validateSmsProtectionDeployment({ ...C13B_VALID, AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '50023' }), [], 'equal to the total is allowed');
+  // The claim lifetime: independent of the SMS group, existing maximum 900 preserved.
+  for (const bad of ['0', '901', '7.5', 'x']) {
+    for (const sms of [{}, C13B_VALID]) {
+      assert.deepEqual(validateSmsProtectionDeployment({ ...sms, [ttl]: bad }), [`${ttl} is invalid: it must be a positive whole number no greater than the verification challenge lifetime.`], `${ttl}=${bad}`);
+    }
+  }
+  assert.deepEqual(validateSmsProtectionDeployment({ [ttl]: '900' }), [], 'the 900 maximum is inclusive; a valid claim lifetime alone does not require the SMS settings');
+  // No configured value ever appears in any message.
+  const text = [validateSmsProtectionDeployment({ AUTH_SMS_DAILY_MAX_SENDS: '50023', [ttl]: '901' }), validateSmsProtectionDeployment({ ...C13B_VALID, AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '50024' })].flat().join('\n');
+  for (const value of [...Object.values(C13B_VALID), '50024', '901']) assert.ok(!text.includes(value), `value ${value} is not printed`);
+});
+
+test('AUTH C1.3-B preflight: validateDeploymentConfig.ts reports SMS problems by name, never values or the password-file path', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const root = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+  const passwordFile = '/nonexistent/c13b/password-file-marker';
+  const run = spawnSync(process.execPath, ['--import', 'tsx', 'server/validateDeploymentConfig.ts'], {
+    cwd: root,
+    env: { PATH: process.env.PATH ?? '', DATABASE_PASSWORD_FILE: passwordFile, DATABASE_URL: 'postgresql://marker-user@marker-host/markerdb', AUTH_SMS_DAILY_MAX_SENDS: '50023', AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS: '901' },
+    encoding: 'utf8', timeout: 30_000,
+  });
+  assert.equal(run.status, 1);
+  const output = run.stdout + run.stderr;
+  assert.match(output, /Invalid deployment configuration/);
+  assert.match(output, /AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS is missing: the eight AUTH_SMS_\* settings must be set together/);
+  assert.match(output, /AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS is invalid/);
+  for (const secret of ['50023', '901', passwordFile, 'marker-user', 'marker-host', 'markerdb']) assert.ok(!output.includes(secret), `${secret} is never printed`);
+});
+
+test('AUTH C1.3-B preflight: the import closure contains no database, credential, Express, dotenv or auth-store module', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const seen = new Set<string>();
+  const bare = new Set<string>();
+  const visit = async (file: string) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const source = await readFile(new URL(`./${file}`, import.meta.url), 'utf8');
+    for (const [, specifier] of source.matchAll(/^\s*(?:import|export)\s[^'"]*?from\s+'([^']+)'/gm)) {
+      if (specifier.startsWith('./')) await visit(specifier.slice(2).replace(/\.js$/, '.ts'));
+      else bare.add(specifier);
+    }
+  };
+  await visit('validateDeploymentConfig.ts');
+  assert.deepEqual([...seen].sort(), ['deploymentConfig.ts', 'smsProtectionConfig.ts', 'validateDeploymentConfig.ts', 'verificationProviders.ts']);
+  assert.ok([...bare].every((specifier) => specifier.startsWith('node:')), `only Node built-ins: ${[...bare].join(', ')}`);
+  for (const forbidden of ['db.ts', 'databaseCredentials.ts', 'authVerification.ts', 'authVerificationStore.ts', 'index.ts']) assert.ok(!seen.has(forbidden), forbidden);
+});
+
+// ---------------------------------------------------------------------------
+// AUTH C1.4-B-2: the six email settings in the deployment preflight (pure shared resolver)
+// ---------------------------------------------------------------------------
+
+const C14B_VALID: Record<string, string> = {
+  AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS: '36071', AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS: '371',
+  AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS: '72071', AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: '471',
+  AUTH_EMAIL_DAILY_MAX_SENDS: '50071', AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '30071',
+};
+
+test('AUTH C1.4-B-2 preflight rule: all six absent/empty or all six valid; partial, invalid or inconsistent rejected; SMS rule unchanged', async () => {
+  const { validateEmailProtectionDeployment, validateSmsProtectionDeployment, resolveEmailProtection } = await import('./smsProtectionConfig.js');
+  assert.deepEqual(validateEmailProtectionDeployment({}), []);
+  assert.deepEqual(validateEmailProtectionDeployment(Object.fromEntries(Object.keys(C14B_VALID).map((name) => [name, '']))), []);
+  assert.deepEqual(validateEmailProtectionDeployment(C14B_VALID), []);
+  assert.ok(resolveEmailProtection(C14B_VALID).email, 'the same resolver the API uses accepts it');
+  for (const present of Object.keys(C14B_VALID)) assert.equal(validateEmailProtectionDeployment({ [present]: C14B_VALID[present] }).length, 5, present);
+  for (const bad of ['0', '-5', '1.5', 'ten', '1e3']) {
+    assert.deepEqual(validateEmailProtectionDeployment({ ...C14B_VALID, AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS: bad }), ['AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS is invalid: it must be a positive whole number.'], bad);
+  }
+  assert.deepEqual(validateEmailProtectionDeployment({ ...C14B_VALID, AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '50072' }), ['AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS is inconsistent: it must not exceed AUTH_EMAIL_DAILY_MAX_SENDS.']);
+  assert.deepEqual(validateEmailProtectionDeployment({ ...C14B_VALID, AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '50071' }), [], 'equal is allowed');
+  // Parity with the resolver, and SMS unaffected by email values.
+  for (const env of [{}, C14B_VALID, { AUTH_EMAIL_DAILY_MAX_SENDS: '3' }, { ...C14B_VALID, AUTH_EMAIL_DAILY_MAX_SENDS: '0' }]) {
+    assert.equal(validateEmailProtectionDeployment(env).length === 0, resolveEmailProtection(env).email !== null || Object.keys(env).length === 0, JSON.stringify(Object.keys(env)));
+  }
+  assert.deepEqual(validateSmsProtectionDeployment(C14B_VALID), [], 'email settings never trigger the SMS rule');
+  const text = validateEmailProtectionDeployment({ AUTH_EMAIL_DAILY_MAX_SENDS: '50071', AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '50072' }).join('\n');
+  for (const value of ['50071', '50072']) assert.ok(!text.includes(value));
+});
+
+test('AUTH C1.4-B-2 container preflight: validateDeploymentConfig.ts rejects a partial email group by name without printing values', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const root = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+  const run = spawnSync(process.execPath, ['--import', 'tsx', 'server/validateDeploymentConfig.ts'], {
+    cwd: root,
+    env: { PATH: process.env.PATH ?? '', DATABASE_PASSWORD_FILE: '/nonexistent/c14b/password-marker', AUTH_EMAIL_DAILY_MAX_SENDS: '50071', AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: '1.5' },
+    encoding: 'utf8', timeout: 30_000,
+  });
+  assert.equal(run.status, 1);
+  const output = run.stdout + run.stderr;
+  assert.match(output, /AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS is missing: the six AUTH_EMAIL_\* settings must be set together/);
+  assert.match(output, /AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS is invalid/);
+  for (const secret of ['50071', '1.5', '/nonexistent/c14b/password-marker']) assert.ok(!output.includes(secret), `${secret} never printed`);
+  assert.doesNotMatch(output, /AUTH_SMS_/, 'absent SMS settings stay accepted');
 });

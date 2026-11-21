@@ -5,6 +5,10 @@ export type DashboardSectionStatus =
 
 export type DashboardSectionStatusMap = Record<string, DashboardSectionStatus>;
 
+export function getDashboardSectionContentState(status: DashboardSectionStatus | undefined): DashboardSectionStatus['state'] {
+  return status?.state ?? 'loading';
+}
+
 export class DashboardSectionLoader {
   private readonly inFlight = new Map<string, Promise<void>>();
   private generation = 0;

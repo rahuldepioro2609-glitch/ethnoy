@@ -24,7 +24,8 @@ RUN groupadd --system --gid 10001 eltnoy-api \
  && groupadd --system --gid 10002 eltnoy-migrate \
  && useradd --system --uid 10002 --gid 10002 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin eltnoy-migrate \
  && usermod --lock eltnoy-api && usermod --lock eltnoy-migrate \
- && install -d -o 10001 -g 10001 -m 0700 /var/lib/eltnoy/documents
+ && install -d -o 10001 -g 10001 -m 0700 /var/lib/eltnoy/documents \
+ && install -d -o 0 -g 0 -m 0755 /run/secrets
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force

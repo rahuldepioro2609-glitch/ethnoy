@@ -4,6 +4,13 @@
 **Policy basis:** `../policy/master-policy-register.md`. Open items are in `../policy/policy-conflict-and-gap-register.md`.
 **Data model:** `data-model-final-proposal.md`.
 
+**Status note (2026-11-14), where this design and the code now differ:**
+- **Deployment (§3):** the code ships an isolated topology, not one app/nginx/PostgreSQL stack: `api_public` and `api_admin` (listeners 4000/4001), `nginx_public` and `nginx_admin` (Admin bound to the WireGuard address), PostgreSQL with separated roles (`docker-compose.yml`; runbook §14). It is statically tested only, not deployed.
+- **P0-3 (§7.1):** largely enforced since commit `df9b93e` (2026-11-04); open: A-08, A-10, A-11, A-12, A-17 (master register, section A note).
+- **Authentication (§5.12):** AUTH-1 (Student mobile + password + OTP, Google for linked accounts, Institute mobile/email + institutional verification) and staff identities are built in the uncommitted working tree, all fail-closed without providers (master register sections AU and SM).
+- **Invigilators (§5.8):** D-09 is decided by Q117: assigned examination sessions (C-20, `examination-session-module.md`), not centers.
+- `server/index.ts` is now about 2,970 lines.
+
 ## 1. Product scope
 
 ELTNOY is a **centralized Institution-to-Applicant Application & Opportunity Platform** (P-01, N-01, N-05):

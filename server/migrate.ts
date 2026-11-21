@@ -10,6 +10,26 @@ import { fileURLToPath } from 'node:url';
  * rows immutable with always-reject triggers; it depends on Milestone 1 and must
  * run before the grants migration, which checks that those triggers are enabled.
  *
+ * authVerificationMigration.sql (AUTH-1) adds the verification tables (contacts, OTP
+ * challenges, session verification evidence, institute verification, Google identities,
+ * OAuth state and an append-only audit). It is additive and re-runnable, depends only on
+ * schema.sql's users and auth_sessions, and must run before the grants migration, whose
+ * manifest lists its seven tables.
+ *
+ * studentEmailVerificationMigration.sql adds the Student email-capture challenge purpose to the
+ * AUTH-1 purpose constraint. It is additive and re-runnable, and must run before the grants migration.
+ *
+ * studentRegistrationClaimsMigration.sql (AUTH C1) adds temporary Student registration
+ * claims and the nullable verification_challenges.registration_claim_id. It depends on
+ * authVerificationMigration.sql (verification_challenges, auth_verification_events), is
+ * additive and re-runnable, and must run before the grants migration, whose manifest
+ * lists student_registration_claims.
+ *
+ * The Platform Staff and Organization Staff migrations depend on users and are additive.
+ * They run after authentication/MFA schema and before the grants migration, whose manifest
+ * lists every created table and the exact application-role privileges. Organization Staff
+ * also reads AUTH-1 verification state at runtime, so authVerificationMigration.sql stays earlier.
+ *
  * databaseGrantsMigration.sql must stay last: it grants the application role
  * exactly the privileges listed in its manifest for every table the earlier
  * files create. Until server/databaseRoleBootstrap.sql has provisioned the
@@ -22,6 +42,12 @@ export const MIGRATION_FILES = [
   'institutionDocumentsMigration.sql',
   'institutionDocumentSubmissionMigration.sql',
   'institutionDocumentsImmutabilityMigration.sql',
+  'authVerificationMigration.sql',
+  'studentEmailVerificationMigration.sql',
+  'studentRegistrationClaimsMigration.sql',
+  'adminMfaMigration.sql',
+  'platformStaffMigration.sql',
+  'organizationStaffMigration.sql',
   'databaseGrantsMigration.sql',
 ] as const;
 

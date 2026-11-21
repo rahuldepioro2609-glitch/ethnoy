@@ -22,11 +22,14 @@ import { AnswerKeyObjectionModal } from './components/AnswerKeyObjectionModal';
 import { FeedbackSlideOut } from './components/FeedbackSlideOut';
 import { ExamItem, NoticeItem } from './data/portalData';
 import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
-import { ApiError, apiRequest } from './api';
+import { ApiError, apiRequest, apiRequestWithMeta } from './api';
 import { PortalRole, RoleDashboard, RoleLoginPage } from './components/RolePortal';
+import { PlatformStaffPortal } from './components/staff/PlatformStaffPortal';
+import { isPlatformStaffPath } from './utils/staffAccess';
 import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './utils/examSchedule';
 import { LANGUAGE_LOCALES, Language } from './utils/languageLogic';
 import { useLanguage } from './utils/languageContext';
+import { ADMIN_HOME_PATH, planSurfaceNavigation, requiredSurfaceForPath, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
 
 function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
   const examDate = String(exam.examDate).slice(0, 10);
@@ -102,6 +105,9 @@ export default function App() {
   const [loggedInUser, setLoggedInUser] = useState<{ name: string; role: string; id: string; accountRole: PortalRole; isSuperAdmin: boolean } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [systemAlert, setSystemAlert] = useState<string | null>(null);
+  // GET /api/surface-hostnames: public surfaces omit the private Admin hostname.
+  const [surfaceHostnames, setSurfaceHostnames] = useState<DisclosedSurfaceHostnames | null>(null);
+  const [surfaceRoutingFailed, setSurfaceRoutingFailed] = useState(false);
 
   const navigate = (path: string) => {
     window.history.pushState({}, '', path);
@@ -138,13 +144,23 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // On the Exam surface GET /api/exams needs a Student session, so the list is reloaded whenever a
+  // Student signs in or out (not for Institute/Official sign-ins). Only the latest request may update
+  // state, and a failed load clears the list so lookups show their unavailable state.
+  const candidateSessionKey = loggedInUser?.accountRole === 'candidate' ? loggedInUser.id : null;
   useEffect(() => {
+    let active = true;
     apiRequest<{ exams: Record<string, unknown>[] }>('/api/exams')
-      .then(({ exams }) => setPublishedExams(exams.map((exam) => mapPublishedExam(exam, LANGUAGE_LOCALES[language]))))
+      .then(({ exams }) => {
+        if (active) setPublishedExams(exams.map((exam) => mapPublishedExam(exam, LANGUAGE_LOCALES[language])));
+      })
       .catch((error: unknown) => {
+        if (!active) return;
+        setPublishedExams([]);
         setSystemAlert(error instanceof Error ? error.message : 'Could not load published exam forms.');
       });
-  }, [language]);
+    return () => { active = false; };
+  }, [language, candidateSessionKey]);
 
   useEffect(() => {
     let active = true;
@@ -194,10 +210,11 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
-    apiRequest<{
+    // apiRequestWithMeta (rather than apiRequest) so the error carries the server's `code`.
+    apiRequestWithMeta<{
       user: { loginId: string; name: string; role: 'candidate' | 'center' | 'official'; isSuperAdmin: boolean };
     }>('/api/auth/me')
-      .then(({ user }) => {
+      .then(({ data: { user } }) => {
         const roleLabels = {
           candidate: 'Registered Candidate',
           center: 'Test Center Admin',
@@ -212,7 +229,10 @@ export default function App() {
         });
       })
       .catch((error: unknown) => {
-        if (!(error instanceof ApiError && error.status === 401)) {
+        // AUTH C1.9.2: an Official session without MFA (for example one issued before MFA) is refused by
+        // the server, which also clears its cookie. That is a signed-out state, not a system fault.
+        const signedOut = error instanceof ApiError && (error.status === 401 || (error.status === 403 && error.code === 'ADMIN_MFA_REQUIRED'));
+        if (!signedOut) {
           setSystemAlert(error instanceof Error ? error.message : 'Could not connect to the account service.');
         }
       })
@@ -278,9 +298,6 @@ export default function App() {
       case 'result':
         handleOpenResults();
         break;
-      case 'ai-proctoring':
-        navigate('/login/official');
-        break;
       case 'grievance':
         handleOpenGrievance();
         break;
@@ -328,18 +345,67 @@ export default function App() {
   const dashboardRole = pathname.match(/^\/dashboard\/(candidate|center|official)\/?$/)?.[1] as PortalRole | undefined;
   const loginRole = pathname.match(/^\/login\/(candidate|center|official)\/?$/)?.[1] as PortalRole | undefined;
 
+  // SM-1: Platform Staff pages have their own session and are never redirected by portal sessions.
+  const platformStaffPage = isPlatformStaffPath(pathname);
+  const pathSurface = requiredSurfaceForPath(pathname);
+  // The Exam root is the candidate home. Wait for its host-only session lookup before
+  // deciding whether a root visit belongs on Exam or public Marketing.
+  const requiredSurface = platformStaffPage ? 'admin' : pathname === '/'
+    ? authLoading ? null : loggedInUser?.accountRole === 'candidate' ? 'exam' : 'marketing'
+    : pathSurface;
+
+  // Each role's session cookie belongs to its own hostname. Public surfaces disclose only the public
+  // hostnames, so the public site can never route to (or learn) the private Admin hostname.
   useEffect(() => {
-    if (authLoading || !pathname.startsWith('/dashboard/')) return;
+    let active = true;
+    apiRequest<{ hostnames: DisclosedSurfaceHostnames }>('/api/surface-hostnames')
+      .then(({ hostnames }) => {
+        if (active) setSurfaceHostnames(hostnames);
+      })
+      .catch(() => {
+        if (active) setSurfaceRoutingFailed(true);
+      });
+    return () => { active = false; };
+  }, []);
+
+  const navigationPlan = surfaceHostnames
+    ? planSurfaceNavigation(window.location.href, requiredSurface, surfaceHostnames)
+    : null;
+  const navigationKey = navigationPlan
+    ? `${navigationPlan.action}:${navigationPlan.action === 'redirect' ? navigationPlan.url : pathname}`
+    : null;
+
+  // Move role flows to their own host, return signed-out visitors to Marketing for public content, and
+  // keep the Admin host on Admin sign-in instead of public pages.
+  useEffect(() => {
+    if (!navigationPlan) return;
+    if (navigationPlan.action === 'redirect') window.location.assign(navigationPlan.url);
+    else if (navigationPlan.action === 'admin_home') {
+      window.history.replaceState({}, '', ADMIN_HOME_PATH);
+      setPathname(ADMIN_HOME_PATH);
+    } else if (navigationPlan.action === 'invalid') {
+      setSystemAlert('The portal hostname configuration is invalid. Please contact support.');
+    }
+  }, [navigationKey]);
+
+  useEffect(() => {
+    if (surfaceRoutingFailed && requiredSurface && requiredSurface !== 'admin') {
+      setSystemAlert('Could not load portal routing configuration. Please try again.');
+    }
+  }, [surfaceRoutingFailed, requiredSurface]);
+
+  useEffect(() => {
+    if (authLoading || platformStaffPage || !pathname.startsWith('/dashboard/')) return;
     if (!dashboardRole || !loggedInUser || loggedInUser.accountRole !== dashboardRole) {
       navigate(loggedInUser ? `/dashboard/${loggedInUser.accountRole}` : `/login/${dashboardRole ?? 'candidate'}`);
     }
-  }, [authLoading, dashboardRole, loggedInUser, pathname]);
+  }, [authLoading, dashboardRole, loggedInUser, pathname, platformStaffPage]);
 
   useEffect(() => {
-    if (!authLoading && loggedInUser && pathname.startsWith('/login')) {
+    if (!authLoading && loggedInUser && !platformStaffPage && pathname.startsWith('/login')) {
       navigate(`/dashboard/${loggedInUser.accountRole}`);
     }
-  }, [authLoading, loggedInUser, pathname]);
+  }, [authLoading, loggedInUser, pathname, platformStaffPage]);
 
   const handlePortalLogin = (user: { name: string; id: string; role: PortalRole; isSuperAdmin: boolean }) => {
     const roleLabels: Record<PortalRole, string> = {
@@ -357,16 +423,35 @@ export default function App() {
     }
   };
 
+  // Admin and Platform Staff pages render only on the Admin host, confirmed by the server's surface
+  // answer. Anywhere else (the public site, a static preview, a failed lookup) they are "not found".
+  if (requiredSurface === 'admin' && navigationPlan?.action !== 'stay') {
+    if (surfaceRoutingFailed || navigationPlan?.action === 'not_found') {
+      return (
+        <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-700">
+          <h1 className="text-2xl font-black text-[#0B2E59]">Page not found</h1>
+          <p className="mt-2 text-sm text-slate-600">This page is not available on this website.</p>
+          <button type="button" onClick={() => navigate('/')} className="mt-6 rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-600">Go to the home page</button>
+        </main>
+      );
+    }
+    return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure connection…</main>;
+  }
+
+  if (platformStaffPage) {
+    return <PlatformStaffPortal pathname={pathname} navigate={navigate} onHome={() => navigate('/')} />;
+  }
+
   if (pathname.startsWith('/login')) {
-    if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Checking secure session…</main>;
-    if (loggedInUser) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Opening your dashboard…</main>;
+    if (authLoading) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure session…</main>;
+    if (loggedInUser) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Opening your dashboard…</main>;
     return <RoleLoginPage role={loginRole} onBack={() => navigate('/')} onLogin={handlePortalLogin} />;
   }
 
   if (pathname.startsWith('/dashboard/')) {
-    if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Checking secure session…</main>;
+    if (authLoading) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure session…</main>;
     if (!loggedInUser || !dashboardRole || loggedInUser.accountRole !== dashboardRole) {
-      return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">Redirecting to sign in…</main>;
+      return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Redirecting to sign in…</main>;
     }
     return (
       <RoleDashboard
@@ -418,7 +503,6 @@ export default function App() {
         onOpenResultsPortal={handleOpenResults}
         onOpenAnswerKeyPortal={handleOpenAnswerKey}
         onOpenInstituteDashboard={() => navigate('/login/center')}
-        onOpenAiProctoring={() => navigate('/login/official')}
         examinations={publishedExams}
         activeNavTab={activeNavTab}
         setActiveNavTab={setActiveNavTab}
@@ -600,7 +684,7 @@ export default function App() {
       <AdmitCardModal
         isOpen={isAdmitCardOpen}
         onClose={() => setIsAdmitCardOpen(false)}
-        defaultExamCode="ENT-2025"
+        publishedExams={publishedExams}
       />
 
       <CbtMockExamModal
@@ -644,6 +728,7 @@ export default function App() {
       <CandidateResultModal
         isOpen={isResultOpen}
         onClose={() => setIsResultOpen(false)}
+        publishedExams={publishedExams}
       />
 
       {/* Answer Key & Objection Tracker */}

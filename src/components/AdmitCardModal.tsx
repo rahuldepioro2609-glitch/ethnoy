@@ -10,17 +10,22 @@ import {
 } from '../utils/examLogic';
 import { ApiError, apiRequest } from '../api';
 import { useLanguage } from '../utils/languageContext';
+import type { ExamItem } from '../data/portalData';
 
 interface AdmitCardModalProps {
   isOpen: boolean;
   onClose: () => void;
-  defaultExamCode?: string;
+  /** Published exams from GET /api/exams (loaded by App). Empty when none are published or loading failed. */
+  publishedExams: ExamItem[];
 }
 
-export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose, defaultExamCode = 'ENT-2025' }) => {
+export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose, publishedExams }) => {
   const { t } = useLanguage();
   const [appNumber, setAppNumber] = useState('');
-  const [examCode, setExamCode] = useState(defaultExamCode);
+  // No default exam: the candidate must choose one of the API-provided published exams.
+  const [examCode, setExamCode] = useState('');
+  const examsAvailable = publishedExams.length > 0;
+  const examSelected = publishedExams.some((exam) => exam.code === examCode);
   const [admitCard, setAdmitCard] = useState<CandidateAdmitCardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -29,6 +34,10 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
 
   const handleLookup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!examSelected) {
+      setError(examsAvailable ? 'Select an examination.' : 'Admit card lookup is unavailable: no published examination is available right now.');
+      return;
+    }
     if (appNumber.trim().length < 4) {
       setError('Application number must be at least 4 characters.');
       return;
@@ -108,15 +117,22 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                   </label>
                   <select
                     id="admit-exam-select"
-                    value={examCode}
+                    value={examSelected ? examCode : ''}
                     onChange={(e) => setExamCode(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    disabled={!examsAvailable}
+                    required
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <option value="ENT-2025">ENT-2025: ELTNOY National Test</option>
-                    <option value="EST-2025">EST-2025: Scholarship Test</option>
-                    <option value="ETET-2025">ETET-2025: Teacher Eligibility Test</option>
-                    <option value="ESAT-2025">ESAT-2025: ELTNOY Assessment Test</option>
+                    <option value="" disabled>{t(examsAvailable ? 'Select an examination' : 'No published examination available')}</option>
+                    {publishedExams.map((exam) => (
+                      <option key={exam.id} value={exam.code}>{exam.code}: {exam.name}</option>
+                    ))}
                   </select>
+                  {!examsAvailable && (
+                    <p role="status" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
+                      {t('Admit card lookup is unavailable right now: no published examination is available, or the examination list could not be loaded. Please try again later.')}
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -128,7 +144,7 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                     type="text"
                     value={appNumber}
                     onChange={(e) => setAppNumber(e.target.value)}
-                    placeholder={t('e.g. NEA-2026-88419')}
+                    placeholder={t('Enter your application number')}
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono font-bold tracking-wide focus:ring-2 focus:ring-emerald-500 focus:outline-hidden uppercase"
                     required
                   />
@@ -144,8 +160,8 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                 <div className="pt-2 flex items-center gap-3">
                   <button
                     type="submit"
-                    disabled={isLoading}
-                    className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+                    disabled={isLoading || !examSelected}
+                    className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <FileText className="w-4 h-4" />
                     <span>{t(isLoading ? 'Checking…' : 'View & Verify Admit Card')}</span>
@@ -188,15 +204,15 @@ export const AdmitCardModal: React.FC<AdmitCardModalProps> = ({ isOpen, onClose,
                 {/* Header */}
                 <div className="border-b-2 border-slate-800 pb-4 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
                   <div className="flex items-center gap-3">
-                    <div className="w-14 h-14 bg-slate-900 text-white rounded-lg flex items-center justify-center font-bold text-xl">
-                      NEA
+                    <div className="w-14 h-14 bg-slate-900 text-white rounded-lg flex items-center justify-center font-bold text-[11px]">
+                      ELTNOY
                     </div>
                     <div>
                       <div className="text-base font-extrabold text-slate-900 uppercase tracking-tight">
-                        National Examination Authority
+                        ELTNOY Examination Portal
                       </div>
                       <div className="text-xs font-bold text-slate-600">
-                        CENTRAL CBT ASSESSMENT DIRECTORATE · GOVT. OF INDIA
+                        Independent portal · Not affiliated with the NTA or any government body
                       </div>
                       <div className="text-[11px] font-mono text-slate-500">
                         OFFICIAL PROVISIONAL ADMIT CARD / HALL TICKET

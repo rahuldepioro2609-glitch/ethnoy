@@ -211,12 +211,12 @@ Q115–Q125 are confirmed client decisions (master register, section QD). They g
 
 ### Appendix: other approved P0-3 items found during the route survey (not in the requested list)
 
-These are approved, need no schema change, and are recommended for the same batch. **Decision P3-D6:** include them, or keep them for later?
+These are approved, need no schema change, and were recommended for the same batch. The client approved A-17 enforcement on 2026-11-16; A-05 and A-08 remain outside this implementation batch.
 
 | Policy | Route | Current | Proposed |
 |---|---|---|---|
 | A-05: exam form publishing | `PATCH /api/admin/exams/:id` (`index.ts:1503`, toggles `is_published`) | Official | `requireSuperAdmin`. Creation `POST /api/admin/exams` stays with all Officials (A-18). |
-| A-17: notice publishing | `POST /api/admin/notices` (`:156`, can publish immediately; the UI says "Publishing is immediate", `RolePortal.tsx:1079`); `PATCH /api/admin/notices/:id` (`:181`) | Official | POST always creates a draft for ordinary Officials (Super Admin may publish); PATCH `requireSuperAdmin` |
+| A-17: notice publishing | `POST /api/admin/notices`; `PATCH /api/admin/notices/:id` | Official | POST always creates an unpublished draft; PATCH requires `requireSuperAdmin` |
 | A-08: hide applicant contact details | `GET /api/admin/applications` (`:2009`, returns `email`, `phone`) | Official | Remove `email` and `phone` from the response for ordinary Officials |
 | A-10: Official management | CLI only (`server/createUser.ts`) | — | No change (separate milestone) |
 
@@ -324,7 +324,7 @@ None of these will be made without separate approval. Each is additive to an **e
 2. **Pure Super Admin guards (no logic changes):** credits; withdrawals; result, answer-key and online-exam PATCH; helpdesk GET and PATCH; ownership linking; document download and review. The matrix turns green for these.
 3. **Conditional checks inside handlers:** withdrawal maker-checker and keeping the approver; results POST and import; answer-key and online-exam import over published content.
 4. **Admit cards:** interim option A or B (P3-D1).
-5. **Appendix items** if P3-D6 is approved (exam PATCH, notices, A-08 contact hiding).
+5. **Appendix items:** A-17 notice publishing has separate client approval dated 2026-11-16 and is implemented; A-05 exam PATCH and A-08 contact hiding remain unapproved for this batch.
 6. **Frontend:** hide or disable controls (`RolePortal.tsx`, `InstitutionDocumentManagement.tsx`, `FeedbackSlideOut.tsx`); list the affected screens for review (P-08).
 7. **Interim `admin.action` log lines.**
 8. **Schema work only after approval:** S-1, then S-2, S-4 and S-3, each with its own isolated validation (§10) and code change.
@@ -390,7 +390,7 @@ None of these will be made without separate approval. Each is additive to an **e
 | P3-D3 | Confirm at least two Super Admin accounts will exist (maker-checker needs them operationally). Q115 staff activation and the Q122 / Q124 limit settings add to Super Admin workload. |
 | P3-D4 | Whether ordinary Officials may see the open helpdesk ticket count |
 | P3-D5 | Institution approval (A-01) without document access (A-09): accept, add a Super Admin review prerequisite, or another approach |
-| P3-D6 | Include the appendix items (exam form publishing, notices, A-08 contact hiding) in this batch? |
+| P3-D6 | **Partially resolved 2026-11-16:** A-17 notice publishing approved and implemented; A-05 exam form publishing and A-08 contact hiding still need separate approval. |
 | P3-D7 | Proceed with code-only enforcement before the audit table (S-1), accepting the interim, non-atomic log lines? |
 | P3-D8 | Approve the P0-4 commit as step 0 |
 | P3-D9 | Approve S-1, S-2, S-3 and S-4 individually (each is optional for the code-only phase) |

@@ -56,6 +56,7 @@ const syntheticValues: Record<string, string> = {
   NGINX_IMAGE: 'synthetic.invalid/nginx@sha256:0000',
   POSTGRES_IMAGE: 'synthetic.invalid/postgres@sha256:0000',
   PUBLIC_BIND_ADDRESS: '10.250.0.10',
+  PUBLIC_BIND_MODE: 'private-eni',
   ADMIN_BIND_ADDRESS: '10.251.0.1',
   WIREGUARD_INTERFACE_ADDRESS: '10.251.0.1',
   PUBLIC_APP_SUBNET: '172.30.10.0/24',
@@ -414,7 +415,8 @@ const copiedEntry = () => {
   const server = join(work, 'entry-repo', 'server');
   mkdirSync(server, { recursive: true, mode: 0o700 });
   writeFileSync(join(work, 'entry-repo', 'package.json'), '{ "type": "module" }\n');
-  for (const file of ['deploy.ts', 'deploymentRunner.ts', 'deploymentWrapper.ts', 'deploymentConfig.ts']) {
+  // AUTH C1.3-B.2: the entry's closure now includes the pure SMS resolver and its only import.
+  for (const file of ['deploy.ts', 'deploymentRunner.ts', 'deploymentWrapper.ts', 'deploymentConfig.ts', 'smsProtectionConfig.ts', 'verificationProviders.ts']) {
     copyFileSync(join(repositoryRoot, 'server', file), join(server, file));
   }
   copiedEntryPath = join(server, 'deploy.ts');
@@ -591,4 +593,164 @@ test('shell entry: invocation through a symbolic link is refused', () => {
   const result = runShell(link, ['--deployment-env-file', '/x', 'preflight'], {});
   assert.equal(result.status, 2);
   assert.match(result.stderr, /not through a symbolic link/);
+});
+
+// ---------------------------------------------------------------------------
+// AUTH C1.3-B: SMS limits and claim lifetime (optional, governed, validated by the host preflight)
+// ---------------------------------------------------------------------------
+
+const C13B_SMS = [
+  'AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS',
+  'AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS',
+  'AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS',
+  'AUTH_SMS_DAILY_MAX_SENDS', 'AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS',
+];
+const C13B_TTL = 'AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS';
+// TEST-ONLY distinctive values (never defaults), so the tests can prove no value is ever printed.
+const C13B_VALUES: Record<string, string> = {
+  AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS: '36017', AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS: '317',
+  AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS: '18017', AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS: '517',
+  AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS: '72017', AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS: '417',
+  AUTH_SMS_DAILY_MAX_SENDS: '50017', AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '30017', AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS: '617',
+};
+const hostPreflight = (extra: Record<string, string>) => planDeployment({ arguments: { ...validArguments, operation: 'preflight' }, envFileText: envText({ ...syntheticValues, ...extra }), shellEnvironment: {} });
+const errorsOf = (result: ReturnType<typeof planDeployment>) => (result.ok ? [] : result.errors);
+
+test('C1.3-B: the nine settings are optional, governed Compose variables and never required', () => {
+  for (const name of [...C13B_SMS, C13B_TTL]) {
+    assert.ok((OPTIONAL_COMPOSE_VARIABLES as readonly string[]).includes(name), `${name} is optional`);
+    assert.ok(!(REQUIRED_COMPOSE_VARIABLES as readonly string[]).includes(name), `${name} is never required`);
+    assert.ok(GOVERNED_VARIABLES.includes(name), `${name} is governed (safe-character checks apply)`);
+  }
+  assert.deepEqual(checkRequiredVariables(new Map(Object.entries(syntheticValues))), [], 'absent: nothing is required');
+});
+
+test('C1.3-B.2 host preflight: the eight SMS settings are all-or-nothing; the claim lifetime is independent; values are never printed', () => {
+  const smsOnly = Object.fromEntries(C13B_SMS.map((name) => [name, C13B_VALUES[name]]));
+  assert.deepEqual(errorsOf(hostPreflight({})), [], 'all absent: accepted (SMS closed)');
+  assert.deepEqual(errorsOf(hostPreflight(Object.fromEntries(C13B_SMS.map((name) => [name, ''])))), [], 'all empty: accepted (SMS closed)');
+  assert.deepEqual(errorsOf(hostPreflight(C13B_VALUES)), [], 'all eight valid and consistent, claim lifetime valid: accepted');
+  assert.deepEqual(errorsOf(hostPreflight(smsOnly)), [], 'claim lifetime absent: accepted (registration stays closed at runtime)');
+  assert.deepEqual(errorsOf(hostPreflight({ ...smsOnly, [C13B_TTL]: '' })), [], 'claim lifetime empty: accepted');
+
+  const partial = errorsOf(hostPreflight({ AUTH_SMS_DAILY_MAX_SENDS: C13B_VALUES.AUTH_SMS_DAILY_MAX_SENDS }));
+  assert.deepEqual(partial.map((error) => error.split(' ')[0]).sort(), C13B_SMS.filter((name) => name !== 'AUTH_SMS_DAILY_MAX_SENDS').sort(), 'partial: every missing setting is named');
+  assert.ok(partial.every((error) => / is missing: the eight AUTH_SMS_\* settings must be set together \(all of them or none\)\.$/.test(error)));
+  for (const bad of ['0', '-3', '1.5', 'ten', '1e3']) {
+    assert.deepEqual(errorsOf(hostPreflight({ ...smsOnly, AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS: bad })), ['AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS is invalid: it must be a positive whole number.'], `value ${bad}`);
+  }
+  assert.deepEqual(errorsOf(hostPreflight({ ...smsOnly, AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '50018' })), ['AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS is inconsistent: it must not exceed AUTH_SMS_DAILY_MAX_SENDS.']);
+  for (const bad of ['0', '901', '6.5', 'x']) {
+    for (const sms of [{}, smsOnly]) {
+      assert.deepEqual(errorsOf(hostPreflight({ ...sms, [C13B_TTL]: bad })), [`${C13B_TTL} is invalid: it must be a positive whole number no greater than the verification challenge lifetime.`], `claim lifetime ${bad} (independent of SMS)`);
+    }
+  }
+  // Existing checks still run alongside: an invalid deployment setting and an SMS problem are both reported.
+  const combined = errorsOf(hostPreflight({ ADMIN_BIND_ADDRESS: '0.0.0.0', AUTH_SMS_DAILY_MAX_SENDS: '50017' }));
+  assert.ok(combined.some((error) => error.startsWith('ADMIN_BIND_ADDRESS')) && combined.some((error) => error.startsWith('AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS is missing')));
+  const everything = [partial, combined, errorsOf(hostPreflight({ ...smsOnly, AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '50018', [C13B_TTL]: '901' }))].flat().join('\n');
+  for (const value of [...Object.values(C13B_VALUES), '50018', '901']) assert.ok(!everything.includes(value), `value ${value} is never printed`);
+  assertNoMarkers(everything);
+});
+
+test('C1.3-B.2 host preflight: emergency syntax-only operations skip the SMS semantic rule', () => {
+  for (const operation of ['emergency-stop', 'emergency-status'] as const) {
+    const result = planDeployment({ arguments: { ...validArguments, operation }, envFileText: envText({ ...syntheticValues, AUTH_SMS_DAILY_MAX_SENDS: '50017', [C13B_TTL]: '901' }), shellEnvironment: {} });
+    assert.ok(result.ok, `${operation}: ${result.ok ? '' : result.errors.join(' | ')}`);
+    if (result.ok) assert.equal(result.plan.validation, 'syntax');
+    // Syntax and character checks still apply to the governed SMS names.
+    assert.equal(planDeployment({ arguments: { ...validArguments, operation }, envFileText: envText({ ...syntheticValues, AUTH_SMS_DAILY_MAX_SENDS: '5$0' }), shellEnvironment: {} }).ok, false, `${operation}: unsafe characters still refused`);
+  }
+});
+
+test('C1.3-B.2: the deployment entry closure stays free of database, credential, dotenv, Express, auth-store and API modules', async () => {
+  const seen = new Set<string>();
+  const bare = new Set<string>();
+  const visit = (file: string) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const source = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8');
+    for (const [, specifier] of source.matchAll(/^\s*(?:import|export)\s[^'"]*?from\s+'([^']+)'/gm)) {
+      if (specifier.startsWith('./')) visit(specifier.slice(2).replace(/\.js$/, '.ts'));
+      else bare.add(specifier);
+    }
+  };
+  visit('deploy.ts');
+  assert.deepEqual([...seen].sort(), ['deploy.ts', 'deploymentConfig.ts', 'deploymentRunner.ts', 'deploymentWrapper.ts', 'smsProtectionConfig.ts', 'verificationProviders.ts'], 'equal to the synthetic-repository copy lists');
+  assert.ok([...bare].every((specifier) => specifier.startsWith('node:')), `only Node built-ins: ${[...bare].join(', ')}`);
+  for (const forbidden of ['db.ts', 'databaseCredentials.ts', 'authVerification.ts', 'authVerificationStore.ts', 'index.ts', 'auth.ts']) assert.ok(!seen.has(forbidden), forbidden);
+});
+
+test('C1.3-B: values reach Compose only when set; unsafe characters are still rejected', () => {
+  const start = planDeployment({ arguments: validArguments, envFileText: envText({ ...syntheticValues, ...C13B_VALUES }), shellEnvironment: {} });
+  assert.ok(start.ok, start.ok ? '' : start.errors.join(' | '));
+  if (start.ok) for (const name of [...C13B_SMS, C13B_TTL]) assert.equal(start.plan.childEnvironment?.[name], C13B_VALUES[name], `${name} is passed to Compose`);
+  const absent = planDeployment({ arguments: validArguments, envFileText: envText(syntheticValues), shellEnvironment: {} });
+  assert.ok(absent.ok);
+  if (absent.ok) for (const name of [...C13B_SMS, C13B_TTL]) assert.equal(absent.plan.childEnvironment?.[name], undefined, `${name} absent stays absent`);
+  for (const unsafe of ['36$00', '3600 ', '36#0', '3`6']) {
+    const result = planDeployment({ arguments: validArguments, envFileText: envText({ ...syntheticValues, ...C13B_VALUES, AUTH_SMS_DAILY_MAX_SENDS: unsafe }), shellEnvironment: {} });
+    assert.ok(!result.ok, `unsafe value ${JSON.stringify(unsafe)} is refused`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AUTH C1.4-B-2: the six email settings (optional, governed, host preflight all-or-nothing)
+// ---------------------------------------------------------------------------
+
+const C14B_EMAIL: Record<string, string> = {
+  // TEST-ONLY distinctive values (never defaults).
+  AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS: '36051', AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS: '351',
+  AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS: '72051', AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: '451',
+  AUTH_EMAIL_DAILY_MAX_SENDS: '50051', AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '30051',
+};
+const C14B_NAMES = Object.keys(C14B_EMAIL);
+
+test('C1.4-B-2: the six email settings are optional, governed and never required; unrelated variables stay filtered', () => {
+  for (const name of C14B_NAMES) {
+    assert.ok((OPTIONAL_COMPOSE_VARIABLES as readonly string[]).includes(name), `${name} optional`);
+    assert.ok(!(REQUIRED_COMPOSE_VARIABLES as readonly string[]).includes(name), `${name} never required`);
+    assert.ok(GOVERNED_VARIABLES.includes(name), `${name} governed`);
+  }
+  const start = planDeployment({ arguments: validArguments, envFileText: `${envText({ ...syntheticValues, ...C14B_EMAIL })}AUTH_EMAIL_UNREVIEWED_SETTING=kept-out\nUNRELATED=kept-out\n`, shellEnvironment: {} });
+  assert.ok(start.ok, start.ok ? '' : start.errors.join(' | '));
+  if (start.ok) {
+    for (const name of C14B_NAMES) assert.equal(start.plan.childEnvironment?.[name], C14B_EMAIL[name], `${name} reaches Compose`);
+    // AUTH_EMAIL_PROVIDER is a governed provider setting now; a look-alike unknown name is still dropped.
+    assert.equal(start.plan.childEnvironment?.AUTH_EMAIL_UNREVIEWED_SETTING, undefined, 'unrelated names are dropped');
+    assert.equal(start.plan.childEnvironment?.UNRELATED, undefined);
+  }
+  const absent = planDeployment({ arguments: validArguments, envFileText: envText(syntheticValues), shellEnvironment: {} });
+  if (absent.ok) for (const name of C14B_NAMES) assert.equal(absent.plan.childEnvironment?.[name], undefined, `${name} absent stays absent`);
+  assert.equal(planDeployment({ arguments: validArguments, envFileText: envText({ ...syntheticValues, ...C14B_EMAIL, AUTH_EMAIL_DAILY_MAX_SENDS: '5$0' }), shellEnvironment: {} }).ok, false, 'unsafe characters refused');
+});
+
+test('C1.4-B-2 host preflight: the six email settings are all-or-nothing, independent of SMS; values never printed', () => {
+  assert.deepEqual(errorsOf(hostPreflight({})), [], 'absent: accepted (email closed)');
+  assert.deepEqual(errorsOf(hostPreflight(Object.fromEntries(C14B_NAMES.map((name) => [name, ''])))), [], 'empty: accepted');
+  assert.deepEqual(errorsOf(hostPreflight(C14B_EMAIL)), [], 'all six valid: accepted');
+  assert.deepEqual(errorsOf(hostPreflight({ ...C14B_EMAIL, ...C13B_VALUES })), [], 'email and SMS both valid');
+  const partial = errorsOf(hostPreflight({ AUTH_EMAIL_DAILY_MAX_SENDS: '50051' }));
+  assert.deepEqual(partial.map((error) => error.split(' ')[0]).sort(), C14B_NAMES.filter((name) => name !== 'AUTH_EMAIL_DAILY_MAX_SENDS').sort());
+  assert.ok(partial.every((error) => / is missing: the six AUTH_EMAIL_\* settings must be set together \(all of them or none\)\.$/.test(error)));
+  for (const bad of ['0', '-2', '1.5', 'ten', '1e3']) {
+    assert.deepEqual(errorsOf(hostPreflight({ ...C14B_EMAIL, AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: bad })), ['AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS is invalid: it must be a positive whole number.'], bad);
+  }
+  assert.deepEqual(errorsOf(hostPreflight({ ...C14B_EMAIL, AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '50052' })), ['AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS is inconsistent: it must not exceed AUTH_EMAIL_DAILY_MAX_SENDS.']);
+  // Independence: a broken SMS group reports only SMS errors, a broken email group only email errors.
+  const smsBroken = errorsOf(hostPreflight({ ...C14B_EMAIL, AUTH_SMS_DAILY_MAX_SENDS: '50017' }));
+  assert.ok(smsBroken.length > 0 && smsBroken.every((error) => error.startsWith('AUTH_SMS_')), 'SMS rule unchanged and separate');
+  const emailBroken = errorsOf(hostPreflight({ ...C13B_VALUES, AUTH_EMAIL_DAILY_MAX_SENDS: '50051' }));
+  assert.ok(emailBroken.length > 0 && emailBroken.every((error) => error.startsWith('AUTH_EMAIL_')));
+  const text = [partial, emailBroken, errorsOf(hostPreflight({ ...C14B_EMAIL, AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '50052' }))].flat().join('\n');
+  for (const value of [...Object.values(C14B_EMAIL), '50052']) assert.ok(!text.includes(value), `value ${value} never printed`);
+  assertNoMarkers(text);
+});
+
+test('C1.4-B-2: emergency syntax-only operations skip the email rule (character checks still apply)', () => {
+  for (const operation of ['emergency-stop', 'emergency-status'] as const) {
+    const result = planDeployment({ arguments: { ...validArguments, operation }, envFileText: envText({ ...syntheticValues, AUTH_EMAIL_DAILY_MAX_SENDS: '50051' }), shellEnvironment: {} });
+    assert.ok(result.ok, operation);
+    assert.equal(planDeployment({ arguments: { ...validArguments, operation }, envFileText: envText({ ...syntheticValues, AUTH_EMAIL_DAILY_MAX_SENDS: '5 0' }), shellEnvironment: {} }).ok, false, `${operation}: unsafe value refused`);
+  }
 });

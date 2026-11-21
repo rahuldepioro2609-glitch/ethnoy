@@ -1,0 +1,336 @@
+# Separate internal-testing stack. This file is intentionally independent of docker-compose.yml:
+# distinct project, services, networks, volumes, DB, secrets, hostnames, and env-variable namespace.
+# Static tests only; do not infer runtime/Docker/PostgreSQL evidence from this file.
+name: eltnoy-internal-testing
+services:
+  it_api_public:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${INTERNAL_TEST_API_IMAGE:?Set a unique local internal-testing API image tag}
+    pull_policy: build
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ELTNOY_API_LISTENERS: public
+      NODE_ENV: production
+      DEPLOYMENT_MODE: development
+      ELTNOY_SURFACE_MODE: staging
+      ELTNOY_PUBLIC_PROXY_CIDRS: ${INTERNAL_TEST_NGINX_PUBLIC_APP_ADDRESS:?Required testing public proxy address}
+      ELTNOY_ADMIN_PROXY_CIDRS: ${INTERNAL_TEST_NGINX_ADMIN_APP_ADDRESS:?Required testing Admin proxy address}
+      ELTNOY_MARKETING_HOSTNAME: ${INTERNAL_TEST_MARKETING_HOSTNAME:?Required approved internal hostname}
+      ELTNOY_EXAM_HOSTNAME: ${INTERNAL_TEST_EXAM_HOSTNAME:?Required approved internal hostname}
+      ELTNOY_INSTITUTION_HOSTNAME: ${INTERNAL_TEST_INSTITUTION_HOSTNAME:?Required approved internal hostname}
+      ELTNOY_ADMIN_HOSTNAME: ${INTERNAL_TEST_ADMIN_HOSTNAME:?Required approved internal hostname}
+      PORT: "4000"
+      ADMIN_PORT: "4001"
+      DATABASE_URL: postgresql://eltnoy_app@it_postgres:5432/${INTERNAL_TEST_DATABASE_NAME:?Required dedicated testing database}
+      DATABASE_PASSWORD_FILE: /run/secrets/it_app_password
+      DATABASE_SSL: "true"
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+      DATABASE_POOL_SIZE: "10"
+      NODE_EXTRA_CA_CERTS: /run/it-postgresql-ca/ca.crt
+      POSTGRES_CA_FILE: ${INTERNAL_TEST_POSTGRES_CA_FILE:?Required testing PostgreSQL CA file}
+      POSTGRES_TLS_DIR: ${INTERNAL_TEST_POSTGRES_TLS_DIR:?Required testing PostgreSQL TLS directory}
+      PUBLIC_TLS_CERT_DIR: ${INTERNAL_TEST_PUBLIC_TLS_CERT_DIR:?Required testing public certificate directory}
+      ADMIN_TLS_CERT_DIR: ${INTERNAL_TEST_ADMIN_TLS_CERT_DIR:?Required testing Admin certificate directory}
+      ELTNOY_API_IMAGE: ${INTERNAL_TEST_API_IMAGE:?Required unique local testing API image tag}
+      PUBLIC_BIND_ADDRESS: ${INTERNAL_TEST_PUBLIC_BIND_ADDRESS:?Required private testing bind address}
+      ADMIN_BIND_ADDRESS: ${INTERNAL_TEST_ADMIN_BIND_ADDRESS:?Required WireGuard testing bind address}
+      WIREGUARD_INTERFACE_ADDRESS: ${INTERNAL_TEST_WIREGUARD_INTERFACE_ADDRESS:?Required testing WireGuard address}
+      INSTITUTION_DOCUMENT_STORAGE_DIR: /var/lib/eltnoy/documents
+      AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS: ""
+      AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS: ""
+      AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS: ""
+      AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS: ""
+      AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS: ""
+      AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS: ""
+      AUTH_SMS_DAILY_MAX_SENDS: ""
+      AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: ""
+      AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS: ""
+      AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS: ""
+      AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS: ""
+      AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS: ""
+      AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: ""
+      AUTH_EMAIL_DAILY_MAX_SENDS: ""
+      AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: ""
+    command:
+      - sh
+      - -ec
+      - node --import tsx server/validateDeploymentConfig.ts && exec node --import tsx server/index.ts
+    secrets:
+      - it_app_password
+    volumes:
+      - ${INTERNAL_TEST_POSTGRES_CA_FILE:?Required testing PostgreSQL CA file}:/run/it-postgresql-ca/ca.crt:ro
+      - it_documents:/var/lib/eltnoy/documents
+    networks:
+      it_public_app:
+        aliases:
+          - it-api-public
+        ipv4_address: ${INTERNAL_TEST_API_PUBLIC_APP_ADDRESS:?Required API address on testing public network}
+      it_db_public: {}
+    depends_on:
+      it_postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  it_api_admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${INTERNAL_TEST_API_IMAGE:?Set a unique local internal-testing API image tag}
+    pull_policy: never
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ELTNOY_API_LISTENERS: admin
+      NODE_ENV: production
+      DEPLOYMENT_MODE: development
+      ELTNOY_SURFACE_MODE: staging
+      ELTNOY_PUBLIC_PROXY_CIDRS: ${INTERNAL_TEST_NGINX_PUBLIC_APP_ADDRESS:?Required testing public proxy address}
+      ELTNOY_ADMIN_PROXY_CIDRS: ${INTERNAL_TEST_NGINX_ADMIN_APP_ADDRESS:?Required testing Admin proxy address}
+      ELTNOY_MARKETING_HOSTNAME: ${INTERNAL_TEST_MARKETING_HOSTNAME:?Required approved internal hostname}
+      ELTNOY_EXAM_HOSTNAME: ${INTERNAL_TEST_EXAM_HOSTNAME:?Required approved internal hostname}
+      ELTNOY_INSTITUTION_HOSTNAME: ${INTERNAL_TEST_INSTITUTION_HOSTNAME:?Required approved internal hostname}
+      ELTNOY_ADMIN_HOSTNAME: ${INTERNAL_TEST_ADMIN_HOSTNAME:?Required approved internal hostname}
+      PORT: "4000"
+      ADMIN_PORT: "4001"
+      DATABASE_URL: postgresql://eltnoy_app@it_postgres:5432/${INTERNAL_TEST_DATABASE_NAME:?Required dedicated testing database}
+      DATABASE_PASSWORD_FILE: /run/secrets/it_app_password
+      DATABASE_SSL: "true"
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+      DATABASE_POOL_SIZE: "10"
+      NODE_EXTRA_CA_CERTS: /run/it-postgresql-ca/ca.crt
+      POSTGRES_CA_FILE: ${INTERNAL_TEST_POSTGRES_CA_FILE:?Required testing PostgreSQL CA file}
+      POSTGRES_TLS_DIR: ${INTERNAL_TEST_POSTGRES_TLS_DIR:?Required testing PostgreSQL TLS directory}
+      PUBLIC_TLS_CERT_DIR: ${INTERNAL_TEST_PUBLIC_TLS_CERT_DIR:?Required testing public certificate directory}
+      ADMIN_TLS_CERT_DIR: ${INTERNAL_TEST_ADMIN_TLS_CERT_DIR:?Required testing Admin certificate directory}
+      ELTNOY_API_IMAGE: ${INTERNAL_TEST_API_IMAGE:?Required unique local testing API image tag}
+      PUBLIC_BIND_ADDRESS: ${INTERNAL_TEST_PUBLIC_BIND_ADDRESS:?Required private testing bind address}
+      ADMIN_BIND_ADDRESS: ${INTERNAL_TEST_ADMIN_BIND_ADDRESS:?Required WireGuard testing bind address}
+      WIREGUARD_INTERFACE_ADDRESS: ${INTERNAL_TEST_WIREGUARD_INTERFACE_ADDRESS:?Required testing WireGuard address}
+      INSTITUTION_DOCUMENT_STORAGE_DIR: /var/lib/eltnoy/documents
+    command:
+      - sh
+      - -ec
+      - node --import tsx server/validateDeploymentConfig.ts && exec node --import tsx server/index.ts
+    secrets:
+      - it_app_password
+    volumes:
+      - ${INTERNAL_TEST_POSTGRES_CA_FILE:?Required testing PostgreSQL CA file}:/run/it-postgresql-ca/ca.crt:ro
+      - it_documents:/var/lib/eltnoy/documents
+    networks:
+      it_admin_app:
+        aliases:
+          - it-api-admin
+        ipv4_address: ${INTERNAL_TEST_API_ADMIN_APP_ADDRESS:?Required API address on testing Admin network}
+      it_db_admin: {}
+    depends_on:
+      it_postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  it_nginx_public:
+    image: ${INTERNAL_TEST_NGINX_IMAGE:?Required digest-pinned testing Nginx image}
+    restart: unless-stopped
+    user: "101:101"
+    depends_on:
+      it_api_public:
+        condition: service_healthy
+    ports:
+      - "${INTERNAL_TEST_PUBLIC_BIND_ADDRESS:?Required private testing bind address}:80:8080"
+      - "${INTERNAL_TEST_PUBLIC_BIND_ADDRESS:?Required private testing bind address}:443:8443"
+    volumes:
+      - ${INTERNAL_TEST_NGINX_RENDERED_DIR:?Run wrapper render-nginx first}/public.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/includes:/etc/nginx/includes:ro
+      - ${INTERNAL_TEST_PUBLIC_TLS_CERT_DIR:?Required testing public certificate directory}:/etc/nginx/tls:ro
+    networks:
+      it_public_ingress: {}
+      it_public_app:
+        ipv4_address: ${INTERNAL_TEST_NGINX_PUBLIC_APP_ADDRESS:?Required Nginx address on testing public network}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:8080/_internal-health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  it_nginx_admin:
+    image: ${INTERNAL_TEST_NGINX_IMAGE:?Required digest-pinned testing Nginx image}
+    restart: unless-stopped
+    user: "101:101"
+    depends_on:
+      it_api_admin:
+        condition: service_healthy
+    ports:
+      - "${INTERNAL_TEST_ADMIN_BIND_ADDRESS:?Required WireGuard-only testing bind address}:443:8443"
+    volumes:
+      - ${INTERNAL_TEST_NGINX_RENDERED_DIR:?Run wrapper render-nginx first}/admin.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/includes:/etc/nginx/includes:ro
+      - ${INTERNAL_TEST_ADMIN_TLS_CERT_DIR:?Required testing Admin certificate directory}:/etc/nginx/tls:ro
+    networks:
+      it_admin_ingress: {}
+      it_admin_app:
+        ipv4_address: ${INTERNAL_TEST_NGINX_ADMIN_APP_ADDRESS:?Required Nginx address on testing Admin network}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:8080/_internal-health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  it_migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${INTERNAL_TEST_API_IMAGE:?Required unique local internal-testing API image tag}
+    profiles:
+      - ops
+    restart: "no"
+    user: "10002:10002"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://eltnoy_migrator@it_postgres:5432/${INTERNAL_TEST_DATABASE_NAME:?Required dedicated testing database}
+      DATABASE_PASSWORD_FILE: /run/secrets/it_migrator_password
+      DATABASE_SSL: "true"
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+      NODE_EXTRA_CA_CERTS: /run/it-postgresql-ca/ca.crt
+    command:
+      - node
+      - --import
+      - tsx
+      - server/migrate.ts
+    secrets:
+      - it_migrator_password
+    volumes:
+      - ${INTERNAL_TEST_POSTGRES_CA_FILE:?Required testing PostgreSQL CA file}:/run/it-postgresql-ca/ca.crt:ro
+    networks:
+      it_db_ops: {}
+    depends_on:
+      it_postgres:
+        condition: service_healthy
+
+  it_postgres:
+    image: ${INTERNAL_TEST_POSTGRES_IMAGE:?Required digest-pinned PostgreSQL 17 image}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${INTERNAL_TEST_DATABASE_NAME:?Required dedicated testing database}
+      POSTGRES_USER: ${INTERNAL_TEST_POSTGRES_USER:?Required testing-only bootstrap role}
+      POSTGRES_PASSWORD_FILE: /run/secrets/it_postgres_superuser_password
+    secrets:
+      - it_postgres_superuser_password
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/it-postgresql-tls/server.crt
+      - -c
+      - ssl_key_file=/run/it-postgresql-tls/server.key
+    volumes:
+      - it_postgres_data:/var/lib/postgresql/data
+      - ${INTERNAL_TEST_POSTGRES_TLS_DIR:?Required testing PostgreSQL TLS directory}:/run/it-postgresql-tls:ro
+      - ./server/databaseRoleBootstrap.sql:/run/internal-testing-role-bootstrap.sql:ro
+    networks:
+      it_db_public: {}
+      it_db_admin: {}
+      it_db_ops: {}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+secrets:
+  it_postgres_superuser_password:
+    file: ${INTERNAL_TEST_SECRETS_DIR:?Required testing-only secret directory}/postgres_superuser_password
+  it_app_password:
+    file: ${INTERNAL_TEST_SECRETS_DIR:?Required testing-only secret directory}/eltnoy_app_password
+  it_migrator_password:
+    file: ${INTERNAL_TEST_SECRETS_DIR:?Required testing-only secret directory}/eltnoy_migrator_password
+
+networks:
+  it_public_ingress:
+    name: eltnoy-internal-testing-public-ingress
+    driver: bridge
+  it_admin_ingress:
+    name: eltnoy-internal-testing-admin-ingress
+    driver: bridge
+  it_public_app:
+    name: eltnoy-internal-testing-public-app
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: ${INTERNAL_TEST_PUBLIC_APP_SUBNET:?Required non-overlapping testing subnet}
+  it_admin_app:
+    name: eltnoy-internal-testing-admin-app
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: ${INTERNAL_TEST_ADMIN_APP_SUBNET:?Required non-overlapping testing subnet}
+  it_db_public:
+    name: eltnoy-internal-testing-db-public
+    driver: bridge
+    internal: true
+  it_db_admin:
+    name: eltnoy-internal-testing-db-admin
+    driver: bridge
+    internal: true
+  it_db_ops:
+    name: eltnoy-internal-testing-db-ops
+    driver: bridge
+    internal: true
+
+volumes:
+  it_postgres_data:
+    name: eltnoy-internal-testing-postgres-data
+  it_documents:
+    name: eltnoy-internal-testing-documents

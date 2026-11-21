@@ -11,22 +11,22 @@ export const colorTokens = {
   // Accent
   'teal-600': '#0D9488', // accent fills, focus rings, large text and icons
   'teal-700': '#0F766E', // accent text and links on light surfaces
-  // Surfaces
+  // Surfaces (warm off-white neutrals; colour refresh 2026-11-14)
   'surface': '#FFFFFF',
-  'surface-muted': '#F8FAFC',
-  'surface-subtle': '#F1F5F9',
-  'border': '#E2E8F0',
+  'surface-muted': '#F7F6F1',
+  'surface-subtle': '#EFEEE8',
+  'border': '#E4E2DA',
   // Text
-  'ink': '#0F172A',
-  'ink-muted': '#475569',
-  'ink-subtle': '#64748B',
+  'ink': '#0E1A15',
+  'ink-muted': '#4B5357',
+  'ink-subtle': '#5F6964',
   // Status
   'success': '#15803D',
   'warning': '#B45309',
   'danger': '#BE123C',
   'info': '#0369A1',
   // Soft tints for badges, alerts and selected rows
-  'teal-soft': '#F0FDFA',
+  'teal-soft': '#ECF7F1',
   'success-soft': '#F0FDF4',
   'warning-soft': '#FFFBEB',
   'danger-soft': '#FFF1F2',

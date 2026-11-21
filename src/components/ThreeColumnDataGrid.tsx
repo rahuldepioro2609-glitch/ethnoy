@@ -65,7 +65,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   };
 
   return (
-    <section id="exam-list" className="py-8 bg-[#F4F8FC]" aria-label="ELTNOY Information Center">
+    <section id="exam-list" className="py-8 bg-[#F7F6F1]" aria-label="ELTNOY Information Center">
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           {/* COLUMN 1: Latest Notifications (approx 4 cols) */}

@@ -16,18 +16,45 @@
 export const SURFACES = ['marketing', 'exam', 'institution', 'admin'] as const;
 export type Surface = (typeof SURFACES)[number];
 
-/** Pinned production hostnames (P1 v1.4 §2). */
+/**
+ * Pinned production hostnames (P1 v1.4 §2). The public site (eltnoy.com) serves Students and
+ * Institutes only. Admin and Staff access is private and lives on the separate eltnoy.in domain
+ * (owner decision 2026-11-21): a different registrable domain from the public site, reachable only over
+ * WireGuard with split-horizon DNS, never published in public DNS or linked from the public surfaces.
+ */
 export const PINNED_SURFACE_HOSTNAMES: Readonly<Record<Surface, string>> = Object.freeze({
   marketing: 'eltnoy.com',
   exam: 'exam.eltnoy.com',
   institution: 'institution.eltnoy.com',
-  admin: 'admin.eltnoy.com',
+  admin: 'admin.eltnoy.in',
 });
+
+/** Registrable production domains. Staging, development and internal testing must use neither. */
+export const PRODUCTION_DOMAINS = Object.freeze(['eltnoy.com', 'eltnoy.in'] as const);
+
+/** True for a production domain or any subdomain of one (case-insensitive). */
+export function isProductionDomainHostname(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  return PRODUCTION_DOMAINS.some((domain) => lower === domain || lower.endsWith(`.${domain}`));
+}
 
 export type SurfaceHostnames = Readonly<Record<Surface, string>>;
 
 export function isSurface(value: unknown): value is Surface {
   return typeof value === 'string' && (SURFACES as readonly string[]).includes(value);
+}
+
+/** Surfaces served to the public internet. The Admin surface is private (WireGuard-only ingress). */
+export const PUBLIC_SURFACES = Object.freeze(['marketing', 'exam', 'institution'] as const satisfies readonly Surface[]);
+
+/**
+ * Hostnames a surface may tell the browser (GET /api/surface-hostnames). Public surfaces disclose only
+ * the public hostnames, so the public site never learns or links the private Admin hostname; the Admin
+ * surface may disclose all four (public hostnames are public).
+ */
+export function disclosedSurfaceHostnames(surface: Surface, hostnames: SurfaceHostnames): Readonly<Partial<Record<Surface, string>>> {
+  const visible: readonly Surface[] = surface === 'admin' ? SURFACES : PUBLIC_SURFACES;
+  return Object.freeze(Object.fromEntries(visible.map((name) => [name, hostnames[name]])) as Partial<Record<Surface, string>>);
 }
 
 // ---------------------------------------------------------------------------
@@ -387,8 +414,10 @@ export type RouteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
  * - candidate / center / official: that session role
  * - super_admin: an Official with is_super_admin
  * - capability: the institution submission capability flow (no portal session)
+ * - platform_staff / org_staff (SM-1): the independent staff session of that module, checked by the
+ *   module's own route guard (requirePlatformStaff… / requireOrgStaff); never a portal session
  */
-export type AuthRequirement = 'anonymous' | 'login' | 'session' | 'candidate' | 'center' | 'official' | 'super_admin' | 'capability';
+export type AuthRequirement = 'anonymous' | 'login' | 'session' | 'candidate' | 'center' | 'official' | 'super_admin' | 'capability' | 'platform_staff' | 'org_staff';
 
 export type SurfaceAccess =
   | { decision: 'allow'; auth: AuthRequirement }
@@ -406,6 +435,8 @@ export type RouteClass =
   | 'institution_capability'
   | 'admin'
   | 'super_admin'
+  | 'platform_staff'
+  | 'organization_staff'
   | 'health';
 
 export interface RoutePolicyEntry {
@@ -478,8 +509,17 @@ const superAdmin = (method: RouteMethod, path: string) => entry(method, path, 's
  */
 export const ROUTE_POLICY: readonly RoutePolicyEntry[] = Object.freeze([
   // Public content (Amendment A-1, owner decisions U1-U6).
-  marketingContent('/api/notices'),
-  marketingContent('/api/institute-forms'),
+  // Routing metadata the SPA needs to move a role flow to its surface. Public surfaces answer with the
+  // public hostnames only; the private Admin hostname is disclosed only on Admin (disclosedSurfaceHostnames).
+  entry('GET', '/api/surface-hostnames', 'public_content', Object.freeze({
+    marketing: allow('anonymous'), exam: allow('anonymous'), institution: allow('anonymous'), admin: allow('anonymous'),
+  })),
+  entry('GET', '/api/notices', 'public_content', Object.freeze({
+    marketing: allow('anonymous'), exam: allow('anonymous'), institution: DENY, admin: DENY,
+  })),
+  entry('GET', '/api/institute-forms', 'public_content', Object.freeze({
+    marketing: allow('anonymous'), exam: allow('anonymous'), institution: DENY, admin: DENY,
+  })),
   // Marketing anonymous listing; Exam needs a Candidate session (application flow). The route has
   // no guard and cannot have one (Marketing is anonymous): enforced centrally (P1-B).
   entry('GET', '/api/exams', 'public_content', Object.freeze({
@@ -494,6 +534,13 @@ export const ROUTE_POLICY: readonly RoutePolicyEntry[] = Object.freeze([
 
   // Authentication (locked rows, v1.4 §4).
   entry('POST', '/api/auth/login', 'auth', Object.freeze({ marketing: DENY, exam: allow('login'), institution: allow('login'), admin: allow('login') })),
+  // AUTH C1.9.1 (MFA P3a-1): the second step of Official sign-in. Admin only; no portal session yet (the
+  // challenge cookie, Path=/api/auth/mfa, is the only credential).
+  entry('POST', '/api/auth/mfa/verify', 'auth', only('admin', allow('login'))),
+  // AUTH C1.9.1 (MFA P4): first-time enrollment is also pre-session; its enrollment-purpose challenge
+  // cookie is validated by the handlers, and normal portal routes remain session-gated.
+  entry('POST', '/api/auth/mfa/enrol/start', 'auth', only('admin', allow('login'))),
+  entry('POST', '/api/auth/mfa/enrol/confirm', 'auth', only('admin', allow('login'))),
   entry('GET', '/api/auth/me', 'auth', Object.freeze({ marketing: Object.freeze({ decision: 'unauthenticated' }) as SurfaceAccess, exam: allow('session'), institution: allow('session'), admin: allow('session') })),
   entry('POST', '/api/auth/logout', 'auth', Object.freeze({ marketing: Object.freeze({ decision: 'unauthenticated' }) as SurfaceAccess, exam: allow('session'), institution: allow('session'), admin: allow('session') })),
   entry('POST', '/api/auth/register', 'auth', only('exam', allow('anonymous'))),
@@ -544,7 +591,7 @@ export const ROUTE_POLICY: readonly RoutePolicyEntry[] = Object.freeze([
   official('GET', '/api/institution-document-submission/admin/cycles'),
   official('GET', '/api/admin/notices'),
   official('POST', '/api/admin/notices'),
-  official('PATCH', '/api/admin/notices/:id'),
+  superAdmin('PATCH', '/api/admin/notices/:id'),
   official('GET', '/api/admin/workbook-template'),
   official('GET', '/api/admin/dashboard-stats'),
   official('POST', '/api/admin/answer-keys/import'),
@@ -582,6 +629,61 @@ export const ROUTE_POLICY: readonly RoutePolicyEntry[] = Object.freeze([
   superAdmin('PATCH', '/api/admin/results/:id'),
   superAdmin('GET', '/api/admin/institution-documents/versions/:versionId/content'),
   superAdmin('POST', '/api/admin/institution-documents/versions/:versionId/reviews'),
+
+  // AUTH-1 verification (Exam and Institution). Anonymous at the gate: the pending verification is
+  // identified by its own path-scoped cookie, and no portal session exists until a code is verified.
+  entry('GET', '/api/auth/providers', 'auth', Object.freeze({ marketing: DENY, exam: allow('anonymous'), institution: allow('anonymous'), admin: DENY })),
+  entry('GET', '/api/auth/verification', 'auth', Object.freeze({ marketing: DENY, exam: allow('anonymous'), institution: allow('anonymous'), admin: DENY })),
+  entry('POST', '/api/auth/verification/destination', 'auth', Object.freeze({ marketing: DENY, exam: allow('anonymous'), institution: allow('anonymous'), admin: DENY })),
+  entry('POST', '/api/auth/verification/resend', 'auth', Object.freeze({ marketing: DENY, exam: allow('anonymous'), institution: allow('anonymous'), admin: DENY })),
+  entry('POST', '/api/auth/verification/verify', 'auth', Object.freeze({ marketing: DENY, exam: allow('anonymous'), institution: allow('anonymous'), admin: DENY })),
+  // AUTH-1 Google sign-in (Exam only). Linking needs a verified Student session.
+  entry('GET', '/api/auth/google/start', 'auth', only('exam', allow('anonymous'))),
+  entry('GET', '/api/auth/google/callback', 'auth', only('exam', allow('anonymous'))),
+  exam('GET', '/api/auth/google/link'),
+  // AUTH-1 follow-up: a signed-in Student reads or starts verification of their own email address.
+  exam('GET', '/api/auth/student/email'),
+  exam('POST', '/api/auth/student/email'),
+  // AUTH-1 / SM-2: institutional verification and suspension of Institutes, Super Admin only.
+  superAdmin('GET', '/api/admin/institute-verifications'),
+  superAdmin('GET', '/api/admin/institute-verifications/decisions'),
+  superAdmin('POST', '/api/admin/institute-verifications/:institutionId/verify'),
+  superAdmin('POST', '/api/admin/institute-verifications/:institutionId/reject'),
+  superAdmin('POST', '/api/admin/institute-verifications/:institutionId/suspend'),
+  superAdmin('POST', '/api/admin/institute-verifications/:institutionId/restore'),
+
+  // SM-1 Platform Staff (Admin surface). Sign-in is anonymous at the gate; every other staff route
+  // requires the Platform Staff session, enforced by the module's own guard (no portal session).
+  entry('POST', '/api/platform-staff/auth/login', 'platform_staff', only('admin', allow('anonymous'))),
+  entry('GET', '/api/platform-staff/auth/me', 'platform_staff', only('admin', allow('platform_staff'))),
+  entry('POST', '/api/platform-staff/auth/logout', 'platform_staff', only('admin', allow('platform_staff'))),
+  entry('POST', '/api/platform-staff/auth/password', 'platform_staff', only('admin', allow('platform_staff'))),
+  entry('GET', '/api/platform-staff/dashboard', 'platform_staff', only('admin', allow('platform_staff'))),
+  // SM-1 Platform Staff management: Super Admin only.
+  superAdmin('GET', '/api/admin/platform-staff'),
+  superAdmin('POST', '/api/admin/platform-staff'),
+  superAdmin('POST', '/api/admin/platform-staff/:id/deactivate'),
+  superAdmin('PUT', '/api/admin/platform-staff/:id/assignment'),
+  superAdmin('GET', '/api/admin/platform-staff/departments'),
+  superAdmin('POST', '/api/admin/platform-staff/departments'),
+  superAdmin('GET', '/api/admin/platform-staff/roles'),
+  superAdmin('POST', '/api/admin/platform-staff/roles'),
+  superAdmin('GET', '/api/admin/platform-staff/audit'),
+
+  // SM-1 Organization Staff. Owner management: the Organization Owner's own (center) session.
+  institution('GET', '/api/center/staff'),
+  institution('POST', '/api/center/staff/invitations'),
+  institution('PUT', '/api/center/staff/:id/roles'),
+  // Invitation acceptance and the (unavailable, C-18) OTP step: anonymous on Institution only.
+  entry('POST', '/api/org-staff/invitations/accept', 'organization_staff', only('institution', allow('anonymous'))),
+  entry('POST', '/api/org-staff/verification/otp', 'organization_staff', only('institution', allow('anonymous'))),
+  entry('POST', '/api/org-staff/auth/login', 'organization_staff', only('institution', allow('anonymous'))),
+  entry('GET', '/api/org-staff/auth/me', 'organization_staff', only('institution', allow('org_staff'))),
+  entry('POST', '/api/org-staff/auth/logout', 'organization_staff', only('institution', allow('org_staff'))),
+  entry('GET', '/api/org-staff/dashboard', 'organization_staff', only('institution', allow('org_staff'))),
+  // Q115: Super Admin reviews and activates Organization Staff.
+  superAdmin('GET', '/api/admin/organization-staff'),
+  superAdmin('POST', '/api/admin/organization-staff/:id/activate'),
 ]);
 
 /** The SPA catch-all route (registered only when dist/ exists) is governed by SPA_SHELL_PATHS. */
@@ -592,7 +694,7 @@ export const SPA_SHELL_PATHS: Readonly<Record<Surface, readonly string[]>> = Obj
   marketing: Object.freeze(['/']),
   exam: Object.freeze(['/', '/login/candidate', '/dashboard/candidate']),
   institution: Object.freeze(['/', '/login/center', '/dashboard/center']),
-  admin: Object.freeze(['/', '/login/official', '/dashboard/official']),
+  admin: Object.freeze(['/', '/login/official', '/dashboard/official', '/login/platform-staff', '/dashboard/platform-staff']),
 });
 
 /** Built static assets (dist/assets, dist/fonts) and the shell file itself; GET/HEAD only. */

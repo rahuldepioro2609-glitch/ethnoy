@@ -26,6 +26,9 @@ import {
   deploymentConfigFromEnvironment,
   validateDeploymentConfig,
 } from './deploymentConfig.js';
+// AUTH C1.3-B.2: the pure shared SMS/claim-lifetime rule (imports only node: built-ins via
+// verificationProviders.ts). No database, credential, dotenv, Express or auth-store module.
+import { validateEmailProtectionDeployment, validateSmsProtectionDeployment } from './smsProtectionConfig.js';
 
 /** Compose variables declared `${VAR:?…}` (required). Kept equal to docker-compose.yml by a test. */
 export const REQUIRED_COMPOSE_VARIABLES = [
@@ -33,11 +36,21 @@ export const REQUIRED_COMPOSE_VARIABLES = [
   'API_PUBLIC_APP_ADDRESS', 'DATABASE_SSL', 'DEPLOYMENT_MODE', 'ELTNOY_API_IMAGE', 'ELTNOY_SECRETS_DIR',
   'ELTNOY_SURFACE_MODE', 'NGINX_ADMIN_APP_ADDRESS', 'NGINX_IMAGE', 'NGINX_PUBLIC_APP_ADDRESS',
   'POSTGRES_CA_FILE', 'POSTGRES_DB', 'POSTGRES_IMAGE', 'POSTGRES_TLS_DIR', 'POSTGRES_USER',
-  'PUBLIC_APP_SUBNET', 'PUBLIC_BIND_ADDRESS', 'PUBLIC_TLS_CERT_DIR', 'WIREGUARD_INTERFACE_ADDRESS',
+  'PUBLIC_APP_SUBNET', 'PUBLIC_BIND_ADDRESS', 'PUBLIC_BIND_MODE', 'PUBLIC_TLS_CERT_DIR', 'WIREGUARD_INTERFACE_ADDRESS',
 ] as const;
 
 /** Compose variables with a default (`${VAR:-…}`). Absent values stay absent: Compose uses the default. */
 export const OPTIONAL_COMPOSE_VARIABLES = [
+  // Verification delivery providers and host-side secret-file paths (api_public only).
+  'AUTH_EMAIL_PROVIDER', 'AUTH_OTP_HMAC_KEY_FILE', 'AUTH_SMS_PROVIDER', 'RESEND_API_KEY_FILE',
+  'RESEND_FROM_EMAIL', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN_FILE', 'TWILIO_MESSAGING_SERVICE_SID',
+  // AUTH C1.3-B (api_public only; pending owner approval, no defaults; validated by the preflight).
+  'AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS', 'AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS', 'AUTH_SMS_DAILY_MAX_SENDS',
+  'AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS', 'AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS', 'AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS',
+  'AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS', 'AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS', 'AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS',
+  // AUTH C1.4-B-2 (api_public only; pending owner approval, no defaults; validated by both preflights).
+  'AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS', 'AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS', 'AUTH_EMAIL_DAILY_MAX_SENDS',
+  'AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS', 'AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS', 'AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS',
   'DATABASE_POOL_SIZE', 'ELTNOY_ADMIN_HOSTNAME', 'ELTNOY_EXAM_HOSTNAME', 'ELTNOY_INSTITUTION_HOSTNAME',
   'ELTNOY_MARKETING_HOSTNAME', 'ONLINE_EXAM_RECOVERY_SINCE',
 ] as const;
@@ -370,6 +383,11 @@ export function planDeployment(input: {
     const validationErrors = [
       ...checkRequiredVariables(parsed.values),
       ...validateDeploymentConfig(deploymentConfigFromEnvironment(governedValues)),
+      // AUTH C1.3-B.2: the same all-or-nothing SMS rule (and independent claim lifetime) the
+      // in-container preflight applies, on the parsed env-file values only (never process.env).
+      ...validateSmsProtectionDeployment(governedValues),
+      // AUTH C1.4-B-2: the six email settings, the same rule as the in-container preflight.
+      ...validateEmailProtectionDeployment(governedValues),
     ];
     if (validationErrors.length > 0) return { ok: false, errors: validationErrors };
   }

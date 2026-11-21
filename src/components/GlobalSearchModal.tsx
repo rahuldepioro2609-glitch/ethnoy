@@ -7,6 +7,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, FileText, Calendar, Building2, ExternalLink, ArrowRight } from 'lucide-react';
 import { TEST_CENTERS, ExamItem, NoticeItem, TestCenter } from '../data/portalData';
 
+// TEST_CENTERS is a static SAMPLE directory with no API replacement. Fail closed: it is searched only in
+// the Vite dev server; production builds get an empty list so stale sample locations never appear.
+const SAMPLE_CENTERS_DEV_ONLY: TestCenter[] = import.meta.env.DEV ? TEST_CENTERS : [];
+
 interface GlobalSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -59,7 +63,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
       n.summary.toLowerCase().includes(q)
   );
 
-  const matchedCenters = TEST_CENTERS.filter(
+  const matchedCenters = SAMPLE_CENTERS_DEV_ONLY.filter(
     (c) =>
       c.name.toLowerCase().includes(q) ||
       c.code.toLowerCase().includes(q) ||

@@ -18,21 +18,36 @@
   --color-eltnoy-teal-600: #0D9488;
   --color-eltnoy-teal-700: #0F766E;
   --color-eltnoy-surface: #FFFFFF;
-  --color-eltnoy-surface-muted: #F8FAFC;
-  --color-eltnoy-surface-subtle: #F1F5F9;
-  --color-eltnoy-border: #E2E8F0;
-  --color-eltnoy-ink: #0F172A;
-  --color-eltnoy-ink-muted: #475569;
-  --color-eltnoy-ink-subtle: #64748B;
+  --color-eltnoy-surface-muted: #F7F6F1;
+  --color-eltnoy-surface-subtle: #EFEEE8;
+  --color-eltnoy-border: #E4E2DA;
+  --color-eltnoy-ink: #0E1A15;
+  --color-eltnoy-ink-muted: #4B5357;
+  --color-eltnoy-ink-subtle: #5F6964;
   --color-eltnoy-success: #15803D;
   --color-eltnoy-warning: #B45309;
   --color-eltnoy-danger: #BE123C;
   --color-eltnoy-info: #0369A1;
-  --color-eltnoy-teal-soft: #F0FDFA;
+  --color-eltnoy-teal-soft: #ECF7F1;
   --color-eltnoy-success-soft: #F0FDF4;
   --color-eltnoy-warning-soft: #FFFBEB;
   --color-eltnoy-danger-soft: #FFF1F2;
   --color-eltnoy-info-soft: #F0F9FF;
+
+  /* Colour refresh (2026-11-14): Tailwind's neutral slate scale, used across every page, is retinted to
+     warm off-white surfaces and near-black ink. Brand navy, the wordmark green, the teal accent and the
+     status, emerald, sky and blue palettes are unchanged. Text pairs keep WCAG AA contrast. */
+  --color-slate-50: #F7F6F1;
+  --color-slate-100: #EFEEE8;
+  --color-slate-200: #E4E2DA;
+  --color-slate-300: #CFCDC4;
+  --color-slate-400: #A3A29A;
+  --color-slate-500: #5F6964;
+  --color-slate-600: #4B5357;
+  --color-slate-700: #353D40;
+  --color-slate-800: #1C2023;
+  --color-slate-900: #0E1A15;
+  --color-slate-950: #07100C;
 }
 
 /* Plus Jakarta Sans, bundled locally (public/fonts/plus-jakarta-sans, SIL OFL 1.1). No CDN request.

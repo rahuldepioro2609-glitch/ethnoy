@@ -2,13 +2,18 @@
 
 **Status:** documentation (OD-P8), updated for the UD-1-B implementation (separate credentials, dedicated container identities; validated in isolated rehearsal `20261104071404-ad7667` only). Nothing in this runbook has been executed against production, Ubuntu staging or a restored copy of production. Internal; do not publish.
 
-**Applies to:** branch `rc/day1-baseline` at `df9b93e`, plus these uncommitted database files:
-- `server/databaseRoleBootstrap.sql`
-- `server/institutionDocumentsImmutabilityMigration.sql`
-- `server/databaseGrantsMigration.sql`
-- `server/databaseMonitoringSetup.sql`
-- the matching `server/migrate.ts` change;
-- UD-1-B: `Dockerfile`, `docker-compose.yml`, `server/db.ts`, `server/databaseCredentials.ts`, `.gitignore`, `.dockerignore`, `.env.example`, `scripts/test-local-dev-db.sh` (see `docs/architecture/secure-database-credentials.md`).
+**Applies to:** branch `rc/day1-baseline`. These files are committed (no uncommitted changes to them as of 2026-11-14):
+- committed in `9e62f7b` (2026-11-13):
+  - `server/databaseRoleBootstrap.sql`
+  - `server/institutionDocumentsImmutabilityMigration.sql`
+  - `server/databaseGrantsMigration.sql`
+  - `server/databaseMonitoringSetup.sql`
+  - the matching `server/migrate.ts` change;
+- UD-1-B (see `docs/architecture/secure-database-credentials.md`):
+  - `server/db.ts`, `server/databaseCredentials.ts` and `.gitignore`, committed in `9e62f7b`;
+  - `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example` and `scripts/test-local-dev-db.sh`, last changed in `9c20baa` (P1-D.2 topology).
+
+Committed is not deployed or approved: the §10 checklist still applies in full.
 
 > **Deploying the UD-1-B `docker-compose.yml` is the role-separation cutover.** The API now logs in as `eltnoy_app` and the `migrate` service as `eltnoy_migrator`, each with a password from its own file secret. Neither role exists until the bootstrap (§2) has run and their passwords are set, so the new Compose file must not be deployed to an existing environment before OD-P1 approval and the §10 checklist. The previous Compose file (API as the superuser) remains the fallback (§9).
 
@@ -141,14 +146,28 @@ From `server/migrate.ts`, `MIGRATION_FILES`:
 | 2 | `institutionDocumentsMigration.sql` | Milestone 1: institution documents |
 | 3 | `institutionDocumentSubmissionMigration.sql` | Milestone 2: submission cycles and capabilities |
 | 4 | `institutionDocumentsImmutabilityMigration.sql` | OD-P3: `institution_documents` rejects `UPDATE`, `DELETE` and `TRUNCATE` for **every** role |
-| 5 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` privileges, **always last** |
+| 5 | `authVerificationMigration.sql` | AUTH-1: 7 additive tables (`account_contacts`, `verification_challenges`, `auth_session_verifications`, `institute_verifications`, `google_identities`, `oauth_states`, append-only `auth_verification_events`). Needs `users` and `auth_sessions` from file 1 |
+| 6 | `studentEmailVerificationMigration.sql` | Adds `student_email_capture` to the allowed verification challenge purposes |
+| 7 | `studentRegistrationClaimsMigration.sql` | AUTH C1: `student_registration_claims` (temporary, non-exclusive Student registration claims), nullable `verification_challenges.registration_claim_id` (FK `ON DELETE CASCADE`), `user_id` made nullable, the ownership CHECK `verification_challenges_owner_check`, and indexes. Needs file 5 (§3.8) |
+| 8 | `adminMfaMigration.sql` | AUTH C1.8 (MFA Phase 2): the 6 privileged-MFA tables (§3.12). Needs files 1 and 5 |
+| 9 | `platformStaffMigration.sql` | SM-1: separate Platform Staff identities, sessions and append-only audit |
+| 10 | `organizationStaffMigration.sql` | SM-1: tenant-scoped Organization Staff identities, invitations, roles, sessions and append-only audit |
+| 11 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` least-privilege grants for every table above, **always last** |
 
-`npm run db:migrate` runs all five on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run.
+`npm run db:migrate` runs all eleven on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run. The Platform Staff and Organization Staff routes use the two Staff migrations in this list; those schemas still require runtime PostgreSQL rehearsal before release.
 
-Evidence [TESTED-ISOLATED]:
+**Prerequisites for any run:** the role bootstrap (§2) on that database; the run as `eltnoy_migrator` (sessions act as `eltnoy_owner`) through the deployment wrapper; for an existing database, a verified backup and restore first (§6) and the application stopped (§3.4), because creating the AUTH-1 foreign keys briefly blocks writes to `users` and `auth_sessions`.
+
+**A production migration is a separate, controlled operation:** it needs its own approval (OD-P1, UD-10) and the §10 pre-cutover checklist. Wiring a file into `MIGRATION_FILES` does not authorize running it anywhere.
+
+Evidence [TESTED-ISOLATED] (the five pre-AUTH-1 files):
 - **Order and single transaction:** one session sent `BEGIN`, the lock, the files in order, then `COMMIT`, in one transaction (OD-P2-W).
 - **Idempotency:** OD-P2, OD-P2-W, OD-P3 and OD-P4.
-- **Rollback of all files when file 5 fails:** OD-P2-W, where `schema.sql`'s 24 tables were rolled back too.
+- **Rollback of all files when the grants file fails:** OD-P2-W, where `schema.sql`'s 24 tables were rolled back too.
+
+**`authVerificationMigration.sql` has not been rehearsed on any database yet** [PROPOSED]: its order, idempotency and the 7 grants are checked statically by `server/migrate.test.ts` and `server/databaseGrants.test.ts` only. A disposable-database rehearsal needs separate approval.
+
+**`studentRegistrationClaimsMigration.sql` (AUTH C1) has not been run on any database** [PROPOSED]: its order, re-runnability and grants are checked statically (`server/migrate.test.ts`, `server/databaseGrants.test.ts`). The PostgreSQL tests for it in `server/databaseGrants.postgres.integration.test.ts` are prepared but **not executed**; running them on a disposable cluster needs separate approval. **No production migration is part of AUTH C1.**
 
 ### 3.2 Why the grants migration must stay last
 - It grants privileges **for the tables the earlier files create**.
@@ -161,8 +180,8 @@ Evidence [TESTED-ISOLATED]:
 ### 3.3 Behaviour before and after the bootstrap
 | State | `db:migrate` run as | Result | Evidence |
 |---|---|---|---|
-| **Before the cutover: no `eltnoy_*` roles on the cluster** | The superuser (previous Compose; the UD-1-B Compose cannot connect before the bootstrap) | Files 1–4 apply. **File 4 makes `institution_documents` immutable immediately.** File 5 is a no-op with a NOTICE. | [TESTED-ISOLATED] OD-P2-W, OD-P3 |
-| Roles exist, database bootstrapped | `eltnoy_migrator` (sessions act as `eltnoy_owner`) | All five apply; grants are set exactly | [TESTED-ISOLATED] P1A (as the migrator login), OD-P2 |
+| **Before the cutover: no `eltnoy_*` roles on the cluster** | The superuser (previous Compose; the UD-1-B Compose cannot connect before the bootstrap) | Files 1–10 apply. **File 4 makes `institution_documents` immutable immediately.** File 11 (grants) is a no-op with a NOTICE. | [TESTED-ISOLATED] OD-P2-W, OD-P3 (files 1–4 and the grants file); files 5–10 [PROPOSED] |
+| Roles exist, database bootstrapped | `eltnoy_migrator` (sessions act as `eltnoy_owner`) | All eleven apply, including the AUTH-1, Student email and Student registration migrations; grants are set exactly | [TESTED-ISOLATED] P1A (as the migrator login), OD-P2, for the five pre-AUTH-1 files; files 5–10 not yet rehearsed [PROPOSED] |
 | Roles exist, **this database not bootstrapped** (for example a new database on the same cluster) | The superuser | **Refused**: "objects not owned by eltnoy_owner", whole run rolled back | [TESTED-ISOLATED] OD-P4 |
 | Any state | `eltnoy_app` | Refused ("permission denied for schema public"), rolled back | [TESTED-ISOLATED] P1A, OD-P2-W |
 
@@ -198,9 +217,12 @@ Result [TESTED-ISOLATED, OD-P2/P3/P4]: a fresh install's ownership, permissions 
 -- no table-wide UPDATE for the API (expect 0)
 SELECT count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r'
    AND has_table_privilege('eltnoy_app', c.oid, 'UPDATE');
--- no DELETE/TRUNCATE for the API (expect 0)
+-- no TRUNCATE for the API (expect 0)
 SELECT count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r'
-   AND (has_table_privilege('eltnoy_app', c.oid, 'DELETE') OR has_table_privilege('eltnoy_app', c.oid, 'TRUNCATE'));
+   AND has_table_privilege('eltnoy_app', c.oid, 'TRUNCATE');
+-- DELETE only on the AUTH C1 claims table (expect exactly one row: student_registration_claims)
+SELECT relname FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r'
+   AND has_table_privilege('eltnoy_app', c.oid, 'DELETE');
 -- protected column (expect false)
 SELECT has_column_privilege('eltnoy_app', 'users', 'is_super_admin', 'UPDATE');
 -- OD-P3 triggers enabled (expect 3 rows, all enabled)
@@ -211,11 +233,403 @@ SELECT relname, pg_get_userbyid(relowner) FROM pg_class
 ```
 
 ### 3.7 Adding a table or changing SQL (engineering rule)
-- **Add every new table** to the manifest in `server/databaseGrantsMigration.sql`, with `SELECT`/`INSERT` and exact column-level `UPDATE` only. Never `DELETE`, `TRUNCATE` or table-wide `UPDATE`.
+- **Add every new table** to the manifest in `server/databaseGrantsMigration.sql`, with `SELECT`/`INSERT` and exact column-level `UPDATE` only. Never `TRUNCATE` or table-wide `UPDATE`. `DELETE` exists on exactly one table, `student_registration_claims` (AUTH C1, approved, §3.8); the grants migration refuses `DELETE` on any other table.
 - **Update the table count** in `server/databaseGrants.test.ts`.
 - **Sequences:** a new sequence (`serial` or identity column) needs a sequence-manifest entry.
 - **New `UPDATE` columns:** any new `UPDATE … SET` column in server code must be granted. `npm test` fails otherwise, and in production the API would get `42501` at runtime.
 - **Missing manifest entry:** once roles exist, `db:migrate` **fails closed and rolls back** for any table without one.
+
+### 3.8 AUTH C1: Student registration claims [PROPOSED: unit-tested only; PostgreSQL tests prepared, not executed]
+**What changed.** Student registration no longer creates a `users` row. `POST /api/auth/register` stores a temporary claim (normalised `+91` mobile, display name, bcrypt hash at the existing cost 12, `created_at`, `expires_at`, `consumed_at`) and sends the code through the existing OTP lifecycle, with a challenge owned by the claim (`user_id` NULL, `registration_claim_id` set). Claims are **not exclusive**: any number may exist for one mobile, and a claim reserves no login ID. The permanent account (mobile-derived login ID, verified contact, session and session verification) is created **only** when a correct code is verified, in one transaction that:
+1. locks the claim, consumes the challenge, and takes a transaction-level advisory lock keyed by the mobile;
+2. refuses generically if any Student already has that mobile as a verified contact, or if the derived login ID exists;
+3. otherwise inserts everything and **deletes the claim** (AUTH C1.1; its registration-only challenge goes with it through the cascade). Any error rolls the whole completion back, including the deletion.
+
+A permanent refusal (step 2) marks the claim consumed in the same transaction that consumed its only challenge, so it cannot be replayed. A transient database failure is not a refusal: everything rolls back, the claim stays unconsumed, the challenge stays usable, and the same code can be verified again (within the existing attempt limit).
+
+The existing mobile-capture step (a Student ID account adding its first mobile) takes the **same** advisory lock and is refused if the number belongs to a mobile-first Student (approved rule). Capturing a number held by another Student ID account is unchanged (existing, unresolved policy).
+
+The answer to registration is the same `202` for a new, an already registered and an already claimed number. Only the holder of the phone, after verifying the code, learns that no account was created (`409 ACCOUNT_NOT_CREATED`).
+
+> **Warning: do not rotate `AUTH_OTP_HMAC_KEY_FILE` (AUTH C1.1-a).** Until a durable account-origin identifier exists and is approved, the key must not be changed.
+> - **What depends on it.** The mobile-capture rule above recognises a mobile-first Student only by recomputing that Student's login ID: `M-` + HMAC(`AUTH_OTP_HMAC_KEY_FILE` key, mobile). The database stores no separate marker of how an account was created.
+> - **What rotation breaks.** After a rotation, the recomputed ID for a number no longer matches the login ID of a mobile-first Student created under the old key. The capture rule then no longer recognises that Student.
+> - **How the risk arises.** A Student ID account without a mobile could then capture that Student's number. It still needs the code, so it must be the holder of the phone, for example on a shared family phone.
+> - **The consequence.** The number becomes tied to two Students, and sign-in by mobile is then refused for both. The mobile-first Student has no Student ID to fall back on, so they lose sign-in entirely until support intervenes.
+> - **What still holds.** Registration itself is not affected: it refuses on any verified Student contact, not on the derived ID.
+> - **Other effects of rotation.** It also resets per-number SMS history and changes the login IDs derived for new registrations.
+> - **Until a durable fix exists.** Treat the key as non-rotatable. If it is ever compromised, close Student registration and capture before acting, and get a separately approved plan for a durable account-origin identifier.
+
+**Grants (manifest).** `student_registration_claims`: `SELECT, INSERT, DELETE` and `UPDATE (consumed_at)`. This is the **only** table on which `eltnoy_app` has `DELETE`.
+
+**Locking (PostgreSQL 17) [DOCUMENTED; harness assertion prepared, not executed].**
+- The application's own DELETE statements (completion and cleanup) take a `ROW EXCLUSIVE` table-level lock plus row-level locks on the rows they delete. Completion and cleanup also take `SELECT … FOR UPDATE` row locks (cleanup with `SKIP LOCKED`), which take `ROW SHARE` on the table. None of these is `ACCESS EXCLUSIVE`.
+- However, an explicit `LOCK TABLE` in any mode other than `ACCESS SHARE` or `ROW EXCLUSIVE` needs table-level `UPDATE`, `DELETE`, `TRUNCATE` or `MAINTAIN`. So this `DELETE` grant **does** let `eltnoy_app` run `LOCK TABLE student_registration_claims IN ACCESS EXCLUSIVE MODE`.
+- Application code never issues `LOCK TABLE`. A misused or compromised application role could block every read and write on this table until the end of its transaction: claim inserts, foreign-key checks for claim-backed challenges, completion and cleanup, that is Student registration.
+- No other table is affected: column-level `UPDATE` does not permit these lock modes. `verification_challenges` grants are unchanged; `registration_claim_id` is written only on `INSERT`.
+
+**Settings (AUTH C1 / C1.1-b) — values PENDING OWNER APPROVAL; there are no defaults.**
+- If any SMS setting is missing, invalid or inconsistent, **every SMS is refused** (`503 SMS_PROTECTION_NOT_CONFIGURED`). That covers Student sign-in, mobile capture, Student registration, Institute registration and Institute mobile verification, resends included.
+- If the claim lifetime is missing, Student registration is refused (`503 REGISTRATION_NOT_CONFIGURED`).
+- Every value must be a positive whole number.
+
+| Setting | Meaning | Rule |
+|---|---|---|
+| `AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS` | Lifetime of a pending claim | At most the 15-minute challenge lifetime (900) |
+| `AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS` | Rolling window for the per-number limit on **unverified** SMS | Positive whole number |
+| `AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS` | Unverified SMS allowed to one number per window (`429 SMS_DESTINATION_LIMITED` beyond) | Positive whole number |
+| `AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS` | Rolling window for the per-number limit on **verified** (sign-in) SMS | Positive whole number |
+| `AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS` | Sign-in SMS allowed to one verified number per window (`429 SMS_DESTINATION_LIMITED` beyond) | Positive whole number |
+| `AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS` | Rolling window for the **account** allowance: one approved Institute's own recorded mobile | Positive whole number |
+| `AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS` | SMS allowed to that Institute's recorded mobile per window, for that Institute only (`429 SMS_DESTINATION_LIMITED` beyond) | Positive whole number |
+| `AUTH_SMS_DAILY_MAX_SENDS` | **All** SMS, every purpose and bucket, in any rolling 24 hours: the spend guard (`503 SMS_DAILY_LIMIT_REACHED` beyond) | Positive whole number |
+| `AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS` | **Anonymous (unverified-bucket)** SMS in any rolling 24 hours (`503 SMS_DAILY_LIMIT_REACHED` beyond). Verified and account sends never count here, so the rest of the total stays available for sign-in and approved Institutes | Positive whole number, **not above** `AUTH_SMS_DAILY_MAX_SENDS` |
+
+The AUTH C1 settings `AUTH_SMS_DESTINATION_WINDOW_SECONDS` and `AUTH_SMS_DESTINATION_MAX_SENDS` are **no longer read**: they are replaced by the unverified pair, and no old value is reused. **Container forwarding and preflight (C1.3-B) [TESTED-ISOLATED: unit and static tests only; never run against Docker].**
+- **Forwarding:** `docker-compose.yml` forwards the nine settings to **`api_public` only**, each as `${NAME:-}` (optional, empty when unset). SMS flows are served only on the Exam and Institution surfaces, which `api_public` listens for.
+- **`api_admin` receives none of them.** It therefore logs `smsProtectionConfigured: false` at startup, which is expected.
+- **No defaults, no required substitutions.** Values are pending owner approval; `.env.example` lists the names with empty values.
+- **Preflight, fail-fast, the same rule in both places:** in the **host** wrapper (`scripts/eltnoy-deploy.sh … preflight`, and before every non-emergency operation), and in the **container** (`server/validateDeploymentConfig.ts`, before `api_public` starts):
+  - All eight `AUTH_SMS_*` empty: accepted.
+  - All eight valid and consistent: accepted.
+  - Partial, invalid or inconsistent: **the deployment stops**, with setting names and statuses only.
+  - The claim lifetime is validated **independently**: empty is accepted, a set but invalid value stops the deployment (positive whole number, at most 900).
+- **Missing claim lifetime:** accepted by both preflights, but Student registration stays closed at runtime (`503 REGISTRATION_NOT_CONFIGURED`, nothing written or sent). Sign-in and other SMS flows are unaffected by it.
+- **Emergency operations** skip this rule (syntax-only validation, unchanged).
+- **Dependencies:** the preflight imports only the pure resolver module (`server/smsProtectionConfig.ts` and `server/verificationProviders.ts`, Node built-ins only). It never loads the database, credentials, Express, dotenv or the auth stores.
+- **Provider wiring:** `api_public` receives `AUTH_SMS_PROVIDER`, Twilio's account/Messaging Service SIDs and fixed in-container secret-file paths. The host secret files are mounted read-only only into `api_public`; `api_admin` receives neither settings nor mounts. Empty host paths mount `/dev/null`, which cannot pass secret validation, so SMS stays disabled by default.
+
+**Startup validation (C1.3-A) [TESTED-ISOLATED: unit tests only].**
+- The API validates these settings **once at startup**, with the same resolver every request uses, and installs the result, so startup and request time can never disagree.
+- Changing a value needs an API restart.
+- An invalid configuration **does not stop the API**: every SMS simply stays refused.
+- Startup logs one structured line in addition to `auth.verification_providers`:
+
+```json
+{"event":"auth.sms_protection","smsProtectionConfigured":false,"registrationClaimTtlConfigured":false,
+ "smsSettings":{"AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS":"missing", "…":"valid|missing|invalid|inconsistent"},
+ "registrationClaimTtlSetting":{"AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS":"missing"},
+ "smsProviderAvailable":false,"smsDeliveryEnabled":false}
+```
+
+- **Statuses:** `valid`; `missing` (unset or empty); `invalid` (not a positive whole number, or the claim lifetime above 900); `inconsistent` (the unverified daily cap above the shared total).
+- **What is never logged:** no value, number, path, provider name, secret, key, phone number or connection string.
+- **Two separate flags:** `smsProtectionConfigured` means only that the limits are valid. `smsDeliveryEnabled` is true only when the limits are valid **and** the configured Twilio provider is available (`smsProviderAvailable`).
+- **Before opening SMS**, check `smsProtectionConfigured: true` and that every setting is `valid`.
+- **Not changed in this phase:** `/api/auth/providers` and `/api/health` do not reflect these settings.
+- **`OTP_POLICY`** (code length, lifetime, attempts, resend cooldown, sends per challenge, challenge lifetime) is fixed in code, not configuration, and is not part of this log. Its values are still pending owner approval.
+
+**To activate SMS:** set all eight limits, `AUTH_SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_MESSAGING_SERVICE_SID`, and the host paths `TWILIO_AUTH_TOKEN_FILE` and `AUTH_OTP_HMAC_KEY_FILE` in the deployment env file. Registration also requires `AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS`. Store the token and OTP key as protected files owned `root:10001`, mode `0440`; the OTP file should contain a base64-encoded value generated from at least 32 random bytes. Run the deployment preflight, restart `api_public`, and confirm startup reports `smsProtectionConfigured: true`, all settings `valid`, and `smsDeliveryEnabled: true`. Keep `AUTH_SMS_DAILY_MAX_SENDS` low while testing because Twilio charges per delivered message.
+
+**Buckets (decided by the server for every send, resends included, from fresh database data; nothing from the client is used).**
+- **Verified:** an account's `student_login` to exactly its **current** verified SMS contact (`account_contacts`).
+- **Account (AUTH C1.1-b C-1):** an `institute_mobile` send where all of these hold:
+  - the account is an Institute (`users.role = 'center'`);
+  - it is **approved** (`account_status = 'approved'`);
+  - the destination is exactly its recorded `institute_verifications.mobile_destination`.
+
+  Its allowance is keyed to **that Institute and that number together**: `HMAC(key, "sms-account-destination:" + account + number)`, kept separate from the per-number key. Anonymous traffic to the same number, and other Institutes, cannot use it up. A **pending** Institute's registration-time send is **not** account-bucket (the Institute is not yet approved).
+- **Unverified (anonymous):** everything else:
+  - registration claims;
+  - Student mobile capture, including after Google sign-in (unchanged, even for approved legacy Students);
+  - Institute registration and any pending Institute;
+  - any destination mismatch.
+
+  Every unverified purpose shares one per-number allowance, so switching purpose or route does not evade it.
+
+**Daily accounting.** The shared total (`AUTH_SMS_DAILY_MAX_SENDS`) counts **every** SMS: verified, account and unverified. The anonymous cap (`AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS`) counts **only unverified** sends. So anonymous traffic can never use the share of the total that remains for Student sign-in and approved Institutes, provided the cap is configured below the total.
+
+**Early fail-closed checks (before any account lookup, password check or write).** These make a closed or exhausted SMS service answer the same for every credential:
+
+| Route | What is checked early |
+|---|---|
+| Student sign-in | Configuration, and advisory: shared total not used up |
+| Student registration | Configuration, claim lifetime, and advisory: unverified cap and shared total |
+| Institute registration | Configuration, advisory unverified cap and shared total, and (C-2) advisory: the submitted `contactMobile`'s unverified per-number allowance. When used up: `429 SMS_DESTINATION_LIMITED` **before** any account, submission cycle, capability or verification record is written |
+| Institute sign-in | Configuration only: a verified Institute needs no SMS, so exhaustion must not lock it out |
+
+The advisory reads take no lock. The serialized reservation in `deliverCode` is always the final enforcement.
+
+**Residual risks after C1.1-b C-1/C-2 (documented, not decided) [PROPOSED].**
+- **Password correctness is visible by design.** Both sign-in flows show whether a password is correct: a correct password gets `202` (or a `403` for a pending, rejected or suspended Institute), a wrong one `401`. Exhaustion answers given after a correct password therefore add **no new oracle**.
+- **The one marginal effect is *silent* confirmation:** during exhaustion, a correct guess for an Institute whose mobile is still unverified gets `503 SMS_DAILY_LIMIT_REACHED` or `429` instead of `202`, so **no SMS reaches the Institute** as a warning. This is limited by per-IP sign-in limits. With C-1, anonymous flooding of that Institute's recorded mobile no longer causes it, because those sends use the account allowance.
+- **Student sign-in is not affected in this way:**
+  - A Student that needs mobile capture receives no SMS at sign-in. The first capture SMS is sent from `/auth/verification/destination`, which needs the verification cookie that only a correct password produces.
+  - A verified Student's own allowance can be used up only by sign-ins with the correct password.
+  - (The earlier statement that Student capture created an exhaustion oracle was **incorrect** and is withdrawn.)
+- **Advisory race:** at the exact moment a budget runs out, an advisory check can pass and the serialized reservation then refuse with the same codes after the password check. No budget can ever be exceeded.
+- **Still open (UD-12):**
+  - Anonymous flooding can still block a person's own Student **registration** or legacy **capture** of their number, and pending Institute registrations, for one window.
+  - Refused reservations still use up the account's hourly challenge allowance (C-5, not implemented).
+  - The login-ID sign-in path can reveal whether an account exists through timing (C-4, not implemented).
+
+**SMS accounting.**
+- **What every SMS records:** an `sms.send_reserved` event in the append-only `auth_verification_events`, before a code is generated or delivered. The event holds the bucket, the purpose, a keyed hash of the number (`HMAC(AUTH_OTP_HMAC_KEY_FILE key, "sms-destination:" + number)`, truncated) and a random reservation ID, which is also the event ID. It never holds the number or the code.
+- **Correlation (C1.4-A):** `verification.code_sent` and `verification.delivery_failed` carry `correlationId`. For SMS it **equals** the reservation's `reservationId`, so a reservation joins its outcome.
+- **Serialization:** all reservations are serialized by one advisory lock, so parallel requests cannot exceed any limit.
+- **Timing:** event times and all windows use `clock_timestamp()` (the actual moment of the reservation, after the lock), not the transaction start.
+- **Failed sends count:** a reservation counts even if delivery then fails or times out, or if a concurrent request wins the challenge's compare-and-set. This errs towards fewer messages.
+- **Refusals** are recorded as `sms.send_refused` with reason, bucket, purpose and reservation ID only. Reasons: `destination_limit`, `unverified_daily_limit`, `daily_limit`.
+- **Older reservations:** C1 reservations, which have no bucket, count as unverified (they were all registration).
+- **OTP key:** rotating it resets per-number history, not the daily counts; rotation is prohibited anyway (warning above).
+- **Email is not limited:** Institute email codes have no destination or daily limits (open decision, §13).
+
+**Cleanup and retention.**
+- **Completed claims are deleted inside the completion transaction** (AUTH C1.1), not by cleanup.
+- Each registration first deletes at most 50 claims that are **expired or consumed (refused)** and have **no live challenge** (none unconsumed and unexpired). It skips claims row-locked by a completion in progress (`FOR UPDATE SKIP LOCKED`). Lock order is the same as completion (claim, then its challenges via the cascade), so the two cannot deadlock. It is idempotent and best effort: a failure never blocks registration.
+- The claim's registration-only challenges are removed with it through the foreign key (`ON DELETE CASCADE`, executed by PostgreSQL as the table owner; `eltnoy_app` still has no `DELETE` on `verification_challenges`). Account challenges are never touched.
+- Cleanup never lowers the SMS counters, which live in the append-only events.
+- **Retention (AUTH C1.1):** a completed registration leaves no claim. Its name and password hash remain only in the new `users` row. Refused and expired claims stay only until the next registration triggers cleanup (a consumed claim whose challenge is somehow still live stays until that challenge expires). There is no retention period. Audit events are append-only by design and hold no claim contents.
+- To check the backlog read-only: `SELECT count(*) FILTER (WHERE consumed_at IS NULL AND expires_at <= now()) AS expired_pending, count(*) FILTER (WHERE consumed_at IS NOT NULL) AS refused_pending FROM student_registration_claims;`
+
+**Safe deployment prerequisites.**
+1. Owner approval of the four values above.
+2. An approved SMS provider adapter and `AUTH_OTP_HMAC_KEY_FILE`. Registration is closed without them, as today.
+3. The disposable-cluster run of the prepared PostgreSQL tests (separate approval).
+4. The full §3.4 procedure with backup and restore. Adding the column, dropping `NOT NULL` and adding the CHECK briefly lock `verification_challenges`, so stop the application.
+
+The release that contains this code must not be deployed without this migration. The new registration code writes `registration_claim_id` and the claims table. Without them, registration answers `503 VERIFICATION_NOT_INSTALLED`, or fails if the table exists but the column does not.
+
+**Rollback considerations.**
+- The migration is additive. Rolling back the **application** to the previous release is not safe while registration is open: the old code creates accounts before verification (the defect C1 fixes).
+- Close registration first (leave the settings unset, which refuses it).
+- Do **not** restore `NOT NULL` on `verification_challenges.user_id` while claim-backed rows exist. Remove all claims first (completed claims are already gone; refused and expired ones go with cleanup), because each remaining claim's challenges keep `registration_claim_id`.
+- Schema reversal would be a new, separately approved migration. There is none.
+
+**Not part of AUTH C1:** any production or staging migration, any database connection, provider integration, and changes to the existing OTP policy (`OTP_POLICY`).
+
+### 3.9 Provider adapter contract (AUTH C1.4-A) [TESTED-ISOLATED: local test doubles only]
+**Owner-selected integrations:** `server/verificationProviderAdapters.ts` registers Resend for email and Twilio Messaging for SMS. They implement the adapter contract below and use Node's built-in `fetch`; there is no SDK dependency. Compose and the deployment wrapper now forward provider settings and mount host secret files read-only into `api_public` only. Neither channel becomes available without provider selection, required settings, secret files, OTP HMAC key, and the independent channel abuse limits. No live vendor delivery has been exercised yet.
+
+**Interface.** One request object per delivery attempt:
+- `sendOtp(request)` / `sendVerificationCode(request)`, where `request = { destination, code, purpose, correlationId, signal }`.
+- `signal` is always supplied.
+- `deliverCode` is the only caller of either method, and it makes exactly **one** adapter call per attempt.
+
+**Correlation IDs.**
+- One `correlationId` identifies exactly one code, one destination and one delivery attempt.
+- **SMS:** it is the send reservation's ID. **Email:** a fresh UUID per delivery. Both are fixed before the code is generated.
+- Core never retries. A user resend is a new attempt, with a new code and a new ID.
+- Adapters pass it to the vendor as the idempotency key where the vendor supports one, and must never reuse it for another code.
+- It appears in `verification.code_sent` and `verification.delivery_failed`.
+
+**Failure categories (fixed).** `verification.delivery_failed.details` is exactly `{ channel, correlationId, failure }`:
+
+| `failure` | Set when |
+|---|---|
+| `timeout` | Core's 10 s deadline fired (signal aborted). There is no separate "aborted" category |
+| `throttled`, `rejected_destination`, `authentication`, `provider_unavailable` | Declared by the adapter with `ProviderDeliveryError(category)` |
+| `unknown` | Anything else: a plain error, an unknown category, a thrown non-error |
+
+- Raw messages, causes and vendor payloads are **never** stored, logged or returned.
+- **Users always get the same generic `503 PROVIDER_DELIVERY_FAILED`**, whatever the category.
+
+**Who guarantees what.**
+
+| Property | Owner |
+|---|---|
+| Request ends within the fixed 10 s deadline, even if the adapter ignores the signal; the signal is aborted at the deadline | **Core** |
+| Every failure or timeout invalidates the challenge, so **a code the vendor delivers late can never verify** | **Core** (tested) |
+| A failed or timed-out attempt still counts against the SMS limits; one adapter call per attempt; no core retries | **Core** |
+| Late adapter settlement is ignored safely (no unhandled rejection) | **Core** |
+| Honour the abort signal; start no new vendor request after abort; no internal retries; never put codes, destinations or credentials in errors | **Adapter** (the local contract kit can detect a retry after abort) |
+| Whether an accepted message can still be delivered late or cancelled; whether idempotency keys are honoured | **Vendor**. Not assumed: **no cancellation or idempotency guarantee is claimed without vendor evidence** |
+
+**Restricted adapter configuration.** An adapter is registered with a declaration (`settings`, `secretFiles: { name: { env, minBytes } }`, `create(config)`) and **never receives the environment**.
+- Core passes `create` only `{ settings: <declared names → values>, secrets: <logical name → Buffer> }`.
+- **Secret files:** declared names must end in `_FILE`. Core reads them with the existing reader (absolute path, at least `minBytes`, trimmed). The adapter gets the contents, **never the path**.
+- **Refused declarations:** ordinary settings whose name contains the whole word `KEY`, `SECRET`, `TOKEN` or `PASSWORD` (boundary-aware, so `MONKEY` is fine), plain settings ending in `_FILE`, duplicate names, non-positive `minBytes`, and badly formed names.
+- **Fail-closed cases:** a missing setting, or a missing, relative, unreadable or undersized secret file. So does a `create()` that throws.
+- Every reason is fixed text. Secret contents, paths and raw factory errors are never logged or exposed.
+- Compose bind mounts host secret files read-only at fixed paths under `/run/secrets`; empty host paths map to `/dev/null`, which cannot satisfy provider or OTP-key minimum lengths. The wrapper allowlists only provider setting names and host secret-file paths. It never receives token contents.
+
+### 3.10 Email abuse protection (AUTH C1.4-B-1) [TESTED-ISOLATED: local doubles and an in-memory guard only; PostgreSQL validation pending (C1.4-B-3)]
+**Resend adapter.** The implementation sends a plain-text and HTML verification message to the requested address and uses the attempt correlation ID as Resend's `Idempotency-Key`. `RESEND_API_KEY_FILE` is a host-side path to a protected file; Compose mounts it at `/run/secrets/resend_api_key`. `RESEND_FROM_EMAIL` must be a verified sender address. Resend free-tier quotas and availability can change. Email stays disabled until all six email limits, an OTP HMAC key, sender verification, and provider credentials are configured.
+
+**Student email capture.** An authenticated Student can add or change an email from the dashboard. The address becomes the account's verified email only after the Student confirms the code; the existing verified address remains in place until then. This is optional for Student sign-in, which continues to require the verified mobile OTP.
+
+**Twilio adapter.** The implementation sends the generated OTP through the configured Twilio Messaging Service. `TWILIO_AUTH_TOKEN_FILE` is a host-side path to a protected file; Compose mounts it at `/run/secrets/twilio_auth_token`. Account SID and Messaging Service SID are non-secret settings. Delivery in India also depends on Twilio account eligibility, approved sender/route configuration and applicable DLT requirements. SMS stays disabled until all eight SMS limits plus the Student claim lifetime (for registration), the OTP HMAC key, provider configuration and approved account setup are present.
+
+**Settings — values PENDING OWNER APPROVAL; there are no defaults.** One all-or-nothing group, **independent of the SMS group**:
+
+| Setting | Meaning |
+|---|---|
+| `AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS` | Rolling window for each address in the anonymous bucket |
+| `AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS` | Sends allowed to one address per window, anonymous bucket |
+| `AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS` | Rolling window for an approved Institute's own recorded address |
+| `AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS` | Sends allowed per window to that Institute and address |
+| `AUTH_EMAIL_DAILY_MAX_SENDS` | Every email send, both buckets, in any rolling 24 hours |
+| `AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS` | Anonymous email sends in any rolling 24 hours; not above the total |
+
+- **Validation:** every value must be a positive whole number, and the unverified cap must not exceed the total. If **any** is missing, invalid or inconsistent, **every email is refused** (`503 EMAIL_PROTECTION_NOT_CONFIGURED`).
+- **Startup:** the API logs `auth.email_protection` with statuses only: `emailProtectionConfigured`, `emailSettings`, `emailProviderAvailable`, and `emailDeliveryEnabled` (true only when a provider **and** valid limits exist).
+- **Deployment wiring (C1.4-B-2) [TESTED-ISOLATED: unit, static and subprocess tests; never run against Docker]:**
+  - `docker-compose.yml` forwards the six settings to **`api_public` only**, as `${NAME:-}` (optional, empty when unset, no defaults). `api_admin` receives none of them.
+  - The host wrapper governs them (safe-character checks) and passes them to Compose only when set.
+  - **Both preflights** apply the same all-or-nothing rule (`validateEmailProtectionDeployment`, built on the same pure resolver the API uses), independently of the SMS rule:
+    - all six absent or empty is accepted, and email stays closed;
+    - all six valid and consistent is accepted;
+    - a partial set, an invalid value or an inconsistent value stops the deployment, with setting names and statuses only.
+  - Emergency operations skip this rule, like the rest of the semantic preflight.
+  - `.env.example` lists the six limits and provider settings with empty values; host secret-file paths are also empty by default.
+- **To activate email:** set **all six** limits, `AUTH_EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL`, `RESEND_API_KEY_FILE`, and `AUTH_OTP_HMAC_KEY_FILE` in the deployment env file; store the secret files with owner `root:10001`, mode `0440`, and at least 16 bytes for the Resend key and 32 random bytes for the OTP key. Run `scripts/eltnoy-deploy.sh --deployment-env-file /etc/eltnoy/.env.production preflight`, then restart `api_public`. Startup must log `auth.email_protection` with `emailProtectionConfigured: true`, every setting `valid`, and `emailDeliveryEnabled: true`.
+
+**Buckets (decided per send and per resend, from fresh server data).**
+- **`account`:** a fresh `findPortalUser` shows an **approved** Institute, the purpose is `institute_email`, and the address is exactly its recorded `institute_verifications.email_destination`. Keyed per Institute and address, so anonymous traffic to the same address can't use it up.
+- **`unverified`:** everything else:
+  - new registrations;
+  - pending Institutes, including the email that follows mobile verification;
+  - their resends;
+  - any mismatch.
+- **A stored address is never treated as verified.** There is no email "verified" bucket.
+
+**Accounting.** It reuses the SMS mechanism with its **own** actions (`email.send_reserved`, `email.send_refused`) and its **own** advisory lock. Every email is reserved before its code exists.
+- **Keys:** keyed hashes only, `HMAC(key, "email-destination:"+address)` for the anonymous bucket and an account-bound label for the account bucket. No raw address or code is recorded.
+- **Correlation:** the reservation ID is the delivery's `correlationId`, and each resend gets a new one.
+- **Failures count:** failed and timed-out sends still count, and the challenge is invalidated, so a late code is useless.
+- **No schema change:** no new grants and no migration. Per-address counts use the existing action/time index; a dedicated index is optional (C1.4-B-3).
+
+**Early gates (advisory reads only; the reservation stays authoritative, and the gates never reserve).**
+- **Institute registration:** refused **before any write** when the email limits are unset (`503 EMAIL_PROTECTION_NOT_CONFIGURED`), the email budgets are used up (`503 EMAIL_DAILY_LIMIT_REACHED`), or `contactEmail`'s anonymous allowance is used up (`429 EMAIL_DESTINATION_LIMITED`).
+- **Institute sign-in:** refused **before any lookup** while the email limits are unset, with one answer for every credential.
+
+**Unchanged.** Email normalisation (trim and lower-case only) and the delivery address are unchanged. Plus-address tags are **not** stripped, which is an open owner decision. SMS behaviour, `OTP_POLICY` and permissions are unchanged.
+
+### 3.11 Disposable PostgreSQL runner for the grants integration tests (AUTH C1.4-B-3.2) [PROPOSED: written and statically checked; never executed]
+`scripts/run-disposable-grants-tests.sh --scratch-dir /absolute/approved/scratch` is the **only** supported way to run `server/databaseGrants.postgres.integration.test.ts`.
+- It never uses Docker.
+- It never reads `.env` or `.env.production`.
+- It never connects to any other PostgreSQL server.
+- **Running it needs separate, explicit approval each time.**
+
+**What it does.**
+1. **Refuses unless the setup is safe:** `--scratch-dir` must be an existing, absolute, real directory owned by you (there is no default), and the PostgreSQL tools and `node` must be on `PATH`.
+2. **Records the existing listeners on port 5432:** process IDs and start times. It never signals them.
+3. **Creates its workspace and installs cleanup:** it creates `<scratch>/pg-grants-XXXXXXXX`, which must be new and empty, then installs **cleanup on EXIT, INT and TERM**.
+4. **Picks the port and credentials:**
+   - a random free port in 20000–59999, **never 5432**, checked free with `lsof`;
+   - a test-only superuser `it_super` with a random password in a **0600** file, plus a 0600 `pgpass` file for its own `psql` calls;
+   - the password is never put in an argument, a URL or an environment variable.
+5. **Starts the cluster and proves its identity:**
+   - `initdb` with `scram-sha-256` for local and host, `listen_addresses='127.0.0.1'` and `unix_socket_directories=''`, started with `LC_ALL=en_US.UTF-8`;
+   - the process must listen on **exactly** `127.0.0.1:<port>` with no Unix socket;
+   - the server's reported `port` and `data_directory` must match.
+6. **Creates the database:** `CREATE DATABASE eltnoy_grants_test`; the cluster must then hold exactly `eltnoy_grants_test` and `postgres`.
+7. **Runs only that test file**, with a **clean environment** (`env -i`):
+   - `DOTENV_CONFIG_PATH=/dev/null` and the placeholder `DATABASE_URL=postgresql://placeholder:placeholder@127.0.0.1:9/placeholder`;
+   - `ELTNOY_GRANTS_INTEGRATION=1`, `ELTNOY_GRANTS_TEST_EXPECTED_PORT`, `ELTNOY_GRANTS_TEST_EXPECTED_DATA_DIR`, `ELTNOY_GRANTS_TEST_PASSWORD_FILE`;
+   - `ELTNOY_GRANTS_TEST_DATABASE_URL` with **no password** in it;
+   - nothing else is inherited, so `ELTNOY_GRANTS_TEST_ALLOWED_HOST` and `DATABASE_PASSWORD_FILE` are absent.
+8. **Prints the results** only after checking that the password doesn't appear in them (the check reads the pattern from the file), followed by the server log's deadlock count.
+
+**Harness guards (fail closed before any connection, application import or test).** When enabled, the harness refuses to run unless all of these hold:
+- the variables above are exactly as described;
+- the URL is `postgres://<user>@127.0.0.1:<expected port>/eltnoy_grants_test`, with no password, no options and never port 5432;
+- the password file is absolute, regular, owned by you and mode 0600;
+- once connected, the server reports the expected port and data directory.
+
+Errors name variables and rules only. The earlier checks (superuser, the database name, an empty schema) are kept.
+
+**Cleanup guarantees (EXIT, INT, TERM).**
+- It stops **only** its own cluster (`pg_ctl -D <its data directory> -m fast`).
+- It deletes the directory only if the process has exited, the port is free and the path matches `<scratch>/pg-grants-????????`.
+- Otherwise it **preserves** the directory and prints its path, process ID and port (exit status 3).
+- It confirms the port-5432 listeners are unchanged (exit 3 if not).
+- It never terminates any other process.
+
+**SIGKILL recovery (traps cannot run on SIGKILL).**
+1. List `<scratch>/pg-grants-*`.
+2. For each, read `data/postmaster.pid`, and confirm that PID's command line contains **that** data directory and that its port isn't 5432.
+3. Then run `pg_ctl -D <that>/data -m fast stop`, verify the PID and port are gone, and delete only that directory.
+
+Never stop the Homebrew server or any process whose data directory is not under the scratch directory.
+
+**Coverage added for C1.4-B-3:**
+- Email reservations as `eltnoy_app`: per-address limits under concurrency, an account bucket isolated from the anonymous one, independent addresses, the email total and unverified cap with account headroom, email/SMS separation, accounting shape, and no new grants.
+- An **end-to-end `deliverCode`** test using the real PostgreSQL stores and a local adapter double, with no provider, no network and no real email. It covers:
+  - the reservation is committed before delivery;
+  - `correlationId` equals the reservation ID;
+  - a failure consumes the reservation, invalidates the challenge and records its category;
+  - success records `code_sent`;
+  - SMS accounting is unchanged.
+
+**Disclosure.** The earlier approved harness runs (C1.1-e, C1.1-b) set neither `DOTENV_CONFIG_PATH` nor the placeholder. The store import therefore loaded the repository `.env` into the test process and built an **unused** application pool. No query used it. The guards above make that impossible from now on.
+
+### 3.12 AUTH C1.8: privileged MFA schema (MFA Phase 2) [TESTED-ISOLATED for the C1.8 schema (disposable run, 25/25, 2026-11-15); the AUTH C1.8.4 integrity amendment is statically tested only, its PostgreSQL tests prepared, not executed]
+
+**What it is.** `server/adminMfaMigration.sql` adds the storage for mandatory TOTP MFA for all Officials and Super Admins. It follows `docs/reviews/SM2_MFA_IMPLEMENTATION_PLAN.md` (revision 2) §9, plus the owner decision of 2026-11-15 (D-1):
+- a Super Admin target is reset only with **two different Super Admins**;
+- an ordinary Official target is reset by **one Super Admin other than the target**.
+
+**No application code uses these tables yet.** Phases 3 to 7 add it. Applying the migration therefore changes no sign-in behaviour.
+
+| Table | Holds | Final states and guards |
+|---|---|---|
+| `admin_mfa_factors` | AES-256-GCM ciphertext, nonce and tag of the TOTP secret, plus key version (never plaintext); `last_used_step` for the replay guard | One active factor per user and kind; Officials only; `last_used_step` only rises; `confirmed_at` set once; disabled is final |
+| `admin_mfa_recovery_codes` | HMAC-SHA256 hex digests only, tied to the owner's factor | Used or revoked once, then final |
+| `admin_mfa_challenges` | SHA-256 hex of the challenge token; attempts | Single use; expiring; attempts rise one at a time and not after expiry; a step-up challenge belongs to a live session of the same user (one open per session) |
+| `admin_mfa_enrolment_tickets` | SHA-256 hex of the ticket | One open per user; Officials only; not self-issued; used before expiry or revoked, then final |
+| `auth_session_mfa_verifications` | Session MFA evidence (login, enrolment, step-up) | **Insert-only**; many rows per session; `verified_at` is always the database clock; requires a live session of the same user and a confirmed, active factor; step-up and enrolment need TOTP (a recovery code counts only for sign-in) |
+| `admin_mfa_reset_requests` | Reset workflow: target, approval mode, initiator, decision, evidence references, issued ticket | `pending` → `executed`, `rejected`, `cancelled`, `expired` or `superseded`, then final; one pending per target; no self-target; decisions need TOTP evidence from a live session; two-person: approver ≠ initiator, approver evidence newer than the request, initiator re-checked; single-approver: the initiating Super Admin executes; an executed request names the open ticket its decider issued |
+
+**Every MFA table** refuses `DELETE` and `TRUNCATE` for **every** role, by trigger as well as by grants.
+
+**Audit.**
+- There is no new audit table. MFA events go to the existing append-only `auth_verification_events`, with `admin_mfa.*` actions; the approved list is in the migration header.
+- Details never contain a secret, code, token, ticket, key or hash.
+
+**Grants (manifest).** `SELECT, INSERT` on all six tables, plus column `UPDATE` only on these state columns. There is no `DELETE` and no table-wide `UPDATE`.
+
+| Table | Column `UPDATE` |
+|---|---|
+| `admin_mfa_factors` | `last_used_step`, `confirmed_at`, `disabled_at`, `disabled_by`, `disabled_via` |
+| `admin_mfa_recovery_codes` | `used_at`, `revoked_at` |
+| `admin_mfa_challenges` | `attempts`, `enrolment_ticket_id`, `consumed_at`, `consumed_reason` |
+| `admin_mfa_enrolment_tickets` | `used_at`, `revoked_at` |
+| `admin_mfa_reset_requests` | `status`, `decided_by`, `decided_verification_id`, `decision_reason`, `ticket_id` (the trigger sets `decided_at`) |
+| `auth_session_mfa_verifications` | none (insert-only) |
+
+`server/databaseGrants.test.ts` exempts these columns from its "every granted column is used by server code" rule **only while no server code touches an MFA table**. The exemption fails the build as soon as Phase 3 code does, and must then be removed.
+
+**Limits of the database guards.** They re-check roles, evidence ownership and session liveness at write time. They do **not** enforce the step-up freshness window, attempt limits, throttles or ticket lifetimes, which are owner values (D-2). Those remain application duties in Phases 3 to 7.
+
+**Key rotation (future, separately approved).** The secret columns and `key_version` are not granted to `eltnoy_app`. A rotation script would run as the owner.
+
+**Commit-time integrity (AUTH C1.8.4).** The migration (amended in place; it has never been deployed) adds three deferred constraint triggers. At `COMMIT` they refuse, and so roll back the **whole** transaction, unless:
+- every reset ticket commits together with its executed reset request (same target, ticket, decider and mode);
+- every executed reset, and every break-glass ticket, leaves the target with no active factor, no unused recovery code, no open challenge, no other open ticket and no unexpired session, with an open replacement ticket and its audit event (`admin_mfa.reset_executed` with `requestId`, or `admin_mfa.break_glass_reset`);
+- every reset-labelled or break-glass factor disable belongs to such a reset later in the same transaction.
+
+At ticket `INSERT` the database also checks:
+- the issuer is an approved Super Admin with an active factor;
+- a reset ticket's request is `pending` and unexpired, for the same target, of the matching mode, and issued by the right person (two-person: never the initiator; single Super Admin: the initiator);
+- first-time tickets go only to users who have never enrolled;
+- bootstrap tickets pass only under `READ COMMITTED` and a transaction-level advisory lock (`7342519187`), only while no Super Admin has enrolled and no other bootstrap ticket is open.
+
+**Operator consequence:** an MFA reset, or a misconfigured application, can now fail at `COMMIT` with one of these messages. Nothing persists; the operation can be retried.
+
+> **O-1, open: operator identity (SEC-11).** The MFA operator CLI and the API share database credentials, so no trigger can tell which of them issued a bootstrap or break-glass ticket. The database checks the workflow, not the caller, and application-supplied event details (operator identity, host, incident reference) are not proof of identity. **This must be resolved before MFA Phase 7.** Until then, rely on the detection controls (§8, the break-glass banner and review). **O-4 (SEC-12):** factor creation without a ticket is not yet refused by the database; this is a mandatory Phase 4 requirement.
+
+**Disposable validation.**
+- **Run so far:** the C1.8 schema tests passed 25/25 in one approved disposable run on 2026-11-15, with 0 deadlocks, verified cleanup and the port-5432 server unchanged.
+- **Prepared, NOT executed:** the AUTH C1.8.4 tests, which need a separately approved run. They add:
+  - F1 ticket integrity;
+  - F2 complete resets in both modes, each missing effect, rollback after every intermediate write, a late session, a revoked replacement ticket, lost-ticket recovery, and retry after success;
+  - O-3 factor-disable linkage and break-glass;
+  - bootstrap, including two committed concurrent bootstrap attempts and the refusal of `REPEATABLE READ`.
+
+All of these run only through `scripts/run-disposable-grants-tests.sh` (§3.11, unchanged). They cover:
+- exact grants, and `DELETE` and `TRUNCATE` refused;
+- factor uniqueness, envelope shape, the atomic replay guard and terminal disable;
+- recovery-code and ticket single use, and expiry;
+- step-up challenge binding;
+- insert-only, clock-stamped evidence;
+- every reset rule (both modes, rejection, cancellation, expiry, revoked deciders, demoted initiators, finished-state immutability);
+- **concurrency** as `eltnoy_app`: replayed TOTP step, double recovery-code use, two open step-up challenges, duplicate initiation and duplicate approval each succeed exactly once.
+
+The concurrency and bootstrap tests commit synthetic rows. They remove them, including their audit events, as the superuser with `session_replication_role = replica` (for that transaction only), because MFA rows and audit events otherwise refuse `DELETE`. They then assert that none persist.
+
+**Production.** No production migration is part of AUTH C1.8 or C1.8.4.
 
 ---
 
@@ -230,6 +644,7 @@ SELECT relname, pg_get_userbyid(relowner) FROM pg_class
 | `eltnoy_monitor` | Monitoring operator | Secret store | Schedule |
 
 Rules:
+- **`AUTH_OTP_HMAC_KEY_FILE` (the API's OTP key) must not be rotated** until a durable account-origin identifier is approved and implemented. See the §3.8 warning.
 - Set passwords only with `\password` or a SCRAM verifier (§2.5); keep each database password equal to its secret file.
 - Never put a password in a script, a SQL file, `docker compose` arguments, logs, Git, chat or tickets.
 - `.env*` files stay out of Git (the repository's `.gitignore` already excludes `.env*`).
@@ -408,7 +823,7 @@ COMMIT;
 - [ ] UD-2 resolved: break-glass custodians named.
 - [ ] UD-3 resolved: secret store, backup encryption, location, schedule and retention.
 - [ ] Encrypted backup taken and **restored into a separate database**; §6.3 validation passed.
-- [ ] Full cutover rehearsed on that **restored copy of production**: bootstrap, `\password`, five-file `db:migrate` as `eltnoy_migrator`, API as `eltnoy_app`, functional smoke tests for every role, zero `42501` errors.
+- [ ] Full cutover rehearsed on that **restored copy of production**: bootstrap, `\password`, eleven-file `db:migrate` (including the AUTH-1 and Student registration/email migrations) as `eltnoy_migrator`, API as `eltnoy_app`, functional smoke tests for every role, zero `42501` errors.
 - [ ] Impact on any other database in the cluster assessed (cluster-wide effects, §0).
 - [ ] Stakeholders aware that `institution_documents` rows become immutable after migration file 4 (UD-11).
 - [ ] At least two active Super Admins identified (P3-D3), with the promotion approvals on file.
@@ -463,6 +878,7 @@ COMMIT;
 | UD-9 | `eltnoy_app` connection limit 40 versus `DATABASE_POOL_SIZE` × instances (OD-P9) | Engineering |
 | UD-10 | Approval workflow for running migrations and promotions (who may approve, how it's recorded) | Client |
 | UD-11 | Procedure for correcting or erasing immutable institution document rows (needs a migration that disables the trigger) | Client / legal |
+| UD-12 | AUTH C1 / C1.1-b (§3.8): values for `AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS`, `AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS`, `AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS`, `AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS`, `AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS`, `AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS`, `AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS`, `AUTH_SMS_DAILY_MAX_SENDS`, `AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS` (every SMS flow stays closed until set). ~~Retention of consumed claims~~ resolved in C1.1. A durable account-origin identifier so `AUTH_OTP_HMAC_KEY_FILE` can be rotated. Open: email limits for Institute email codes; a cap on Institute registration attempts per number (each attempt still writes a pending Institute); whether `/api/auth/providers` should report SMS unavailable while the limits are unset (it does not today); whether Student sign-in should refuse a number that differs from the verified contact (today it is only classified as unverified); an optional bucket index; C-4 (dummy bcrypt on the login-ID path) and C-5 (reserve before creating a challenge), not implemented | Client / Engineering |
 | Legal | Retention periods (A-13/M-09), DPDP Act 2023 obligations, CERT-In log retention, statutory financial-record retention; to be confirmed by the client's counsel | Client / legal |
 
 ## 14. API surface isolation and proxy trust (P1-B) [PROPOSED: unit-tested code only; no Nginx, Docker or staging validation yet]
@@ -508,13 +924,14 @@ Since P1-B the API derives each surface's exact Origin from its hostname and no 
 Files: `deploy/nginx/public.conf`, `deploy/nginx/admin.conf`, and the shared `deploy/nginx/includes/eltnoy-proxy.conf` (forwarding policy) and `deploy/nginx/includes/eltnoy-tls.conf` (TLS policy). Since P1-D.2, `docker-compose.yml` mounts `public.conf` into `nginx_public` and `admin.conf` into `nginx_admin` (§14.7); the legacy single-host `deploy/nginx/default.conf.template` is retained in the repository but is no longer mounted. Static tests: `server/nginxSurfaceConfig.test.ts`.
 
 - **Public Nginx** (`public.conf`) serves only `eltnoy.com`, `exam.eltnoy.com` and `institution.eltnoy.com`, one explicit server per hostname, and proxies only to the API's public listener (`app:4000`). It never references the Admin hostname or the Admin listener.
-- **Admin Nginx** (`admin.conf`) serves only `admin.eltnoy.com` and proxies only to the API's Admin listener (`app:4001`). It is a separate configuration for a separate Nginx; the two files must never be loaded together (both declare `default_server` on 8080 and 8443, so a combined load fails with a duplicate default server; a duplicate map variable alone would not fail). Both set `server_tokens off`.
+- **Public site vs private Admin domain (owner decision 2026-11-21).** `eltnoy.com` is the public site for Students and Institutes only. Admin, Super Admin and Platform Staff access is private on the separate `eltnoy.in` domain (`admin.eltnoy.in`), pinned in `server/surface.ts` and `admin.conf`. The legacy `admin.eltnoy.com` is served by neither Nginx and maps to no surface. Public surfaces never disclose the Admin hostname (`GET /api/surface-hostnames` returns only the three public hostnames there), the public navigation has no Admin or Staff link, and the SPA renders Admin pages only when the server confirms the Admin host. `admin.eltnoy.in` must have no public A/AAAA record: resolve it only for WireGuard clients (split-horizon), and obtain its certificate from a private CA or a DNS-01 challenge that needs no public address record. Owning `eltnoy.in` and controlling its DNS is an owner prerequisite; no DNS was changed.
+- **Admin Nginx** (`admin.conf`) serves only `admin.eltnoy.in` and proxies only to the API's Admin listener (`app:4001`). It is a separate configuration for a separate Nginx; the two files must never be loaded together (both declare `default_server` on 8080 and 8443, so a combined load fails with a duplicate default server; a duplicate map variable alone would not fail). Both set `server_tokens off`.
 - **Original host.** A map turns `Host` into the validated original host: only the exact allow-listed hostnames (case-insensitive, no port) are accepted; unknown, port-qualified, multi-valued or empty values become empty. Each hostname server returns `421` unless the validated host is its own name, before any location runs. Unknown hosts reach the default servers: HTTP `444`, HTTPS unknown SNI refused at the handshake (`ssl_reject_handshake`) and `444`.
 - **Forwarding headers (every proxied location, set inside the location by the shared include):** `Host`, `X-Forwarded-Host` and `X-ELTNOY-Original-Host` = the validated original host; `X-Forwarded-Proto` = `$scheme`; `X-Forwarded-For` and `X-Real-IP` **overwritten** with the direct client address (`$remote_addr`; the incoming chain is never appended). Client-supplied `X-ELTNOY-Listener`, `X-ELTNOY-Surface`, `Forwarded`, `X-Forwarded-Port`, `X-Forwarded-Prefix`, `Upgrade` and `Connection` are stripped. Because the include is inside each proxied location, no location depends on `proxy_set_header` inheritance.
 - **Locations.** Each HTTPS hostname server has a single proxied location (`/`): the API serves API routes, static assets, fonts and the SPA shell, and its P1-B gate enforces the per-surface policy for every path. There are no named, fallback, error-page, upload-specific or WebSocket locations. HTTP (8080) only redirects known hosts to HTTPS (literal URLs).
 - **Health.** `/api/health` is not exposed: through a hostname it reaches the API, which answers `404` (P1-B internal-only). Each configuration has an Nginx-local `/_internal-health` on the HTTP default server, loopback-only (`allow 127.0.0.1; deny all`), answered by Nginx and never proxied — used by the P1-D.2 Compose health checks (`wget -q -O /dev/null http://127.0.0.1:8080/_internal-health`, no Host header).
 - **Listen ports** stay at the existing in-container 8080/8443; how they are bound to host interfaces (public ENI address, `wg0` for Admin) is P1-D. HTTP/2 is not enabled (Host handling validated for HTTP/1.1 only).
-- **TLS/DNS (unresolved).** Both files use the existing pattern (`/etc/nginx/tls/fullchain.pem` and `privkey.pem`, TLSv1.2/1.3, HSTS). Whether a certificate covers every public hostname, the separate Admin certificate, and split-horizon DNS for `admin.eltnoy.com` (not published externally) are unresolved and belong to a separately approved P1-D/P1-F step. No certificate was generated, requested or installed, and DNS was not changed.
+- **TLS/DNS (unresolved).** Both files use the existing pattern (`/etc/nginx/tls/fullchain.pem` and `privkey.pem`, TLSv1.2/1.3, HSTS). Whether a certificate covers every public hostname, the separate Admin certificate, and split-horizon DNS for `admin.eltnoy.in` (not published externally) are unresolved and belong to a separately approved P1-D/P1-F step. No certificate was generated, requested or installed, and DNS was not changed.
 - **Not yet established:** the static proxy addresses for `ELTNOY_PUBLIC_PROXY_CIDRS` / `ELTNOY_ADMIN_PROXY_CIDRS` (P1-F); Admin network isolation and no public route to port 4001 (P1-D). Nginx is not the network boundary.
 
 ### 14.7 Docker Compose topology (P1-D.2, Option B) [PROPOSED: statically tested only — no container, network or volume was created or started]
@@ -535,7 +952,7 @@ Two instances of the same API image, each reachable only through its own Nginx. 
 - **Recovery ownership.** Only `api_public` receives `ONLINE_EXAM_RECOVERY_SINCE`; an instance without the public listener refuses to start if it is set, and never starts recovery. P0-4 semantics are unchanged (and recovery is also safe against a duplicate sweep: `FOR UPDATE SKIP LOCKED` plus the conditional finalize).
 - **Database roles.** Both APIs use `eltnoy_app` (connection limit 40; two pools of `DATABASE_POOL_SIZE`, default 10). Only `migrate` holds the migrator secret. Monitoring stays manual (`eltnoy_monitor` through `psql` in the `postgres` container); never attach monitoring to an Nginx network.
 - **Health.** `api_public`: `fetch('http://127.0.0.1:4000/api/health')`; `api_admin`: the same on 4001; both Nginx: `wget -q -O /dev/null http://127.0.0.1:8080/_internal-health` (no Host header); `postgres`: `pg_isready`. Order: PostgreSQL healthy → each API → its Nginx.
-- **TLS.** `PUBLIC_TLS_CERT_DIR` (SANs exactly the three public hostnames) and `ADMIN_TLS_CERT_DIR` (SAN `admin.eltnoy.com` only; private/internal CA or another approved private-hostname approach; split-horizon DNS) must be different directories — the API refuses to start otherwise. Files `fullchain.pem` and `privkey.pem`, owned `101:101`, key mode `0600`.
+- **TLS.** `PUBLIC_TLS_CERT_DIR` (SANs exactly the three public hostnames) and `ADMIN_TLS_CERT_DIR` (SAN `admin.eltnoy.in` only; private/internal CA or another approved private-hostname approach; split-horizon DNS) must be different directories — the API refuses to start otherwise. Files `fullchain.pem` and `privkey.pem`, owned `101:101`, key mode `0600`.
 - **Static addresses (placeholders).** `PUBLIC_APP_SUBNET`, `ADMIN_APP_SUBNET`, `NGINX_PUBLIC_APP_ADDRESS`, `NGINX_ADMIN_APP_ADDRESS`, `API_PUBLIC_APP_ADDRESS`, `API_ADMIN_APP_ADDRESS` have no defaults. Choose two private subnets that do not overlap each other, the host, the VPC, the WireGuard range or other Docker networks; pick addresses inside them that are not the network, gateway or broadcast address. The proxy lists given to both APIs are derived from the two Nginx addresses. Verify the observed peer addresses in P1-F.
 - **Document volume.** `institution_documents` is mounted read-write in both APIs: the Admin read path calls `ensurePrivateDirectories()` (recursive `mkdir`), and safe read-only operation could not be established statically — **open hardening item**. **Backup gap:** this runbook covers PostgreSQL dumps only; a procedure that backs up and restores `institution_documents` consistently with the database still needs approval.
 - **Image digests (deployment blocker).** `NGINX_IMAGE` (nginx-unprivileged, Nginx ≥ 1.19.4) and `POSTGRES_IMAGE` (PostgreSQL 17) must be operator-verified `name@sha256:…` references; none is preconfigured. The Dockerfile's `node:22-bookworm-slim` base is not yet digest-pinned (separate change). `ELTNOY_API_IMAGE` names the locally built API image used by both API services: it must be `localhost/eltnoy-api:<tag>`; `api_public` uses `pull_policy: build` and `api_admin` `pull_policy: never` (§14.8).
@@ -553,7 +970,8 @@ scripts/eltnoy-deploy.sh --deployment-env-file /absolute/path/.env.production pr
 The former direct command (`node --env-file=… server/validateDeploymentConfig.ts`) is withdrawn for host use: Node and Compose parse env files differently, and shell variables override the file in both, so it could validate different values from those Compose uses (P1-D.2 M-1/M-2 audit, F-5).
 
 - **`ELTNOY_API_IMAGE` (M-1).** Only `localhost/eltnoy-api:<tag>` is accepted (tag: letters, digits, `_`, `.`, `-`; up to 128 characters). Registry-qualified (`ghcr.io/…`, `localhost:5000/…`), Docker Hub (`eltnoy-api:…`, `user/eltnoy-api:…`), digest and untagged references are rejected; there is no default. `api_public` builds it from this repository with `pull_policy: build` (never pulled); `api_admin` reuses the exact same reference with `pull_policy: never`.
-- **`PUBLIC_BIND_ADDRESS` (M-2).** A literal IPv4 private (RFC 1918) address — the host's private ENI address. Public, shared, wildcard, loopback, link-local, multicast/reserved and IPv6 values are rejected.
+- **`PUBLIC_BIND_MODE` (BigRock direct-VPS adaptation).** Required. Use `private-eni` for the VPC deployment rule below. `direct-vps` is an explicit opt-in for a server whose public IPv4 is assigned directly to a host interface; use it only after confirming the exact address with `ip -4 address` and enabling the host firewall. Missing or invalid values fail the preflight.
+- **`PUBLIC_BIND_ADDRESS` (M-2).** With the default `private-eni` mode, a literal RFC 1918 address on the host's private interface; public, shared, wildcard, loopback, link-local, multicast/reserved and IPv6 values are rejected. With the explicit `direct-vps` mode, it must be a public IPv4 assigned to the VPS interface; private/shared, wildcard, loopback, link-local, multicast/reserved and IPv6 values are rejected. The direct-VPS mode does not replace UFW or the `DOCKER-USER` Admin firewall guard.
 - **`WIREGUARD_INTERFACE_ADDRESS` (M-2, new).** The literal IPv4 address assigned to the host's `wg0` interface, copied by the operator from the WireGuard configuration (private RFC 1918 or 100.64.0.0/10). It is a declaration: the preflight does not inspect the host or resolve names.
 - **`ADMIN_BIND_ADDRESS` (M-2).** Must **equal** `WIREGUARD_INTERFACE_ADDRESS`, and must differ from `PUBLIC_BIND_ADDRESS`. The same wildcard/loopback/public/IPv6 rejections apply.
 - IPv6 bind addresses are not supported: the Compose port syntax `${VAR}:443:8443` cannot carry an unbracketed IPv6 literal.
@@ -593,7 +1011,14 @@ Ownership and mode checks do not make a file immutable: the operator and root ca
 - **One explicit file.** An absolute path is required; no default file (`.env`, `.env.production`) is ever chosen. The option is called `--deployment-env-file` because Node's own CLI intercepts a bare `--env-file` argument.
 - **One descriptor.** The file is opened once with `O_NOFOLLOW` (a symbolic link at the final component is refused; the wrapper refuses to run on a platform without `O_NOFOLLOW`) and `O_NONBLOCK`; type, size, owner and mode are checked with `fstat` on that descriptor, and the content is read from the same descriptor. Replacing or relinking the path after it is opened has no effect on what is validated.
 - **Strict syntax.** `KEY=VALUE` lines, optionally with the whole value in one pair of `"` or `'` quotes, blank lines and full-line `#` comments. Everything else fails closed: `export`, spaces around `=`, leading whitespace, duplicate keys, multi-line or unbalanced quotes, CRLF and NUL. `COMPOSE_*` and `DOCKER_*` keys are rejected.
-- **Governed variables** are every variable `docker-compose.yml` interpolates plus every preflight variable (tests keep the lists equal to the Compose file). Their values must not contain whitespace, quotes, `$` (so `${…}` and `$VAR` are rejected), backslashes, backticks, `#` or control characters. Every `${VAR:?}` variable (22) must be present and non-empty; the six `${VAR:-}` variables may be absent, and then Compose uses its default.
+- **Governed variables** are every variable `docker-compose.yml` interpolates plus every preflight variable (tests keep the lists equal to the Compose file). Their values must not contain whitespace, quotes, `$` (so `${…}` and `$VAR` are rejected), backslashes, backticks, `#` or control characters. Every `${VAR:?}` variable (22) must be present and non-empty; the twenty-one `${VAR:-}` variables may be absent, and then Compose uses its default. Those twenty-one are the six earlier ones, the nine AUTH C1.3-B settings and the six AUTH C1.4-B-2 email settings, all with an empty default.
+- **AUTH C1.3-B / C1.3-B.2 SMS settings:** the host wrapper **governs** these nine (safe-character checks), forwards them to Compose when set, and **applies the §3.8 SMS rule** in the host `preflight` and in the full validation that precedes every non-emergency operation. It uses the same pure resolver (`server/smsProtectionConfig.ts`) as the in-container preflight and the API, applied to the parsed env-file values only.
+  - The eight `AUTH_SMS_*` settings are **all-or-nothing:** all absent or empty is accepted (SMS stays closed); all eight valid and consistent is accepted; a partial set, an invalid value or an inconsistent value **fails**, with setting names and statuses only and never values.
+  - `AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS` is validated **independently:** absent or empty is accepted (Student registration then stays closed at runtime with `503 REGISTRATION_NOT_CONFIGURED`); a set but invalid value fails.
+  - No numeric defaults exist.
+  - **Emergency operations** (`emergency-stop`, `emergency-status`: syntax-only validation) are unchanged: they keep the file, syntax and character checks and skip this rule, like the rest of the semantic preflight.
+  - The entry's module set grows by two side-effect-free files (`smsProtectionConfig.ts`, `verificationProviders.ts`, Node built-ins only); no database, credential, dotenv or Express module is loaded on the host.
+- **AUTH C1.4-B-2 email settings:** the six `AUTH_EMAIL_*` settings (§3.10) are governed the same way, forwarded to `api_public` only, and checked by the same all-or-nothing rule in the host preflight, the full validation before every non-emergency operation, and the container preflight. The rule is independent of the SMS rule, which is unchanged. Emergency operations skip it.
 - **Shell overrides.** A governed variable, or any `COMPOSE_*` or `DOCKER_*` variable (for example `COMPOSE_PROFILES`, `COMPOSE_FILE`, `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`), already set in the operator's shell causes a refusal.
 - **Generated file.** After validation, the wrapper writes the validated governed values — and nothing else — to `compose.env` in a new private run directory: `mkdtemp` under the checked temporary root (mode `0700`, unpredictable name, so it cannot be pre-created), file created with `O_CREAT|O_EXCL|O_NOFOLLOW`, mode `0600`, flushed with `fsync`. Compose receives only this file through `--env-file`; it never reads the operator file. The same values are also passed in Docker's environment, which otherwise contains only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM` and `TMPDIR`.
 - **Cleanup.** The run directory is removed after Docker exits, fails to start or the run throws; `SIGINT`, `SIGTERM` and `SIGHUP` are deferred until cleanup is done. A `SIGKILL` or power loss can leave `eltnoy-deploy-*/compose.env` (mode `0600`, no passwords — passwords live in the secret files) in the temporary root; delete it manually. The wrapper never prints the generated file's path or content.

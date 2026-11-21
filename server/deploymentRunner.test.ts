@@ -422,7 +422,8 @@ test('subprocess: a signal received before Docker launch stops the real entry po
   // checkout may contain a .env, which P4-5 refuses). The stand-in docker only records invocation.
   const repo = privateDirectory('entry-repo');
   const server = privateDirectory('entry-repo', 'server');
-  for (const file of ['deploy.ts', 'deploymentRunner.ts', 'deploymentWrapper.ts', 'deploymentConfig.ts']) {
+  // AUTH C1.3-B.2: the entry's closure now includes the pure SMS resolver and its only import.
+  for (const file of ['deploy.ts', 'deploymentRunner.ts', 'deploymentWrapper.ts', 'deploymentConfig.ts', 'smsProtectionConfig.ts', 'verificationProviders.ts']) {
     copyFileSync(join(sourceRoot, 'server', file), join(server, file));
     assert.equal(readFileSync(join(server, file), 'utf8'), readFileSync(join(sourceRoot, 'server', file), 'utf8'));
   }
@@ -530,4 +531,76 @@ test('Node runtime overrides, exported shell functions and an untrusted Node exe
   assert.equal(untrusted.code, 1);
   assert.match(untrusted.err, /The Node\.js executable must not be writable by group or others/);
   assert.equal((await run(['--deployment-env-file', envFile, 'preflight'])).code, 0, 'the running Node.js passes');
+});
+
+test('subprocess (AUTH C1.3-B.2): host preflight rejects invalid SMS configuration by name, exits non-zero, prints no values and never runs Docker', () => {
+  // Byte-for-byte copies of the entry point and its complete module closure in a synthetic repository
+  // (no .env, P4-5). The stand-in docker would record any invocation; preflight must never call it.
+  const repo = privateDirectory('sms-entry-repo');
+  const server = privateDirectory('sms-entry-repo', 'server');
+  for (const file of ['deploy.ts', 'deploymentRunner.ts', 'deploymentWrapper.ts', 'deploymentConfig.ts', 'smsProtectionConfig.ts', 'verificationProviders.ts']) {
+    copyFileSync(join(sourceRoot, 'server', file), join(server, file));
+  }
+  writeFileSync(join(repo, 'package.json'), '{ "type": "module" }\n');
+  const fakeBin = privateDirectory('sms-entry-bin');
+  const invoked = join(fakeBin, 'invoked');
+  writeFileSync(join(fakeBin, 'docker'), `#!/bin/sh\n: > '${invoked}'\nexit 0\n`);
+  chmodSync(join(fakeBin, 'docker'), 0o700);
+  const environment = { PATH: `${fakeBin}:${dirname(process.execPath)}:/usr/bin:/bin`, TMPDIR: privateDirectory('sms-entry-tmp') };
+  const preflight = (values: Record<string, string>) => spawnSync(process.execPath, ['--import', 'tsx', join(server, 'deploy.ts'), '--deployment-env-file', writeEnv(envText({ ...synthetic, ...values })), 'preflight'],
+    { cwd: sourceRoot, env: environment, encoding: 'utf8', timeout: 30_000 });
+
+  // TEST-ONLY distinctive values (never defaults).
+  const valid: Record<string, string> = {
+    AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS: '36029', AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS: '329',
+    AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS: '18029', AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS: '529',
+    AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS: '72029', AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS: '429',
+    AUTH_SMS_DAILY_MAX_SENDS: '50029', AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: '30029',
+  };
+  const accepted = preflight(valid);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(preflight({}).status, 0, 'all SMS settings absent: accepted');
+
+  const rejected = preflight({ AUTH_SMS_DAILY_MAX_SENDS: '50029', AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS: '0', AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS: '901' });
+  assert.notEqual(rejected.status, 0, 'invalid SMS configuration stops the host preflight');
+  const output = rejected.stdout + rejected.stderr;
+  assert.match(output, /AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS is missing: the eight AUTH_SMS_\* settings must be set together/);
+  assert.match(output, /AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS is invalid: it must be a positive whole number/);
+  assert.match(output, /AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS is invalid/);
+  for (const value of ['50029', '901']) assert.ok(!output.includes(value), `value ${value} is never printed`);
+  for (const marker of markers) assert.ok(!output.includes(marker), `marker ${marker} is never printed`);
+  assert.ok(!existsSync(invoked), 'preflight never runs Docker');
+});
+
+test('subprocess (AUTH C1.4-B-2): host preflight rejects a partial or invalid email group by name, prints no values, never runs Docker', () => {
+  const repo = privateDirectory('email-entry-repo');
+  const server = privateDirectory('email-entry-repo', 'server');
+  for (const file of ['deploy.ts', 'deploymentRunner.ts', 'deploymentWrapper.ts', 'deploymentConfig.ts', 'smsProtectionConfig.ts', 'verificationProviders.ts']) {
+    copyFileSync(join(sourceRoot, 'server', file), join(server, file));
+  }
+  writeFileSync(join(repo, 'package.json'), '{ "type": "module" }\n');
+  const fakeBin = privateDirectory('email-entry-bin');
+  const invoked = join(fakeBin, 'invoked');
+  writeFileSync(join(fakeBin, 'docker'), `#!/bin/sh\n: > '${invoked}'\nexit 0\n`);
+  chmodSync(join(fakeBin, 'docker'), 0o700);
+  const environment = { PATH: `${fakeBin}:${dirname(process.execPath)}:/usr/bin:/bin`, TMPDIR: privateDirectory('email-entry-tmp') };
+  const preflight = (values: Record<string, string>) => spawnSync(process.execPath, ['--import', 'tsx', join(server, 'deploy.ts'), '--deployment-env-file', writeEnv(envText({ ...synthetic, ...values })), 'preflight'],
+    { cwd: sourceRoot, env: environment, encoding: 'utf8', timeout: 30_000 });
+  const valid: Record<string, string> = {
+    // TEST-ONLY distinctive values.
+    AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS: '36061', AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS: '361',
+    AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS: '72061', AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: '461',
+    AUTH_EMAIL_DAILY_MAX_SENDS: '50061', AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: '30061',
+  };
+  assert.equal(preflight({}).status, 0, 'absent: accepted');
+  const accepted = preflight(valid);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  const rejected = preflight({ AUTH_EMAIL_DAILY_MAX_SENDS: '50061', AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: '0' });
+  assert.notEqual(rejected.status, 0);
+  const output = rejected.stdout + rejected.stderr;
+  assert.match(output, /AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS is missing: the six AUTH_EMAIL_\* settings must be set together/);
+  assert.match(output, /AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS is invalid: it must be a positive whole number/);
+  assert.ok(!output.includes('50061'), 'value never printed');
+  for (const marker of markers) assert.ok(!output.includes(marker), `marker ${marker} never printed`);
+  assert.ok(!existsSync(invoked), 'preflight never runs Docker');
 });

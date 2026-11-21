@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { expectedOrigin, type Surface } from './surface.js';
+import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 
@@ -93,7 +94,7 @@ test('official dashboard totals count only published results and are not list-li
       display_name: 'Synthetic Official',
       role: 'official',
       account_status: 'approved',
-      is_super_admin: false,
+      is_super_admin: false, ...VERIFIED_PORTAL_SESSION,
     }],
   ]);
   const publishedResults = [
@@ -161,7 +162,7 @@ test('Super Admin dashboard totals include the open helpdesk count (P3-D4)', asy
             display_name: 'Synthetic Super Admin',
             role: 'official',
             account_status: 'approved',
-            is_super_admin: true,
+            is_super_admin: true, ...VERIFIED_PORTAL_SESSION,
           }]
           : [],
       };

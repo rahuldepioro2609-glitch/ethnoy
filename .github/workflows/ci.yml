@@ -1,0 +1,53 @@
+# CI for the release branch: install from the lockfile, run the isolated test suites, type-check and build.
+# No secrets, no deployment, read-only repository access. PostgreSQL-gated tests remain opt-in and are not run here.
+name: CI
+
+on:
+  push:
+    branches: [rc/day1-baseline]
+  pull_request:
+    branches: [rc/day1-baseline]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Tests, lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22 (LTS; package.json requires >=22.12.0)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # Caches only the npm download cache (~/.npm), keyed on package-lock.json; never node_modules.
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies (exact lockfile)
+        run: npm ci
+
+      - name: Run application tests (database-gated cases skip without opt-in)
+        run: npm test
+
+      - name: Run Official verifier tests
+        run: npm run test:verifier
+
+      - name: Run Official auth foundation static tests
+        run: npm run test:official-auth-foundation
+
+      - name: Type-check (npm run lint = tsc --noEmit)
+        run: npm run lint
+
+      - name: Build (npm run build = vite build)
+        run: npm run build

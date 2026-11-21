@@ -7,6 +7,10 @@ import React, { useState } from 'react';
 import { X, MapPin, Search, Accessibility, ShieldCheck } from 'lucide-react';
 import { TEST_CENTERS, TestCenter } from '../data/portalData';
 
+// TEST_CENTERS is a static SAMPLE directory with no API replacement. Fail closed: it is used only in
+// the Vite dev server; production builds get an empty list so stale sample locations never appear.
+const SAMPLE_CENTERS_DEV_ONLY: TestCenter[] = import.meta.env.DEV ? TEST_CENTERS : [];
+
 interface CenterLocatorModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -20,7 +24,7 @@ export const CenterLocatorModal: React.FC<CenterLocatorModalProps> = ({ isOpen, 
 
   const states = ['All', 'Delhi NCR', 'Maharashtra', 'Karnataka', 'Telangana', 'Tamil Nadu', 'West Bengal'];
 
-  const filteredCenters = TEST_CENTERS.filter((c) => {
+  const filteredCenters = SAMPLE_CENTERS_DEV_ONLY.filter((c) => {
     if (selectedState !== 'All' && c.state !== selectedState) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();

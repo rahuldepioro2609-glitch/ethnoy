@@ -13,6 +13,7 @@ import test from 'node:test';
 import type { NextFunction, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import { expectedOrigin, type Surface } from './surface.js';
+import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
 
 // ---------------------------------------------------------------------------
 // Minimal pool shim — must be registered before any module that imports db.js
@@ -155,6 +156,7 @@ test('login flow: requireAuth calls next() and populates request.user for a vali
       display_name: 'Test Student',
       role: 'candidate',
       account_status: 'approved',
+      ...VERIFIED_PORTAL_SESSION,
     }],
   });
 

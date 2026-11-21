@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { expectedOrigin, type Surface } from './surface.js';
+import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 
@@ -109,7 +110,7 @@ function installSyntheticDatabase(options: {
       display_name: 'Synthetic Official',
       role: 'official',
       account_status: 'approved',
-      is_super_admin: false,
+      is_super_admin: false, ...VERIFIED_PORTAL_SESSION,
     }],
     [hashSessionToken(candidateToken), {
       id: 'synthetic-candidate',
@@ -117,7 +118,7 @@ function installSyntheticDatabase(options: {
       display_name: 'Synthetic Candidate',
       role: 'candidate',
       account_status: 'approved',
-      is_super_admin: false,
+      is_super_admin: false, ...VERIFIED_PORTAL_SESSION,
     }],
   ]);
   const institution = {

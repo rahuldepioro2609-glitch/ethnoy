@@ -8,6 +8,9 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
+import { configureVerificationServices, DISABLED_SERVICES } from './verificationProviders.js';
+import { RecordingEmailProvider, RecordingSmsProvider, testServices } from './authTestSupport.js';
 
 process.env.DOTENV_CONFIG_PATH ??= '/dev/null';
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:1/p1b_surface_enforcement_tests';
@@ -39,11 +42,11 @@ type Gate = ReturnType<typeof createSurfaceGate>;
 // ---------------------------------------------------------------------------
 
 const ACCOUNTS = {
-  candidate: { token: 'K'.repeat(43), row: { id: 'syn-candidate', login_id: 'C1', display_name: 'Candidate', role: 'candidate', account_status: 'approved', is_super_admin: false } },
-  center: { token: 'L'.repeat(43), row: { id: 'syn-center', login_id: 'I1', display_name: 'Center', role: 'center', account_status: 'approved', is_super_admin: false } },
-  official: { token: 'M'.repeat(43), row: { id: 'syn-official', login_id: 'O1', display_name: 'Official', role: 'official', account_status: 'approved', is_super_admin: false } },
-  superAdmin: { token: 'N'.repeat(43), row: { id: 'syn-super', login_id: 'S1', display_name: 'Super', role: 'official', account_status: 'approved', is_super_admin: true } },
-  pendingCenter: { token: 'P'.repeat(43), row: { id: 'syn-pending', login_id: 'I2', display_name: 'Pending', role: 'center', account_status: 'pending', is_super_admin: false } },
+  candidate: { token: 'K'.repeat(43), row: { id: 'syn-candidate', login_id: 'C1', display_name: 'Candidate', role: 'candidate', account_status: 'approved', is_super_admin: false, ...VERIFIED_PORTAL_SESSION } },
+  center: { token: 'L'.repeat(43), row: { id: 'syn-center', login_id: 'I1', display_name: 'Center', role: 'center', account_status: 'approved', is_super_admin: false, ...VERIFIED_PORTAL_SESSION } },
+  official: { token: 'M'.repeat(43), row: { id: 'syn-official', login_id: 'O1', display_name: 'Official', role: 'official', account_status: 'approved', is_super_admin: false, ...VERIFIED_PORTAL_SESSION } },
+  superAdmin: { token: 'N'.repeat(43), row: { id: 'syn-super', login_id: 'S1', display_name: 'Super', role: 'official', account_status: 'approved', is_super_admin: true, ...VERIFIED_PORTAL_SESSION } },
+  pendingCenter: { token: 'P'.repeat(43), row: { id: 'syn-pending', login_id: 'I2', display_name: 'Pending', role: 'center', account_status: 'pending', is_super_admin: false, ...VERIFIED_PORTAL_SESSION } },
 } as const;
 type AccountName = keyof typeof ACCOUNTS;
 const SESSIONS = new Map(Object.values(ACCOUNTS).map(({ token, row }) => [hashSessionToken(token), row]));
@@ -193,7 +196,7 @@ function onSurface(gate: Gate, surface: Surface, options: FakeOptions = {}): Req
 test('config: production pins hostnames and https origins, with per-listener proxies and default ports', () => {
   assert.deepEqual({ ...productionConfig.hostnames }, { ...PINNED_SURFACE_HOSTNAMES });
   assert.deepEqual({ ...productionConfig.expectedOrigins }, {
-    marketing: 'https://eltnoy.com', exam: 'https://exam.eltnoy.com', institution: 'https://institution.eltnoy.com', admin: 'https://admin.eltnoy.com',
+    marketing: 'https://eltnoy.com', exam: 'https://exam.eltnoy.com', institution: 'https://institution.eltnoy.com', admin: 'https://admin.eltnoy.in',
   });
   assert.deepEqual({ public: [...productionConfig.trustedProxies.public], admin: [...productionConfig.trustedProxies.admin] }, {
     public: ['172.30.0.10/32'], admin: ['172.31.0.10/32'],
@@ -401,7 +404,11 @@ test('config: production fails closed for invalid mode, hostname overrides, dev 
     assert.equal(loadSurfaceRuntimeConfig(env).ok, false, JSON.stringify(env));
   }
   // Setting a hostname to the pinned value is harmless in production.
-  assert.equal(loadSurfaceRuntimeConfig({ ...PRODUCTION_ENV, [SURFACE_ENV.hostnames.admin]: 'admin.eltnoy.com' }).ok, true);
+  assert.equal(loadSurfaceRuntimeConfig({ ...PRODUCTION_ENV, [SURFACE_ENV.hostnames.admin]: 'admin.eltnoy.in' }).ok, true);
+  // The legacy public-domain Admin hostname cannot be restored by configuration in production.
+  const legacy = loadSurfaceRuntimeConfig({ ...PRODUCTION_ENV, [SURFACE_ENV.hostnames.admin]: 'admin.eltnoy.com' });
+  assert.equal(legacy.ok, false);
+  if (!legacy.ok) assert.ok(legacy.errors.some((error) => error.includes(SURFACE_ENV.hostnames.admin)));
 });
 
 test('config: staging and development require explicit, valid, non-production hostnames', () => {
@@ -481,7 +488,7 @@ test('listener map: public serves Marketing/Exam/Institution, admin serves Admin
       assert.equal(surfaceForListenerAndHost(listener, HOST_OF[surface].toUpperCase()), expected, 'case normalised');
     }
   }
-  for (const raw of [undefined, '', 'exam.eltnoy.com:443', 'exam.eltnoy.com,admin.eltnoy.com', ['exam.eltnoy.com'], 'evil.com']) {
+  for (const raw of [undefined, '', 'exam.eltnoy.com:443', 'exam.eltnoy.com,admin.eltnoy.in', ['exam.eltnoy.com'], 'evil.com']) {
     assert.equal(surfaceForListenerAndHost('public', raw), null, JSON.stringify(raw));
   }
   assert.equal(surfaceForListenerAndHost('staff', 'exam.eltnoy.com'), null);
@@ -518,9 +525,11 @@ test('peers: IPv4-mapped IPv6 normalises to IPv4; malformed and zoned addresses 
 
 test('gate: unconfigured gate fails closed (503) and configuration is validated once', async () => {
   const gate = createSurfaceGate();
+  assert.equal(gate.getConfig(), null, 'no host metadata is exposed before configuration');
   const outcome = await runGate(gate, fakeRequest(gate));
   assert.equal(outcome.status, 503);
   gate.configure(productionConfig);
+  assert.deepEqual(gate.getConfig()?.hostnames, productionConfig.hostnames, 'validated public hostnames are available to the SPA');
   assert.throws(() => gate.configure(productionConfig));
   assert.throws(() => createSurfaceGate().configure({ ...productionConfig, trustedProxies: { public: [], admin: ['172.31.0.10/32'] } }));
   assert.throws(() => createSurfaceGate().configure({ ...productionConfig, trustedProxies: { public: ['172.30.0.0/24'], admin: ['172.31.0.10/32'] } }), /Invalid/, 'subnets refused by the gate too');
@@ -531,7 +540,7 @@ test('gate: listener identity is server-assigned and must match socket.localPort
   const gate = configuredGate();
   assert.equal((await runGate(gate, fakeRequest(gate, { listener: null }))).status, 421, 'untagged request');
   assert.equal((await runGate(gate, fakeRequest(gate, { localPort: 4001 }))).status, 421, 'public tag on the admin port');
-  assert.equal((await runGate(gate, fakeRequest(gate, { listener: 'admin', localPort: 4000, host: 'admin.eltnoy.com' }))).status, 421);
+  assert.equal((await runGate(gate, fakeRequest(gate, { listener: 'admin', localPort: 4000, host: 'admin.eltnoy.in' }))).status, 421);
   const request = fakeRequest(gate);
   assert.throws(() => gate.tagListener(request as never, 'admin'), /already set/);
   // Client-controlled values cannot set or change the listener or surface.
@@ -560,7 +569,7 @@ test('gate: only configured proxy peers are trusted; direct clients and other pe
 test('gate (H-1): the public proxy is trusted only by the public listener, the Admin proxy only by the Admin listener', async () => {
   const gate = configuredGate();
   const exam = { host: 'exam.eltnoy.com', account: 'candidate' as const };
-  const admin = { listener: 'admin' as const, host: 'admin.eltnoy.com', account: 'official' as const };
+  const admin = { listener: 'admin' as const, host: 'admin.eltnoy.in', account: 'official' as const };
   assert.equal((await runGate(gate, fakeRequest(gate, { ...exam, peer: PUBLIC_PROXY }))).reached, true, 'public proxy → public listener');
   assert.equal((await runGate(gate, fakeRequest(gate, { ...admin, peer: ADMIN_PROXY }))).reached, true, 'Admin proxy → Admin listener');
   resetDb();
@@ -577,9 +586,9 @@ test('gate (H-1): request headers cannot choose the listener or its trusted prox
   // Accepted by the public listener (server-assigned), from the Admin proxy, claiming Admin.
   const forged = fakeRequest(gate, {
     peer: ADMIN_PROXY,
-    host: 'admin.eltnoy.com',
+    host: 'admin.eltnoy.in',
     account: 'official',
-    headers: { 'x-eltnoy-listener': 'admin', 'x-forwarded-port': '4001', 'x-forwarded-host': 'admin.eltnoy.com' },
+    headers: { 'x-eltnoy-listener': 'admin', 'x-forwarded-port': '4001', 'x-forwarded-host': 'admin.eltnoy.in' },
   });
   assert.equal((await runGate(gate, forged)).status, 421);
   assert.equal(getTrustedRequestSurface(forged), undefined);
@@ -702,7 +711,7 @@ test('rejection log (L-C): shutdown flush writes pending counts once and never r
 test('rejection log (L-3): only fixed reason keys are counted; authentication stays distinct from proxy/host', () => {
   const lines: Array<Record<string, unknown>> = [];
   const log = createRejectionLog((entry) => lines.push(entry));
-  for (const reason of ['x-attacker-value', '__proto__', 'constructor', 'admin.eltnoy.com', '203.0.113.7']) log.record(reason as never);
+  for (const reason of ['x-attacker-value', '__proto__', 'constructor', 'admin.eltnoy.in', '203.0.113.7']) log.record(reason as never);
   assert.deepEqual(log.snapshot(), { total: 0, reasons: {}, groups: {} });
   assert.equal(lines.length, 0);
   for (const reason of REJECTION_REASONS) log.record(reason);
@@ -781,7 +790,7 @@ test('rejection log (L-3): a failing log writer never changes the rejection resp
 
 test('gate: original host must be valid, single, port-free and belong to the receiving listener', async () => {
   const gate = configuredGate();
-  for (const host of [null, '', 'exam.eltnoy.com:443', 'exam.eltnoy.com,admin.eltnoy.com', ['exam.eltnoy.com', 'exam.eltnoy.com'], 'evil.com', 'exam.eltnoy.com.', 'admin.eltnoy.com']) {
+  for (const host of [null, '', 'exam.eltnoy.com:443', 'exam.eltnoy.com,admin.eltnoy.in', ['exam.eltnoy.com', 'exam.eltnoy.com'], 'evil.com', 'exam.eltnoy.com.', 'admin.eltnoy.in']) {
     assert.equal((await runGate(gate, fakeRequest(gate, { host, account: 'candidate' }))).status, 421, JSON.stringify(host));
   }
   assert.equal((await runGate(gate, fakeRequest(gate, { listener: 'admin', host: 'exam.eltnoy.com', account: 'candidate' }))).status, 421, 'public host on the admin listener');
@@ -791,12 +800,12 @@ test('gate: original host must be valid, single, port-free and belong to the rec
 test('gate: forged Host and X-Forwarded-Host never select the surface', async () => {
   const gate = configuredGate();
   // Host is ignored entirely: the surface comes from the trusted original host.
-  const forgedHost = fakeRequest(gate, { account: 'candidate', headers: { host: 'admin.eltnoy.com' } });
+  const forgedHost = fakeRequest(gate, { account: 'candidate', headers: { host: 'admin.eltnoy.in' } });
   assert.equal((await runGate(gate, forgedHost)).reached, true);
   assert.equal(getTrustedRequestSurface(forgedHost), 'exam');
   // X-Forwarded-Host alone (no original host) is rejected; a mismatching one is rejected.
   assert.equal((await runGate(gate, fakeRequest(gate, { host: null, headers: { 'x-forwarded-host': 'exam.eltnoy.com' } }))).status, 421);
-  assert.equal((await runGate(gate, fakeRequest(gate, { headers: { 'x-forwarded-host': 'admin.eltnoy.com' } }))).status, 421);
+  assert.equal((await runGate(gate, fakeRequest(gate, { headers: { 'x-forwarded-host': 'admin.eltnoy.in' } }))).status, 421);
   assert.equal((await runGate(gate, fakeRequest(gate, { headers: { 'x-forwarded-host': 'exam.eltnoy.com:8443' } }))).status, 421);
   const consistent = fakeRequest(gate, { account: 'candidate', headers: { 'x-forwarded-host': 'exam.eltnoy.com' } });
   assert.equal((await runGate(gate, consistent)).reached, true);
@@ -813,7 +822,7 @@ test('gate: state-changing requests need the exact Origin of their surface', asy
   }));
   assert.equal((await post('exam', 'https://exam.eltnoy.com')).reached, true);
   assert.equal((await post('institution', 'https://institution.eltnoy.com')).reached, true);
-  for (const origin of [undefined, 'null', 'https://institution.eltnoy.com', 'https://eltnoy.com', 'https://admin.eltnoy.com', 'http://exam.eltnoy.com', 'https://exam.eltnoy.com:443', 'https://exam.eltnoy.com, https://exam.eltnoy.com']) {
+  for (const origin of [undefined, 'null', 'https://institution.eltnoy.com', 'https://eltnoy.com', 'https://admin.eltnoy.in', 'http://exam.eltnoy.com', 'https://exam.eltnoy.com:443', 'https://exam.eltnoy.com, https://exam.eltnoy.com']) {
     resetDb();
     const outcome = await post('exam', origin);
     assert.equal(outcome.status, 403, String(origin));
@@ -829,9 +838,9 @@ test('gate: state-changing requests need the exact Origin of their surface', asy
 // ---------------------------------------------------------------------------
 
 const LOCKED: Array<{ method: string; url: string; access: Record<Surface, 'deny' | 'anonymous' | 'candidate' | 'center'> }> = [
-  { method: 'GET', url: '/api/notices', access: { marketing: 'anonymous', exam: 'deny', institution: 'deny', admin: 'deny' } },
+  { method: 'GET', url: '/api/notices', access: { marketing: 'anonymous', exam: 'anonymous', institution: 'deny', admin: 'deny' } },
   { method: 'GET', url: '/api/exams', access: { marketing: 'anonymous', exam: 'candidate', institution: 'deny', admin: 'deny' } },
-  { method: 'GET', url: '/api/institute-forms', access: { marketing: 'anonymous', exam: 'deny', institution: 'deny', admin: 'deny' } },
+  { method: 'GET', url: '/api/institute-forms', access: { marketing: 'anonymous', exam: 'anonymous', institution: 'deny', admin: 'deny' } },
   { method: 'GET', url: '/api/answer-keys/exams', access: { marketing: 'deny', exam: 'candidate', institution: 'deny', admin: 'deny' } },
   { method: 'GET', url: '/api/answer-keys?examCode=EXAM1', access: { marketing: 'deny', exam: 'candidate', institution: 'deny', admin: 'deny' } },
   { method: 'POST', url: '/api/feedback', access: { marketing: 'deny', exam: 'candidate', institution: 'center', admin: 'deny' } },
@@ -1042,6 +1051,25 @@ test('login: a role not allowed on the surface gets the generic 401 before any u
   });
   const generic = { error: 'Invalid login ID, password, or account type.' };
   const allowed: Record<Surface, string | null> = { marketing: null, exam: 'candidate', institution: 'center', admin: 'official' };
+  // AUTH-1 (strict): with no verification provider, Student and Institute sign-in answer 503 on their
+  // own surface BEFORE any user lookup; Official sign-in is unaffected.
+  configureVerificationServices(DISABLED_SERVICES);
+  for (const [surface, role] of [['exam', 'candidate'], ['institution', 'center']] as const) {
+    resetDb();
+    const outcome = await login(surface, role);
+    assert.equal(outcome.status, 503, `${role} on ${surface}: closed without a provider`);
+    assert.equal((outcome.body as { code: string }).code, 'OTP_PROVIDER_NOT_CONFIGURED');
+    assert.equal(db.businessQueries.length, 0, `${role} on ${surface}: no user lookup while closed`);
+  }
+  // With (test-double) providers configured, the original surface rules apply unchanged.
+  configureVerificationServices(testServices({ sms: new RecordingSmsProvider(), email: new RecordingEmailProvider() }));
+  // AUTH C1.1-b: sign-in also needs the (test-only) SMS limits, checked before any lookup. Imported
+  // here, after this file has set its environment, so the shared pool is configured as before.
+  const verificationModule = await import('./authVerification.js');
+  const { MemorySmsGuardStore, testAbuseProtection } = await import('./authTestSupport.js');
+  verificationModule.configureSmsSendGuardStore(new MemorySmsGuardStore());
+  verificationModule.configureAbuseProtection(testAbuseProtection());
+  try {
   for (const surface of [...SURFACES, undefined]) {
     for (const role of ['candidate', 'center', 'official']) {
       resetDb();
@@ -1054,5 +1082,9 @@ test('login: a role not allowed on the surface gets the generic 401 before any u
         assert.equal(db.businessQueries.length, 0, `${role} on ${surface}: no user lookup`);
       }
     }
+  }
+  } finally {
+    configureVerificationServices(DISABLED_SERVICES);
+    verificationModule.configureAbuseProtection(undefined);
   }
 });

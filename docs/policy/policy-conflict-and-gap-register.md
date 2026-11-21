@@ -1,10 +1,14 @@
 # ELTNOY policy conflict and gap register
 
-**Status:** Internal working register. Do not publish externally. Last updated 2026-11-03.
+**Status:** Internal working register. Do not publish externally. Last updated 2026-11-14.
 
 **Rule:** no conflict is resolved here. Each item has a recommended resolution marked **PENDING_CONFIRMATION**, which applies only once the client authorizes it.
 
 **IDs:** entries in the master register are cited as S-, R-, E-, A-, P- and N-; proposal decisions as D-. The confirmed decisions Q115–Q125 are cited as Q115 to Q125 (master register, section QD).
+
+**Code-status note (2026-11-14):** C-01/SEC-01 are largely addressed by commit `df9b93e` (P0-3; still open: A-08, A-10, A-11, A-12, A-17), and C-17 by commit `5c8dd41` (P0-4 committed). The rows below keep their 2026-11-03 wording. AU-01 to AU-03 (Student login) are recorded in the master register; M-28 is new.
+
+**Update of 2026-11-14:** SM-2 decisions SM2-P01 to SM2-P04 recorded in the master register (section SM). M-14 and SEC-07 are partly settled by SM2-P03. New missing decisions M-20 to M-27 come from the SM-2 review (`docs/reviews/SM2_POLICY_DECISION_REGISTER.md`, OI-1 to OI-7).
 
 **Update of 2026-11-03:** Q115–Q125 recorded. C-11, PERM-01 and PERM-06 are settled by them. New conflicts C-18 to C-21 and gaps M-16 to M-19 and G-Q119 were added.
 
@@ -52,12 +56,21 @@
 | M-11 | Platform name and subtitle wording (C-06) | Milestone 14 | Client |
 | M-12 | Organization public profile page (C-14) and an `other` organization type (C-13) | Milestones 3 and 4 | Client |
 | M-13 | Malware scanning of uploaded documents. A local open-source scanner is not SaaS, but it's a new dependency. | Milestone 7 | Client / Eng |
-| M-14 | Two-factor authentication for Super Admin and staff (no provider needed for an authenticator app) | Milestones 3 and 9 | Client |
+| M-14 | Two-factor authentication for Super Admin and staff (no provider needed for an authenticator app). **Super Admin part settled by SM2-P03 (mandatory before Staff Management go-live). Ordinary Officials settled by SM2-P05 (mandatory TOTP, 2026-11-15).** Platform Staff: a separate future phase. Still open: Organization Owners and Organization Staff (outside the current phase; SM-2 OI-1) | Milestones 3 and 9 | Client |
 | M-15 | Accessibility conformance target (for example WCAG 2.1 AA) for the whole platform | Milestone 13 | Client |
 | M-16 | **Q125:** what "the opportunity's rules" for withdrawal after approval are, and where they're configured | Milestone 6 | Client |
 | M-17 | **Q120:** what Super Admin may do in a platform-level dispute beyond reviewing it (for example, recommend or escalate), given it "does not automatically replace" the organization's decision | Milestones 6 and 11 | Client |
 | M-18 | **Q119:** what counts as "overdue" for assignments, and who receives the alert | Milestone 9 | Client |
 | M-19 | **Q123:** what "the appropriate review stage" is after reopening (for example `under_verification`), and who counts as "explicitly authorized authority" | Milestone 6 | Client |
+| M-20 | **Institute status and its Organization Staff (SM-2 OI-4, finding F07):** when an Institute is suspended (`institute_verifications.suspended_at`) or its institutional verification is not `verified` (pending or rejected), must its Organization Staff be refused at sign-in and on every request (existing sessions refused)? Options: (A) yes, for suspension and for any non-`verified` status, mirroring the Owner gate (recommended; fail closed); (B) suspension only; (C) no effect. SEC-09 covers only the suspension of an individual member, and Q115/Q118 do not decide this. Today staff check only `users.account_status = 'approved'` | Organization Staff go-live (after C-18) | Client |
+| M-21 | **Q115 remainder (finding F05):** who may suspend or remove Organization Staff (Owner, Super Admin, both), and whether an Owner may revoke or re-issue an unaccepted invitation. An expired code currently holds the staff ID permanently | Organization Staff offboarding; invitation hygiene | Client |
+| M-22 | Staff session lifetime (currently the 12-hour portal lifetime) (SM-2 OI-2) | Staff go-live | Client |
+| M-23 | Per-account lockout for staff sign-in (only a per-address limiter exists) (SM-2 OI-3) | Staff go-live | Client |
+| M-24 | Super Admin MFA recovery process (lost factor) and the step-up window for sensitive actions (SM-2 OI-6). **Recovery process settled by SM2-P05** (two-person reset for Super Admin targets; one Super Admin other than the target for ordinary Officials, D-1; break-glass CLI only when a second Super Admin is unavailable). Still open: the step-up window and the other numeric values, and D-3 to D-11 (`docs/reviews/SM2_MFA_IMPLEMENTATION_PLAN.md` §13). Database integrity of resets: AUTH C1.8.4. Operator identity for break-glass and bootstrap: SEC-11 | SM2-P03 implementation | Client |
+| M-25 | WireGuard peer-key rotation period, and how the Admin TLS certificate is issued while Admin is not publicly reachable (SM-2 OI-7) | SM2-P02 implementation | Client / Eng |
+| M-26 | Rollout of institutional verification (SM2-P04) for existing approved Institutes: pre-verify them, or require a Super Admin decision for each before AUTH-1 is enforced | AUTH-1 go-live | Client |
+| M-27 | Confirm the SM2-P04 transition rule: verify and reject must change the status (either may follow the other); suspend needs an unsuspended Institute, lift needs a suspended one; suspension is independent of the verification status | SM2-P04 sign-off | Client |
+| M-28 | **Student mobile numbers across accounts (AU-03):** may one mobile number belong to several Student accounts? Today none is prevented; mobile sign-in is refused generically when more than one account is tied to a number, and those students must use the Student ID path (accounts created mobile-first have no usable Student ID, so they are stuck until this is decided). Options: (A) one verified mobile per Student account, enforced at registration and capture (needs a reviewed constraint or check); (B) allow sharing and add an account chooser after the code is verified; (C) keep refusing ambiguous numbers | Student launch | Client |
 | G-Q119 | **Q119** needs form-wise assignment, workload limits, manual and automatic allocation, reassignment history and performance reports. None of this is in `data-model-final-proposal.md`; a design addition is needed. | Milestone 9 | Eng |
 
 ## 3. Security gaps
@@ -70,10 +83,12 @@
 | SEC-04 | The API binds `0.0.0.0` outside Docker (R-13) | `server/index.ts` | Bind to a configured host, defaulting to loopback outside containers |
 | SEC-05 | Unnecessary files in the Docker build context (`.vscode/settings.json`, 33 `.aistudio` images); no secrets | Build-context verification, 2026-11-03 | Separate narrow `.dockerignore` approval |
 | SEC-06 | The isolated test environment still holds credential files (`pg.env`, `api.env`) | R-14 | Approve the cleanup with `down.sh` |
-| SEC-07 | No second sign-in factor for privileged accounts | M-14 | Decide M-14 |
+| SEC-07 | No second sign-in factor for privileged accounts | M-14 | Super Admin and all Officials: decided by SM2-P03 and SM2-P05 (mandatory TOTP; not built; specification in `docs/reviews/SM2_MFA_IMPLEMENTATION_PLAN.md`). Others: M-14 |
 | SEC-08 | Uploaded files aren't scanned for malware | M-13 | Decide M-13 |
 | SEC-09 | Staff sessions must be revoked when a member is suspended or removed (not yet designed in code) | D-07 analysis | Part of milestone 9's acceptance criteria |
 | SEC-10 | `is_super_admin` isn't limited to the `official` role in the database (application checks guard it today) | `schema.sql` | Optional `CHECK (is_super_admin = false OR role = 'official')`, which needs approval (it changes an existing table) |
+| SEC-11 | **MFA O-1 (deferred by the owner, AUTH C1.8.4):** the MFA operator CLI (bootstrap and break-glass) and the API use the same database credentials, so the database cannot tell which one issued a bootstrap or break-glass enrolment ticket. The application role can therefore insert such tickets. The database checks only the workflow (bootstrap preconditions under an advisory lock; break-glass reset completeness and audit event), and application-supplied event details are not proof of operator identity | `docs/reviews/SM2_MFA_IMPLEMENTATION_PLAN.md` §7.3; `server/adminMfaMigration.sql` | Resolve before MFA Phase 7 (for example a dedicated operator database role); needs a separately approved design |
+| SEC-12 | **MFA O-4 (AUTH C1.8.4):** the database does not yet require an enrolment ticket to create an MFA factor, so the application role could enrol a factor for a user who has none | `docs/reviews/SM2_MFA_IMPLEMENTATION_PLAN.md` §6.6, §11 | Mandatory part of MFA Phase 4 |
 
 ## 4. Unresolved permissions
 

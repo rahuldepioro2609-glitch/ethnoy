@@ -22,7 +22,7 @@ export const FAQ_ITEMS: FAQItem[] = [
     category: 'admit-card',
     categoryLabel: 'Admit Card & Hall Ticket',
     question: 'How do I download my ELTNOY Admit Card / Hall Ticket?',
-    answer: 'Candidates can download their official Admit Card from the portal by selecting their registered examination, entering their Application Number (e.g., NEA-2026-88419), and entering their Date of Birth in YYYY-MM-DD format.',
+    answer: 'Candidates can download their official Admit Card from the portal by selecting their registered examination, entering their Application Number, and entering their Date of Birth in YYYY-MM-DD format.',
     keyPoints: [
       'Ensure your digital QR code and roll number are legible on the printout.',
       'Print at least 2 clear copies on A4 paper (laser print recommended).',

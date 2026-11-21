@@ -15,6 +15,9 @@ import { hashSessionToken, setTrustedRequestSurface } from './auth.js';
 import { expectedOrigin, type Surface } from './surface.js';
 import { pool } from './db.js';
 import { INSTITUTION_DOCUMENT_CATEGORIES } from '../src/utils/institutionDocuments.js';
+import { MemoryAuthVerificationStore, MemoryEmailGuardStore, MemorySmsGuardStore, RecordingEmailProvider, RecordingSmsProvider, testAbuseProtection, testServices, VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
+import { configureVerificationServices, DISABLED_SERVICES } from './verificationProviders.js';
+import { configureAbuseProtection, configureAuthVerificationStore, configureEmailSendGuardStore, configureSmsSendGuardStore, emailDestinationKey, smsDestinationKey } from './authVerification.js';
 
 interface RouteLayer {
   route?: {
@@ -91,7 +94,7 @@ function invoke(
         return this;
       },
       append(name: string, value: string) {
-        headers[name] = value;
+        headers[name] = headers[name] ? `${headers[name]}\n${value}` : value;
         return this;
       },
       json(body: unknown) {
@@ -483,6 +486,17 @@ test('registration creates a submission cycle and capability in its transaction 
     },
     release() {},
   });
+  // AUTH-1: registration needs both verification providers (test doubles here; none in production).
+  const sms = new RecordingSmsProvider();
+  configureVerificationServices(testServices({ sms, email: new RecordingEmailProvider() }));
+  configureAuthVerificationStore(new MemoryAuthVerificationStore());
+  // AUTH C1.1-b: every SMS needs the (test-only) SMS limits; the registration SMS is reserved first.
+  const smsGuard = new MemorySmsGuardStore();
+  configureSmsSendGuardStore(smsGuard);
+  // AUTH C1.4-B-1: the registration's later email is reserved through the (in-memory) email guard.
+  const emailGuard = new MemoryEmailGuardStore();
+  configureEmailSendGuardStore(emailGuard);
+  configureAbuseProtection(testAbuseProtection());
   try {
     const response = await invoke(applicationRoute.stack.slice(1).map(({ handle }) => handle), {
       method: 'POST',
@@ -492,12 +506,21 @@ test('registration creates a submission cycle and capability in its transaction 
         name: 'Synthetic New Institute',
         password: 'Synthetic-new-password-2026',
         contactEmail: 'new@example.test',
+        contactMobile: '9876500001',
         registrationNumber: 'NEW-REG-123',
         registeredAddress: '123 Synthetic Street, Example District',
         website: '',
       },
     });
     assert.equal(response.status, 201);
+    const verificationInsert = statements.find(({ text }) => text.includes('INSERT INTO institute_verifications'));
+    assert.deepEqual(verificationInsert?.values, ['new-institution', '+919876500001', 'new@example.test'], 'contacts recorded unverified, in the same transaction');
+    assert.ok(statements.findIndex(({ text }) => text.includes('INSERT INTO institute_verifications')) < statements.findIndex(({ text }) => text === 'COMMIT'));
+    assert.deepEqual(sms.sent.map((entry) => [entry.destination, entry.purpose]), [['+919876500001', 'institute_mobile']]);
+    assert.ok(!JSON.stringify(response.body).includes(sms.lastCode()!), 'the code is never returned');
+    assert.deepEqual(smsGuard.reservations.map((r) => [r.purpose, r.bucket]), [['institute_mobile', 'unverified']], 'AUTH C1.1-b: reserved in the unverified bucket');
+    assert.match(response.headers['Set-Cookie'], /elt_verification=/);
+    assert.equal((response.body as { verification: { status: string } }).verification.status, 'verification_required');
     assert.match(response.headers['Set-Cookie'], /elt_institution_submission=/);
     assert.match(response.headers['Set-Cookie'], /Path=\/api\/institution-document-submission/);
     assert.ok(statements.some(({ text, values }) => text.includes('INSERT INTO institution_submission_cycles')
@@ -509,6 +532,74 @@ test('registration creates a submission cycle and capability in its transaction 
     assert.ok(!JSON.stringify(response.body).includes(String(capabilityInsert.values?.[3])));
   } finally {
     (pool as unknown as { connect: () => Promise<unknown> }).connect = originalConnect;
+    configureVerificationServices(DISABLED_SERVICES);
+    configureAbuseProtection(undefined);
+  }
+});
+
+test('AUTH-1: without verification providers, institute registration is closed before any write', async () => {
+  const [{ app }] = await Promise.all([import('./index.js')]);
+  const route = (app as unknown as { _router: { stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: RequestHandler }> } }> } })._router.stack
+    .map((item) => item.route).find((candidate) => candidate?.path === '/api/center/register' && candidate.methods.post);
+  assert.ok(route);
+  configureVerificationServices(DISABLED_SERVICES);
+  const originalConnect = (pool as unknown as { connect: () => Promise<unknown> }).connect;
+  let connections = 0;
+  (pool as unknown as { connect: () => Promise<unknown> }).connect = async () => { connections += 1; throw new Error('must not connect'); };
+  try {
+    for (const services of [DISABLED_SERVICES, testServices({ sms: new RecordingSmsProvider() }), testServices({ email: new RecordingEmailProvider() })]) {
+      configureVerificationServices(services);
+      const response = await invoke(route.stack.slice(1).map(({ handle }) => handle), {
+        method: 'POST', path: '/api/center/register',
+        body: { loginId: 'CLOSED-INSTITUTE', name: 'Closed Institute', password: 'Synthetic-new-password-2026', contactEmail: 'closed@example.test', contactMobile: '9876500002', registrationNumber: 'REG-1', registeredAddress: '1 Closed Street, Example', website: '' },
+      });
+      assert.equal(response.status, 503);
+      assert.match(String((response.body as { code: string }).code), /^(OTP|EMAIL)_PROVIDER_NOT_CONFIGURED$/);
+    }
+    // AUTH C1.1-b: both providers present but the SMS limits unset (or the unverified budget used up):
+    // still closed before any write.
+    configureVerificationServices(testServices({ sms: new RecordingSmsProvider(), email: new RecordingEmailProvider() }));
+    const smsGuard = new MemorySmsGuardStore();
+    configureSmsSendGuardStore(smsGuard);
+    const emailGuard = new MemoryEmailGuardStore();
+    configureEmailSendGuardStore(emailGuard);
+    const body = { loginId: 'CLOSED-INSTITUTE', name: 'Closed Institute', password: 'Synthetic-new-password-2026', contactEmail: 'closed@example.test', contactMobile: '9876500002', registrationNumber: 'REG-1', registeredAddress: '1 Closed Street, Example', website: '' };
+    configureAbuseProtection({ ...testAbuseProtection(), sms: null, problems: ['test: unset'] });
+    const unconfigured = await invoke(route.stack.slice(1).map(({ handle }) => handle), { method: 'POST', path: '/api/center/register', body });
+    assert.deepEqual([unconfigured.status, (unconfigured.body as { code: string }).code], [503, 'SMS_PROTECTION_NOT_CONFIGURED']);
+    configureAbuseProtection(testAbuseProtection({ dailyMaxSends: 1, dailyMaxUnverifiedSends: 1 }));
+    smsGuard.reservations.push({ reservationId: 'r', destinationKey: 'k'.repeat(32), bucket: 'unverified', purpose: 'student_registration', at: Date.now() });
+    const exhausted = await invoke(route.stack.slice(1).map(({ handle }) => handle), { method: 'POST', path: '/api/center/register', body });
+    assert.deepEqual([exhausted.status, (exhausted.body as { code: string }).code], [503, 'SMS_DAILY_LIMIT_REACHED']);
+    // AUTH C1.1-b C-2: contactMobile's unverified allowance already used up: 429 before ANY write
+    // (account, submission cycle, capability, institute verification). The pool would count a connection.
+    configureAbuseProtection(testAbuseProtection({ unverified: { windowMs: 3600_000, maxSends: 1 } }));
+    smsGuard.reservations.length = 0;
+    smsGuard.reservations.push({ reservationId: 'flood', destinationKey: smsDestinationKey(Buffer.alloc(32, 7), '+919876500002'), bucket: 'unverified', purpose: 'student_registration', at: Date.now() });
+    const flooded = await invoke(route.stack.slice(1).map(({ handle }) => handle), { method: 'POST', path: '/api/center/register', body });
+    assert.deepEqual([flooded.status, (flooded.body as { code: string }).code], [429, 'SMS_DESTINATION_LIMITED']);
+    assert.equal(smsGuard.refusals.length, 0, 'answered by the early gate, before any reservation or write');
+    // AUTH C1.4-B-1: email limits unset, email budget used up, or contactEmail's anonymous allowance used
+    // up: refused BEFORE any write (the pool would count a connection), with no reservation.
+    smsGuard.reservations.length = 0;
+    configureAbuseProtection({ ...testAbuseProtection(), email: null });
+    const emailUnset = await invoke(route.stack.slice(1).map(({ handle }) => handle), { method: 'POST', path: '/api/center/register', body });
+    assert.deepEqual([emailUnset.status, (emailUnset.body as { code: string }).code], [503, 'EMAIL_PROTECTION_NOT_CONFIGURED']);
+    configureAbuseProtection(testAbuseProtection({}, undefined, { dailyMaxSends: 1, dailyMaxUnverifiedSends: 1 }));
+    emailGuard.reservations.push({ reservationId: 'e', destinationKey: 'x'.repeat(32), bucket: 'unverified', purpose: 'institute_email', at: Date.now() });
+    const emailBudget = await invoke(route.stack.slice(1).map(({ handle }) => handle), { method: 'POST', path: '/api/center/register', body });
+    assert.deepEqual([emailBudget.status, (emailBudget.body as { code: string }).code], [503, 'EMAIL_DAILY_LIMIT_REACHED']);
+    configureAbuseProtection(testAbuseProtection({}, undefined, { unverified: { windowMs: 3600_000, maxSends: 1 } }));
+    emailGuard.reservations.length = 0;
+    emailGuard.reservations.push({ reservationId: 'f', destinationKey: emailDestinationKey(Buffer.alloc(32, 7), 'closed@example.test'), bucket: 'unverified', purpose: 'institute_email', at: Date.now() });
+    const emailFlooded = await invoke(route.stack.slice(1).map(({ handle }) => handle), { method: 'POST', path: '/api/center/register', body });
+    assert.deepEqual([emailFlooded.status, (emailFlooded.body as { code: string }).code], [429, 'EMAIL_DESTINATION_LIMITED']);
+    assert.equal(emailGuard.refusals.length, 0, 'advisory only: no email reservation is made by the gate');
+    assert.equal(connections, 0, 'nothing is written while verification is impossible');
+  } finally {
+    (pool as unknown as { connect: () => Promise<unknown> }).connect = originalConnect;
+    configureVerificationServices(DISABLED_SERVICES);
+    configureAbuseProtection(undefined);
   }
 });
 
@@ -523,9 +614,9 @@ test('Official cycle summary remains role restricted', async () => {
       const tokenHash = values?.[0];
       return {
         rows: tokenHash === hashSessionToken(officialToken)
-          ? [{ id: 'official-a', login_id: 'OFFICIAL-A', display_name: 'Official', role: 'official', account_status: 'approved', is_super_admin: false }]
+          ? [{ id: 'official-a', login_id: 'OFFICIAL-A', display_name: 'Official', role: 'official', account_status: 'approved', is_super_admin: false, ...VERIFIED_PORTAL_SESSION }]
           : tokenHash === hashSessionToken(candidateToken)
-            ? [{ id: 'candidate-a', login_id: 'CANDIDATE-A', display_name: 'Candidate', role: 'candidate', account_status: 'approved', is_super_admin: false }]
+            ? [{ id: 'candidate-a', login_id: 'CANDIDATE-A', display_name: 'Candidate', role: 'candidate', account_status: 'approved', is_super_admin: false, ...VERIFIED_PORTAL_SESSION }]
             : [],
       };
     }

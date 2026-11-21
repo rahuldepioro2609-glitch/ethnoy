@@ -49,12 +49,18 @@ const fakeMigrations: MigrationFile[] = [
   { name: 'databaseGrantsMigration.sql', sql: '-- grants' },
 ];
 
-test('db:migrate runs schema, Milestone 1, Milestone 2, document immutability, then the grants migration', async () => {
+test('db:migrate runs core, auth, staff and grants migrations in dependency order', async () => {
   assert.deepEqual([...MIGRATION_FILES], [
     'schema.sql',
     'institutionDocumentsMigration.sql',
     'institutionDocumentSubmissionMigration.sql',
     'institutionDocumentsImmutabilityMigration.sql',
+    'authVerificationMigration.sql',
+    'studentEmailVerificationMigration.sql',
+    'studentRegistrationClaimsMigration.sql',
+    'adminMfaMigration.sql',
+    'platformStaffMigration.sql',
+    'organizationStaffMigration.sql',
     'databaseGrantsMigration.sql',
   ]);
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -223,4 +229,79 @@ test('Milestone 2 keeps submission_cycle_id nullable without backfilling legacy 
   assert.doesNotMatch(sql, /submission_cycle_id\s*=/i);
   assert.match(sql, /BEFORE INSERT ON institution_documents/);
   assert.doesNotMatch(sql, /BEFORE (INSERT OR )?UPDATE ON institution_documents/);
+});
+
+test('AUTH-1 and Staff migrations run after their dependencies and before the grants migration', () => {
+  const files = [...MIGRATION_FILES] as string[];
+  const auth = files.indexOf('authVerificationMigration.sql');
+  assert.ok(auth > files.indexOf('schema.sql'), 'needs users and auth_sessions from schema.sql');
+  assert.ok(auth > files.indexOf('institutionDocumentsImmutabilityMigration.sql'), 'existing order is preserved');
+  assert.ok(auth < files.indexOf('databaseGrantsMigration.sql'), 'before the grants migration');
+  assert.equal(files.filter((name) => name === 'authVerificationMigration.sql').length, 1);
+  const platform = files.indexOf('platformStaffMigration.sql');
+  const organization = files.indexOf('organizationStaffMigration.sql');
+  assert.ok(platform > files.indexOf('adminMfaMigration.sql'), 'after the authentication schema');
+  assert.ok(organization > auth, 'Organization Staff uses AUTH-1 institute verification state');
+  assert.ok(platform < files.indexOf('databaseGrantsMigration.sql'), 'before grants coverage');
+  assert.ok(organization < files.indexOf('databaseGrantsMigration.sql'), 'before grants coverage');
+  for (const staff of ['platformStaffMigration.sql', 'organizationStaffMigration.sql']) {
+    assert.equal(files.filter((name) => name === staff).length, 1, `${staff} runs exactly once`);
+  }
+});
+
+test('AUTH C1: the claims migration runs once, right after AUTH-1 and before the grants migration', () => {
+  const files = [...MIGRATION_FILES] as string[];
+  const claims = files.indexOf('studentRegistrationClaimsMigration.sql');
+  assert.equal(files.filter((name) => name === 'studentRegistrationClaimsMigration.sql').length, 1);
+  assert.equal(files.indexOf('studentEmailVerificationMigration.sql'), files.indexOf('authVerificationMigration.sql') + 1, 'extends the AUTH-1 challenge-purpose constraint');
+  assert.equal(claims, files.indexOf('studentEmailVerificationMigration.sql') + 1, 'depends on verification_challenges and auth_verification_events');
+  assert.ok(claims < files.indexOf('databaseGrantsMigration.sql'), 'the grants manifest lists student_registration_claims');
+  assert.equal(files.indexOf('adminMfaMigration.sql'), claims + 1, 'AUTH C1.8: the MFA migration follows the claims migration');
+  assert.equal(files.at(-1), 'databaseGrantsMigration.sql', 'the grants migration stays last');
+  assert.equal(files.indexOf('platformStaffMigration.sql'), files.indexOf('adminMfaMigration.sql') + 1);
+  assert.equal(files.indexOf('organizationStaffMigration.sql'), files.indexOf('platformStaffMigration.sql') + 1);
+});
+
+test('AUTH C1: the claims migration is additive, re-runnable, non-exclusive per mobile, and never touches existing rows', async () => {
+  const sql = withoutComments(await readServerFile('studentRegistrationClaimsMigration.sql'));
+  assert.doesNotMatch(sql, /\bDROP (?:TABLE|COLUMN|INDEX|CONSTRAINT)\b/i, 'additive: nothing is dropped');
+  assert.doesNotMatch(sql, /\bBEGIN\s*;|\bCOMMIT\b|\bROLLBACK\b/i, 'the runner owns the transaction');
+  assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|TRUNCATE|UPDATE\s+\w+\s+SET)\b/i, 'no data changes or backfills');
+  const statements = sql.replace(/\$\$[\s\S]*?\$\$/g, '$$body$$').split(/;\s*(?=\n|$)/).map((statement) => statement.trim()).filter(Boolean);
+  for (const statement of statements) {
+    // ('$$body$$' as a replacement string yields '$body$'.)
+    assert.match(statement, /^(?:(?:CREATE TABLE IF NOT EXISTS|CREATE INDEX IF NOT EXISTS|ALTER TABLE verification_challenges (?:ADD COLUMN IF NOT EXISTS|ALTER COLUMN user_id DROP NOT NULL))\b|DO \$body\$$)/i, `re-runnable: ${statement.slice(0, 80)}`);
+  }
+  const body = withoutComments(await readServerFile('studentRegistrationClaimsMigration.sql'));
+  assert.match(body, /IF NOT EXISTS \([\s\S]*conname = 'verification_challenges_owner_check'[\s\S]*ADD CONSTRAINT verification_challenges_owner_check/, 'the CHECK is added only once');
+  assert.match(body, /\(user_id IS NOT NULL AND registration_claim_id IS NULL\)\s+OR \(user_id IS NULL AND registration_claim_id IS NOT NULL AND purpose = 'student_registration'\)/, 'exactly one owner; claims only for Student registration');
+  assert.match(body, /registration_claim_id text REFERENCES student_registration_claims\(id\) ON DELETE CASCADE/);
+  assert.doesNotMatch(body, /UNIQUE[^;]*\bmobile\b|UNIQUE INDEX[^;]*student_registration_claims/i, 'claims are not exclusive per mobile');
+  assert.match(body, /password_hash text NOT NULL/);
+  assert.doesNotMatch(body, /\bpassword text\b|\bcode text\b|\botp\b/i, 'no plaintext password or OTP column');
+  assert.match(body, /CHECK \(expires_at > created_at\)/, 'claims expire');
+  assert.match(body, /consumed_at timestamptz/, 'claims are single use');
+  assert.equal((body.match(/CREATE TABLE IF NOT EXISTS/g) ?? []).length, 1, 'one new table');
+});
+
+test('AUTH-1: the migration is additive and every statement is safe to re-run', async () => {
+  const sql = withoutComments(await readServerFile('authVerificationMigration.sql'));
+  assert.doesNotMatch(sql, /\bDROP (?:TABLE|COLUMN)\b/i, 'additive: nothing is dropped');
+  assert.doesNotMatch(sql, /\bBEGIN\s*;|\bCOMMIT\b|\bROLLBACK\b/i, 'no transaction control (the runner owns the transaction)');
+  // Collapse dollar-quoted function bodies so their inner semicolons don't split statements.
+  const statements = sql.replace(/\$\$[\s\S]*?\$\$/g, '$$body$$').split(/;\s*(?=\n|$)/).map((statement) => statement.trim()).filter(Boolean);
+  for (const statement of statements) {
+    // Trigger definitions may name UPDATE/DELETE/TRUNCATE events; no statement may *start* as a data or table change.
+    assert.doesNotMatch(statement, /^(?:ALTER TABLE|TRUNCATE|DELETE|UPDATE|INSERT)\b/i, `additive: ${statement.slice(0, 80)}`);
+    if (/^CREATE\b/i.test(statement)) {
+      assert.match(statement, /^CREATE (?:TABLE IF NOT EXISTS|(?:UNIQUE )?INDEX IF NOT EXISTS|OR REPLACE FUNCTION|TRIGGER)\b/i, statement.slice(0, 80));
+    } else {
+      assert.match(statement, /^DROP TRIGGER IF EXISTS\b/i, statement.slice(0, 80));
+    }
+  }
+  // Every trigger is dropped first, so re-running recreates it instead of failing.
+  for (const [, name, table] of sql.matchAll(/CREATE TRIGGER (\w+)\s+BEFORE [A-Z ]+ ON (\w+)/g)) {
+    assert.match(sql, new RegExp(`DROP TRIGGER IF EXISTS ${name} ON ${table};`), name);
+  }
+  assert.equal((sql.match(/CREATE TABLE IF NOT EXISTS/g) ?? []).length, 7);
 });

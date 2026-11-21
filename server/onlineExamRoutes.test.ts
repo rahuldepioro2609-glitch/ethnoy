@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { expectedOrigin, type Surface } from './surface.js';
+import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 // Recovery enabled for this test process, so the "scored from saved answers" path is reachable.
@@ -141,11 +142,11 @@ const pendingCandidateToken = 'P'.repeat(43);
 const unknownToken = 'U'.repeat(43);
 
 const SESSIONS = new Map<string, Row>([
-  [hashSessionToken(candidateToken), { id: CANDIDATE_ID, login_id: 'CAND-1', display_name: 'Candidate', role: 'candidate', account_status: 'approved', is_super_admin: false }],
-  [hashSessionToken(otherCandidateToken), { id: OTHER_CANDIDATE_ID, login_id: 'CAND-2', display_name: 'Other', role: 'candidate', account_status: 'approved', is_super_admin: false }],
-  [hashSessionToken(officialToken), { id: 'synthetic-official', login_id: 'OFF-1', display_name: 'Official', role: 'official', account_status: 'approved', is_super_admin: true }],
-  [hashSessionToken(centerToken), { id: 'synthetic-center', login_id: 'CTR-1', display_name: 'Center', role: 'center', account_status: 'approved', is_super_admin: false }],
-  [hashSessionToken(pendingCandidateToken), { id: 'synthetic-pending', login_id: 'CAND-3', display_name: 'Pending', role: 'candidate', account_status: 'pending', is_super_admin: false }],
+  [hashSessionToken(candidateToken), { id: CANDIDATE_ID, login_id: 'CAND-1', display_name: 'Candidate', role: 'candidate', account_status: 'approved', is_super_admin: false, ...VERIFIED_PORTAL_SESSION }],
+  [hashSessionToken(otherCandidateToken), { id: OTHER_CANDIDATE_ID, login_id: 'CAND-2', display_name: 'Other', role: 'candidate', account_status: 'approved', is_super_admin: false, ...VERIFIED_PORTAL_SESSION }],
+  [hashSessionToken(officialToken), { id: 'synthetic-official', login_id: 'OFF-1', display_name: 'Official', role: 'official', account_status: 'approved', is_super_admin: true, ...VERIFIED_PORTAL_SESSION }],
+  [hashSessionToken(centerToken), { id: 'synthetic-center', login_id: 'CTR-1', display_name: 'Center', role: 'center', account_status: 'approved', is_super_admin: false, ...VERIFIED_PORTAL_SESSION }],
+  [hashSessionToken(pendingCandidateToken), { id: 'synthetic-pending', login_id: 'CAND-3', display_name: 'Pending', role: 'candidate', account_status: 'pending', is_super_admin: false, ...VERIFIED_PORTAL_SESSION }],
 ]);
 
 const ATTEMPT_ID = '8d0f6a2e-6f7d-4a43-9a7e-2a1f3c5b7d90';
@@ -804,15 +805,17 @@ const PUBLISHED_QUESTION_ROWS = [
   { question_number: 1, section: 'Mathematics', question_text: 'Q1', options: { A: 'a', B: 'b', C: 'c', D: 'd' }, points: 1, duration_minutes: 60 },
 ];
 
-function startQueries(existingAttempt: Row | null) {
+function startQueries(existingAttempt: Row | null, concurrentAttempt: Row | null = null, insertConflicts = false) {
+  let attemptReads = 0;
   return (text: string) => {
     if (text.includes('FROM applications')) return { rows: [{ '?column?': 1 }] };
     if (text.includes('GROUP BY question_number')) return { rows: PUBLISHED_QUESTION_ROWS };
     if (text.includes('FROM online_exam_attempts WHERE user_id = $1 AND exam_code = $2')) {
-      return { rows: existingAttempt ? [existingAttempt] : [] };
+      const attempt = attemptReads++ === 0 ? existingAttempt : concurrentAttempt;
+      return { rows: attempt ? [attempt] : [] };
     }
     if (text.includes('INSERT INTO online_exam_attempts')) {
-      return { rows: [{ id: 'new-attempt', started_at: EXPIRES_AT, expires_at: EXPIRES_AT }] };
+      return { rows: insertConflicts ? [] : [{ id: 'new-attempt', started_at: EXPIRES_AT, expires_at: EXPIRES_AT }] };
     }
     return undefined;
   };
@@ -832,6 +835,23 @@ test('regression: POST start still creates a new attempt (201) and resumes an ac
     const result = await invokeRoute('post', '/api/online-exams/:examCode/start', { token: candidateToken, params: { examCode: 'exam1' } });
     assert.equal(result.status, 200);
     assert.deepEqual(result.body.responses, SAVED_ANSWERS);
+  });
+});
+
+test('regression: POST start resumes an active attempt when its insert loses a concurrent race', async () => {
+  const active = {
+    id: ATTEMPT_ID,
+    started_at: EXPIRES_AT,
+    expires_at: new Date(Date.now() + 30 * 60_000),
+    submitted_at: null,
+    responses: SAVED_ANSWERS,
+  };
+  await withDatabase({ poolQuery: startQueries(null, active, true) }, async (db) => {
+    const result = await invokeRoute('post', '/api/online-exams/:examCode/start', { token: candidateToken, params: { examCode: 'exam1' } });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.attempt, JSON.parse(JSON.stringify(active)));
+    assert.deepEqual(result.body.responses, SAVED_ANSWERS);
+    assert.equal(db.poolQueries.filter((entry) => entry.text.includes('FROM online_exam_attempts WHERE user_id = $1 AND exam_code = $2')).length, 2);
   });
 });
 

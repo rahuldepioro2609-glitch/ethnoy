@@ -10,6 +10,7 @@ backup/
 backups/
 .env*
 !.env.example
+!.env.internal-testing.example
 .local-dev/
 
 # UD-1: database credential files and generated credentials (keep them outside the repository).
