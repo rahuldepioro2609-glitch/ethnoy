@@ -242,12 +242,19 @@ export const ChangePasswordCard: React.FC = () => {
   useEffect(() => {
     apiRequest<AccountInfo>('/api/account').then((info) => setHasPassword(info.account.hasPassword !== false)).catch(() => undefined);
   }, []);
+  const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const cancel = () => {
+    setOpen(false);
+    setCurrent(''); setNext(''); setConfirm('');
+    setError(null);
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -263,6 +270,7 @@ export const ChangePasswordCard: React.FC = () => {
       setMessage(hasPassword ? t('account.passwordChanged') : t('account.passwordSet'));
       setHasPassword(true);
       setCurrent(''); setNext(''); setConfirm('');
+      setOpen(false);
     } catch (changeError) {
       setError(changeError instanceof Error ? changeError.message : t('account.passwordChangeFailed'));
     } finally {
@@ -270,32 +278,50 @@ export const ChangePasswordCard: React.FC = () => {
     }
   };
 
+  const title = hasPassword ? t('account.changePasswordTitle') : t('account.setPasswordTitle');
   const field = 'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm font-normal';
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-extrabold text-[#0B2E59]">{hasPassword ? t('account.changePasswordTitle') : t('account.setPasswordTitle')}</h2>
-      {!hasPassword && <p className="mt-1 text-sm text-slate-600">{t('account.setPasswordIntro')}</p>}
-      {error && <p role="alert" className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-sm text-rose-800">{error}</p>}
-      {message && <p role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-sm text-emerald-900">{message}</p>}
-      <form onSubmit={(event) => void submit(event)} className={`mt-3 grid gap-3 ${hasPassword ? 'sm:grid-cols-3' : 'sm:grid-cols-2'} sm:items-end`}>
-        {hasPassword && (
-          <label className="text-sm font-semibold text-slate-700">{t('account.currentPassword')}
-            <input type="password" required autoComplete="current-password" value={current} onChange={(event) => setCurrent(event.target.value)} className={field} />
-          </label>
-        )}
-        <label className="text-sm font-semibold text-slate-700">{t('account.newPassword')}
-          <input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={next} onChange={(event) => setNext(event.target.value)} className={field} />
-        </label>
-        <label className="text-sm font-semibold text-slate-700">{t('account.confirmPassword')}
-          <input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} className={field} />
-        </label>
-        <div className={`${hasPassword ? 'sm:col-span-3' : 'sm:col-span-2'} flex flex-wrap items-center justify-between gap-2`}>
-          <p className="text-xs text-slate-500">{t('account.passwordRule')}</p>
-          <button type="submit" disabled={busy} className="rounded-lg bg-[#0B2E59] px-4 py-2.5 text-xs font-bold text-white disabled:opacity-60">
-            {busy ? t('common.pleaseWait') : hasPassword ? t('account.changePassword') : t('account.setPassword')}
+      {!open ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-lg font-extrabold text-[#0B2E59]">{title}</h2>
+            <p className="mt-0.5 text-xs text-slate-500">{hasPassword ? t('account.passwordHint') : t('account.setPasswordIntro')}</p>
+          </div>
+          {message && <p role="status" className="basis-full rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-900">{message}</p>}
+          <button type="button" onClick={() => { setOpen(true); setMessage(null); }} className="rounded-lg border border-[#0B2E59] px-3 py-2 text-xs font-bold text-[#0B2E59] hover:bg-[#0B2E59] hover:text-white">
+            {title}
           </button>
         </div>
-      </form>
+      ) : (
+        <>
+          <h2 className="text-lg font-extrabold text-[#0B2E59]">{title}</h2>
+          {!hasPassword && <p className="mt-1 text-sm text-slate-600">{t('account.setPasswordIntro')}</p>}
+          {error && <p role="alert" className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-sm text-rose-800">{error}</p>}
+          <form onSubmit={(event) => void submit(event)} className="mt-3 space-y-3">
+            {hasPassword && (
+              <label className="block text-sm font-semibold text-slate-700">{t('account.currentPassword')}
+                <input type="password" required autoComplete="current-password" value={current} onChange={(event) => setCurrent(event.target.value)} className={field} />
+              </label>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-slate-700">{t('account.newPassword')}
+                <input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={next} onChange={(event) => setNext(event.target.value)} className={field} />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">{t('account.confirmPassword')}
+                <input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} className={field} />
+              </label>
+            </div>
+            <p className="text-xs text-slate-500">{t('account.passwordRule')}</p>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button type="button" onClick={cancel} disabled={busy} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60">{t('common.cancel')}</button>
+              <button type="submit" disabled={busy} className="rounded-lg bg-[#0B2E59] px-4 py-2 text-xs font-bold text-white disabled:opacity-60">
+                {busy ? t('common.pleaseWait') : hasPassword ? t('account.changePassword') : t('account.setPassword')}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
     </section>
   );
 };

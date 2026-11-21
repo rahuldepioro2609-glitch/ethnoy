@@ -16,6 +16,7 @@ const en = {
   'account.newPassword': 'New password',
   'account.confirmPassword': 'Confirm new password',
   'account.passwordRule': 'Use at least 12 characters. Do not reuse a password from another website.',
+  'account.passwordHint': "For your security, pick a strong password. Other devices will be signed out.",
   'account.passwordsDiffer': 'The two passwords do not match.',
   'account.showPassword': 'Show password',
   'account.hidePassword': 'Hide password',

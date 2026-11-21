@@ -17,6 +17,7 @@ const messages: Partial<Dictionary> = {
   'account.newPassword': "ಹೊಸ ಪಾಸ್‌ವರ್ಡ್",
   'account.confirmPassword': "ಹೊಸ ಪಾಸ್‌ವರ್ಡ್ ದೃಢೀಕರಿಸಿ",
   'account.passwordRule': "ಕನಿಷ್ಠ 12 ಅಕ್ಷರಗಳನ್ನು ಬಳಸಿ. ಬೇರೆ ವೆಬ್‌ಸೈಟ್‌ನ ಪಾಸ್‌ವರ್ಡ್ ಅನ್ನು ಮರುಬಳಸಬೇಡಿ.",
+  'account.passwordHint': "ಭದ್ರತೆಗಾಗಿ ಬಲಿಷ್ಠ ಪಾಸ್‌ವರ್ಡ್ ಆಯ್ಕೆಮಾಡಿ. ಇತರ ಸಾಧನಗಳು ಸೈನ್ ಔಟ್ ಆಗುತ್ತವೆ.",
   'account.passwordsDiffer': "ಎರಡು ಪಾಸ್‌ವರ್ಡ್‌ಗಳು ಹೊಂದಿಕೆಯಾಗುತ್ತಿಲ್ಲ.",
   'account.showPassword': "ಪಾಸ್‌ವರ್ಡ್ ತೋರಿಸಿ",
   'account.hidePassword': "ಪಾಸ್‌ವರ್ಡ್ ಮರೆಮಾಡಿ",

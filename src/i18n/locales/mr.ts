@@ -17,6 +17,7 @@ const messages: Partial<Dictionary> = {
   'account.newPassword': "नवीन पासवर्ड",
   'account.confirmPassword': "नवीन पासवर्डची पुष्टी करा",
   'account.passwordRule': "किमान 12 अक्षरे वापरा. दुसऱ्या वेबसाइटचा पासवर्ड पुन्हा वापरू नका.",
+  'account.passwordHint': "तुमच्या सुरक्षेसाठी मजबूत पासवर्ड निवडा. इतर उपकरणे साइन आउट होतील.",
   'account.passwordsDiffer': "दोन्ही पासवर्ड जुळत नाहीत.",
   'account.showPassword': "पासवर्ड दाखवा",
   'account.hidePassword': "पासवर्ड लपवा",
