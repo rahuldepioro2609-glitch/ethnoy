@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   ADMIN_HOME_PATH,
   instituteSignOutViewState,
+  surfaceHostnamesForLocalInstitutePreview,
   planSurfaceNavigation,
   requiredSurfaceForPath,
   surfaceForRole,
@@ -29,6 +30,26 @@ test('Institute sign-out requires the owning surface and a live Institute sessio
   assert.equal(instituteSignOutViewState({ authLoading: false, hostnames, currentHostname: hostnames.institution, accountRole: null }), 'signed_out');
   assert.equal(instituteSignOutViewState({ authLoading: false, hostnames, currentHostname: hostnames.institution, accountRole: 'candidate' }), 'signed_out');
   assert.equal(instituteSignOutViewState({ authLoading: false, hostnames, currentHostname: 'INSTITUTE.EXAMPLE.TEST', accountRole: 'center' }), 'confirm');
+});
+
+test('local live Institute preview keeps the Institute portal on localhost and leaves Student on its own surface', () => {
+  const preview = surfaceHostnamesForLocalInstitutePreview(publicDisclosure, 'localhost', true);
+  assert.deepEqual(preview, { ...publicDisclosure, marketing: 'localhost', institution: 'localhost' });
+  assert.deepEqual(planSurfaceNavigation('http://localhost:3000/login/center', 'institution', preview), { action: 'stay' });
+  assert.deepEqual(planSurfaceNavigation('http://localhost:3000/dashboard/center', 'institution', preview), { action: 'stay' });
+  assert.deepEqual(planSurfaceNavigation('http://localhost:3000/', 'marketing', preview), { action: 'stay' });
+  assert.deepEqual(planSurfaceNavigation('http://localhost:3000/login/candidate', 'exam', preview), {
+    action: 'redirect', url: `http://${hostnames.exam}:3000/login/candidate`,
+  });
+  assert.equal(surfaceHostnamesForLocalInstitutePreview(publicDisclosure, 'localhost', false), publicDisclosure, 'off unless enabled');
+  assert.equal(surfaceHostnamesForLocalInstitutePreview(publicDisclosure, hostnames.marketing, true), publicDisclosure, 'never on a real host');
+});
+
+test('local live preview exposes only read-only surface metadata and defines its UI warning flag', () => {
+  const vite = readFileSync(new URL('../../vite.config.ts', import.meta.url), 'utf8');
+  assert.match(vite, /pathname === '\/api\/surface-hostnames'/);
+  assert.match(vite, /'import\.meta\.env\.VITE_ELTNOY_LIVE_PREVIEW': JSON\.stringify\(livePreviewEnabled \? 'true' : 'false'\)/);
+  assert.match(vite, /Writes are disabled in this local live preview\./);
 });
 
 test('each portal role maps to its session-owning surface', () => {
