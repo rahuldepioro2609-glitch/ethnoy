@@ -9,6 +9,7 @@ import {
   type SmsDeliveryRequest,
   type SmsOtpCheckRequest,
 } from './verificationProviders.js';
+import { parseEgressAddress, postThroughEgress } from './egressTransport.js';
 
 function requiredSetting(config: ProviderAdapterConfig, name: string): string {
   const value = config.settings[name]?.trim();
@@ -34,36 +35,43 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 }
 
+const RESEND_EMAILS_URL = new URL('https://api.resend.com/emails');
+
 const resendRegistration: ProviderAdapterRegistration<import('./verificationProviders.js').EmailVerificationProvider> = {
   settings: ['RESEND_FROM_EMAIL'],
+  // Production: `resend-egress:8443`, the TLS passthrough proxy (api_public has no internet route).
+  // Unset: direct HTTPS (local development).
+  optionalSettings: ['RESEND_EGRESS_ADDRESS'],
   secretFiles: { apiKey: { env: 'RESEND_API_KEY_FILE', minBytes: 16 } },
   create(config) {
     const from = requiredSetting(config, 'RESEND_FROM_EMAIL');
     if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(from)) throw new Error('invalid provider configuration');
     const apiKey = requiredSecret(config, 'apiKey');
+    const egressSetting = config.settings.RESEND_EGRESS_ADDRESS;
+    const egress = egressSetting === undefined ? null : parseEgressAddress(egressSetting);
+    if (egressSetting !== undefined && !egress) throw new Error('invalid provider configuration');
     return {
       name: 'resend',
       async sendVerificationCode(request: EmailDeliveryRequest): Promise<void> {
         if (request.signal.aborted) throw new ProviderDeliveryError('provider_unavailable');
         const purpose = request.purpose === 'institute_email' ? 'Institute email verification' : 'Email verification';
         const code = escapeHtml(request.code);
-        const response = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'Idempotency-Key': request.correlationId,
-          },
-          body: JSON.stringify({
-            from,
-            to: [request.destination],
-            subject: `ELTNOY ${purpose}`,
-            text: `Your ELTNOY verification code is ${request.code}. Do not share this code. If you did not request it, ignore this email.`,
-            html: `<p>Your ELTNOY verification code is <strong>${code}</strong>.</p><p>Do not share this code. If you did not request it, ignore this email.</p>`,
-          }),
-          signal: request.signal,
+        const headers = {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': request.correlationId,
+        };
+        const body = JSON.stringify({
+          from,
+          to: [request.destination],
+          subject: `ELTNOY ${purpose}`,
+          text: `Your ELTNOY verification code is ${request.code}. Do not share this code. If you did not request it, ignore this email.`,
+          html: `<p>Your ELTNOY verification code is <strong>${code}</strong>.</p><p>Do not share this code. If you did not request it, ignore this email.</p>`,
         });
-        if (!response.ok) throw classifyHttpFailure(response.status);
+        const status = egress
+          ? await postThroughEgress(egress, RESEND_EMAILS_URL, headers, body, request.signal)
+          : (await fetch(RESEND_EMAILS_URL, { method: 'POST', headers, body, signal: request.signal })).status;
+        if (status < 200 || status > 299) throw classifyHttpFailure(status);
       },
     };
   },

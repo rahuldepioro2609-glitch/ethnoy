@@ -104,11 +104,12 @@ const requiredVariable = (value: unknown) => /^\$\{([A-Z0-9_]+):\?[^}]+\}$/.exec
 
 const EXPECTED_MEMBERSHIP: Record<string, string[]> = {
   nginx_public: ['public_app', 'public_ingress'],
-  api_public: ['db_public', 'public_app'],
+  api_public: ['db_public', 'email_egress_app', 'public_app'],
   nginx_admin: ['admin_app', 'admin_ingress'],
   api_admin: ['admin_app', 'db_admin'],
   postgres: ['db_admin', 'db_ops', 'db_public'],
   migrate: ['db_ops'],
+  resend_egress: ['email_egress', 'email_egress_app'],
 };
 
 test('parser: the whole Compose file is understood (services, secrets, networks, volumes)', () => {
@@ -120,9 +121,10 @@ test('parser: the whole Compose file is understood (services, secrets, networks,
 });
 
 test('networks: exactly the approved networks; application and database networks are internal', () => {
-  assert.deepEqual(Object.keys(networks).sort(), ['admin_app', 'admin_ingress', 'db_admin', 'db_ops', 'db_public', 'public_app', 'public_ingress']);
-  for (const name of ['public_app', 'admin_app', 'db_public', 'db_admin', 'db_ops']) assert.equal(networks[name].internal, 'true', name);
+  assert.deepEqual(Object.keys(networks).sort(), ['admin_app', 'admin_ingress', 'db_admin', 'db_ops', 'db_public', 'email_egress', 'email_egress_app', 'public_app', 'public_ingress']);
+  for (const name of ['public_app', 'admin_app', 'db_public', 'db_admin', 'db_ops', 'email_egress_app']) assert.equal(networks[name].internal, 'true', name);
   for (const name of ['public_ingress', 'admin_ingress']) assert.equal(networks[name].internal, undefined, `${name} must allow port publishing`);
+  assert.equal(networks.email_egress.internal, undefined, 'email_egress is the egress proxy\'s route out');
   for (const name of Object.keys(networks)) assert.equal(networks[name].driver, 'bridge', name);
   for (const [name, variable] of [['public_app', 'PUBLIC_APP_SUBNET'], ['admin_app', 'ADMIN_APP_SUBNET']] as const) {
     const config = asMap(networks[name].ipam).config as YamlMap[];
@@ -141,6 +143,8 @@ test('membership: the exact approved matrix (isolation by network membership)', 
   assert.deepEqual(members('db_public'), ['api_public', 'postgres']);
   assert.deepEqual(members('db_admin'), ['api_admin', 'postgres']);
   assert.deepEqual(members('db_ops'), ['migrate', 'postgres']);
+  assert.deepEqual(members('email_egress_app'), ['api_public', 'resend_egress'], 'email_egress_app: the public API and its egress proxy');
+  assert.deepEqual(members('email_egress'), ['resend_egress'], 'only the egress proxy has a route out');
 });
 
 test('reachability: the API services share no network; the Nginx services share no network; no Nginx on a database network', () => {
@@ -151,6 +155,10 @@ test('reachability: the API services share no network; the Nginx services share 
   assert.deepEqual(shared('nginx_admin', 'api_public'), [], 'Admin Nginx cannot reach the public API');
   assert.deepEqual(shared('nginx_public', 'api_public'), ['public_app']);
   assert.deepEqual(shared('nginx_admin', 'api_admin'), ['admin_app']);
+  assert.deepEqual(shared('resend_egress', 'api_public'), ['email_egress_app']);
+  for (const name of Object.keys(services).filter((other) => !['resend_egress', 'api_public'].includes(other))) {
+    assert.deepEqual(shared('resend_egress', name), [], `resend_egress shares no network with ${name}`);
+  }
   for (const nginx of ['nginx_public', 'nginx_admin']) {
     assert.deepEqual(shared(nginx, 'postgres'), [], `${nginx} cannot reach PostgreSQL`);
     assert.ok(!networksOf(nginx).some((network) => network.startsWith('db_')), nginx);
@@ -181,7 +189,7 @@ test('aliases and static addresses: "app" resolves only on each application netw
 });
 
 test('ports: no application or PostgreSQL port is published; Nginx binds only to required interface addresses', () => {
-  for (const name of ['api_public', 'api_admin', 'postgres', 'migrate']) {
+  for (const name of ['api_public', 'api_admin', 'postgres', 'migrate', 'resend_egress']) {
     assert.equal(service(name).ports, undefined, `${name} publishes nothing`);
     assert.equal(service(name).expose, undefined, `${name} declares no extra exposure`);
   }
@@ -202,6 +210,7 @@ test('images: both API services use the same image; Nginx and PostgreSQL need di
   assert.equal(service('api_admin').pull_policy, 'never', 'M-1: api_admin never pulls');
   assert.equal(requiredVariable(service('nginx_public').image), 'NGINX_IMAGE');
   assert.equal(service('nginx_admin').image, service('nginx_public').image);
+  assert.equal(service('resend_egress').image, service('nginx_public').image, 'egress proxy: the same digest-pinned Nginx image');
   assert.equal(requiredVariable(service('postgres').image), 'POSTGRES_IMAGE');
   assert.doesNotMatch(composeText, /@sha256:|:stable-alpine|postgres:17\b(?![^\n]*#)/, 'no literal tag or invented digest');
 });
@@ -353,7 +362,7 @@ test('AUTH C1.3-B: the nine SMS/claim settings are forwarded, optional and empty
     assert.doesNotMatch(composeText, new RegExp(`\\$\\{${name}:\\?`), `${name}: never a required substitution`);
   }
   // No other service receives any AUTH_* setting or provider credentials.
-  for (const name of ['api_admin', 'nginx_public', 'nginx_admin', 'migrate', 'postgres']) {
+  for (const name of ['api_admin', 'nginx_public', 'nginx_admin', 'migrate', 'postgres', 'resend_egress']) {
     const keys = service(name).environment === undefined ? [] : Object.keys(env(name));
     assert.deepEqual(keys.filter((key) => key.startsWith('AUTH_')), [], name);
   }
@@ -373,4 +382,20 @@ test('AUTH C1.4-B-2: the six email settings are forwarded, optional and empty by
     assert.doesNotMatch(composeText, new RegExp(`\\$\\{${name}:-[^}]`), `${name}: no default value`);
   }
   assert.equal(env('api_public').AUTH_EMAIL_PROVIDER, '${AUTH_EMAIL_PROVIDER:-}');
+});
+
+test('email egress: resend_egress is a hardened, secret-free TLS passthrough reachable only by api_public', () => {
+  const proxy = service('resend_egress');
+  assert.equal(proxy.user, '101:101');
+  assert.equal(proxy.read_only, 'true');
+  assert.deepEqual(asList(proxy.cap_drop), ['ALL']);
+  assert.deepEqual(asList(proxy.security_opt), ['no-new-privileges:true']);
+  assert.deepEqual(asList(proxy.entrypoint), ['nginx', '-g', 'daemon off;'], 'no image entrypoint scripts');
+  assert.deepEqual(asList(proxy.volumes), ['./deploy/nginx/resend-egress.conf:/etc/nginx/nginx.conf:ro'], 'its configuration only: no TLS, no documents');
+  for (const key of ['environment', 'secrets', 'ports', 'expose', 'depends_on', 'profiles']) assert.equal(proxy[key], undefined, key);
+  assert.deepEqual(asList(asMap(asMap(proxy.networks).email_egress_app).aliases), ['resend-egress']);
+  assert.deepEqual(asMap(asMap(proxy.networks).email_egress), {}, 'no alias on the outside network');
+  assert.deepEqual(asMap(asMap(service('api_public').networks).email_egress_app), {}, 'api_public: no alias on the egress link');
+  assert.equal(env('api_public').RESEND_EGRESS_ADDRESS, 'resend-egress:8443');
+  assert.equal(env('api_admin').RESEND_EGRESS_ADDRESS, undefined);
 });

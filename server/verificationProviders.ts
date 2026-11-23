@@ -169,6 +169,8 @@ export interface ProviderAdapterConfig {
 export interface ProviderAdapterRegistration<P> {
   /** Required ordinary settings (environment names). Credential-like names are refused. */
   readonly settings?: readonly string[];
+  /** Optional ordinary settings: passed only when set and non-empty; same naming rules as settings. */
+  readonly optionalSettings?: readonly string[];
   /** Required secret files: logical name -> { env: <NAME>_FILE, minBytes }. Read by core, not the adapter. */
   readonly secretFiles?: Readonly<Record<string, { readonly env: string; readonly minBytes: number }>>;
   /** Builds the adapter from its restricted configuration. May throw (the channel then stays disabled). */
@@ -193,7 +195,7 @@ const CREDENTIAL_WORD = /(^|_)(KEY|SECRET|TOKEN|PASSWORD)(_|$)/;
 
 /** True only for a well-formed declaration: _FILE secret names, no credential-like plain settings, no overlaps. */
 export function isValidAdapterDeclaration(registration: ProviderAdapterRegistration<unknown>): boolean {
-  const settings = registration.settings ?? [];
+  const settings = [...(registration.settings ?? []), ...(registration.optionalSettings ?? [])];
   const secretFiles = Object.values(registration.secretFiles ?? {});
   const names = [...settings, ...secretFiles.map((secret) => secret.env)];
   if (typeof registration.create !== 'function' || new Set(names).size !== names.length) return false;
@@ -217,6 +219,10 @@ function restrictedAdapterConfig(registration: ProviderAdapterRegistration<unkno
     const value = env[name];
     if (value === undefined || value.trim() === '') return null;
     settings[name] = value;
+  }
+  for (const name of registration.optionalSettings ?? []) {
+    const value = env[name];
+    if (value !== undefined && value.trim() !== '') settings[name] = value;
   }
   const secrets: Record<string, Buffer> = {};
   for (const [logical, secret] of Object.entries(registration.secretFiles ?? {})) {

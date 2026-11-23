@@ -6,6 +6,7 @@
 #   nginx_public : public_ingress, public_app      api_public : public_app, db_public  (port 4000 only)
 #   nginx_admin  : admin_ingress, admin_app        api_admin  : admin_app, db_admin    (port 4001 only)
 #   postgres     : db_public, db_admin, db_ops     migrate    : db_ops (profile ops)
+#   resend_egress: email_egress_app, email_egress  (api_public joins email_egress_app: its only way out)
 # The two API services share no network; no Nginx joins a database network; no application or
 # PostgreSQL port is published. Every address, subnet and image digest comes from a required
 # variable (see .env.example); none is preconfigured here.
@@ -111,6 +112,8 @@ services:
       AUTH_MOBILE_VERIFICATION: ${AUTH_MOBILE_VERIFICATION:-}
       RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
       RESEND_API_KEY_FILE: /run/secrets/resend_api_key
+      # Verification emails leave only through the TLS passthrough proxy (service resend_egress).
+      RESEND_EGRESS_ADDRESS: resend-egress:8443
       AUTH_OTP_HMAC_KEY_FILE: /run/secrets/auth_otp_hmac_key
     command:
       - sh
@@ -133,6 +136,7 @@ services:
           - app
         ipv4_address: ${API_PUBLIC_APP_ADDRESS:?Set API_PUBLIC_APP_ADDRESS to the static address of api_public on public_app}
       db_public: {}
+      email_egress_app: {}
     depends_on:
       postgres:
         condition: service_healthy
@@ -291,6 +295,35 @@ services:
       retries: 3
       start_period: 30s
 
+  # Outbound email only: a TLS passthrough proxy (deploy/nginx/resend-egress.conf) that relays
+  # api_public's connections to api.resend.com and nothing else (checked on the TLS SNI name). It
+  # never terminates TLS, so it never sees the API key, the recipient or the code. Same digest-pinned
+  # Nginx image; no ports published, no secrets, no environment, read-only.
+  resend_egress:
+    image: ${NGINX_IMAGE:?Set NGINX_IMAGE to a digest-pinned nginx-unprivileged image (Nginx 1.19.4 or later)}
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Runs Nginx directly (the image entrypoint scripts edit configuration files).
+    entrypoint:
+      - nginx
+      - -g
+      - "daemon off;"
+    volumes:
+      # Replaces the whole main configuration (stream proxy, no http block).
+      - ./deploy/nginx/resend-egress.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      email_egress_app:
+        aliases:
+          - resend-egress
+      email_egress: {}
+
   # One-off migration runner, never started by "up":
   #   docker compose --env-file .env.production --profile ops run --rm migrate
   # Runs as the dedicated migration identity and receives only the migrator secret. Run the role
@@ -417,6 +450,13 @@ networks:
   db_ops:
     driver: bridge
     internal: true
+  # Email egress: internal link between api_public and resend_egress, and the proxy's own
+  # non-internal network (its only route out). No other service joins either.
+  email_egress_app:
+    driver: bridge
+    internal: true
+  email_egress:
+    driver: bridge
 
 volumes:
   postgres_data:
