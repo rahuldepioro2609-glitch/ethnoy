@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   ADMIN_HOME_PATH,
+  instituteSignOutViewState,
   planSurfaceNavigation,
   requiredSurfaceForPath,
   surfaceForRole,
@@ -20,6 +21,15 @@ const hostnames: SurfaceHostnames = {
 };
 /** What a public surface answers: never the Admin hostname. */
 const publicDisclosure: DisclosedSurfaceHostnames = { marketing: hostnames.marketing, exam: hostnames.exam, institution: hostnames.institution };
+
+test('Institute sign-out requires the owning surface and a live Institute session', () => {
+  assert.equal(instituteSignOutViewState({ authLoading: true, hostnames, currentHostname: hostnames.institution, accountRole: 'center' }), 'checking');
+  assert.equal(instituteSignOutViewState({ authLoading: false, hostnames: null, currentHostname: hostnames.institution, accountRole: 'center' }), 'checking');
+  assert.equal(instituteSignOutViewState({ authLoading: false, hostnames, currentHostname: hostnames.marketing, accountRole: 'center' }), 'wrong_surface');
+  assert.equal(instituteSignOutViewState({ authLoading: false, hostnames, currentHostname: hostnames.institution, accountRole: null }), 'signed_out');
+  assert.equal(instituteSignOutViewState({ authLoading: false, hostnames, currentHostname: hostnames.institution, accountRole: 'candidate' }), 'signed_out');
+  assert.equal(instituteSignOutViewState({ authLoading: false, hostnames, currentHostname: 'INSTITUTE.EXAMPLE.TEST', accountRole: 'center' }), 'confirm');
+});
 
 test('each portal role maps to its session-owning surface', () => {
   assert.equal(surfaceForRole('candidate'), 'exam');
