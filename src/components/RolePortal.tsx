@@ -42,6 +42,7 @@ import { OnlineExamRunner } from './OnlineExamRunner';
 import { BrandLogo } from './BrandLogo';
 import { useLanguage } from '../utils/languageContext';
 import { NO_LINKED_APPLICATIONS_MESSAGE } from '../utils/candidateDashboard';
+import type { DisclosedSurfaceHostnames } from '../utils/surfaceNavigation';
 import { describeOnlineExamAttempt } from '../utils/onlineExamDashboard';
 import { adminPermissions, canLoadAdminSection, canSeeAdminTab, SUPER_ADMIN_ONLY_TEXT, withdrawalPaymentState } from '../utils/adminPermissions';
 import { DashboardSectionLoader, getDashboardSectionContentState, type DashboardSectionStatusMap } from '../utils/dashboardData';
@@ -183,11 +184,12 @@ const StudentEmailContactPanel: React.FC = () => {
 
 interface RoleLoginPageProps {
   role?: PortalRole;
+  surfaceHostnames?: DisclosedSurfaceHostnames | null;
   onBack: () => void;
   onLogin: (user: PortalUser) => void;
 }
 
-export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLogin }) => {
+export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, surfaceHostnames, onBack, onLogin }) => {
   const { t } = useLanguage();
   const [loginId, setLoginId] = useState('');
   const [fullName, setFullName] = useState('');
@@ -397,21 +399,29 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
               <h1 className="mt-2 text-3xl font-black text-[#0B2E59] sm:text-4xl">{t('Choose your portal')}</h1>
               <p className="mt-3 text-slate-600">{t('Select the account type shown on your ELTNOY credentials.')}</p>
             </div>
-            <div className="grid gap-5 md:grid-cols-2">
-              {(['candidate', 'center'] as const).map((item) => {
-                const itemDetail = roleDetails[item];
-                const RoleIcon = itemDetail.icon;
-                const colorClass = item === 'candidate' ? 'bg-emerald-600' : item === 'center' ? 'bg-sky-600' : 'bg-blue-800';
-                return (
-                  <a key={item} href={rolePath[item]} className="group rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
-                    <div className={`mb-5 inline-flex rounded-xl p-3 text-white ${colorClass}`}><RoleIcon className="h-7 w-7" /></div>
-                    <h2 className="text-xl font-extrabold text-[#0B2E59]">{t(itemDetail.title)}</h2>
-                    <p className="mt-2 min-h-12 text-sm leading-6 text-slate-600">{t(itemDetail.subtitle)}</p>
-                    <span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-emerald-700">{t('Continue to login')} <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" /></span>
-                  </a>
-                );
-              })}
-            </div>
+            {surfaceHostnames?.exam && surfaceHostnames.institution ? (
+              <div className="grid gap-5 md:grid-cols-2">
+                {(['candidate', 'center'] as const).map((item) => {
+                  const itemDetail = roleDetails[item];
+                  const RoleIcon = itemDetail.icon;
+                  const colorClass = item === 'candidate' ? 'bg-emerald-600' : 'bg-sky-600';
+                  const targetSurface = item === 'candidate' ? 'exam' : 'institution';
+                  const href = `${window.location.protocol}//${surfaceHostnames[targetSurface]}${rolePath[item]}`;
+                  return (
+                    <a key={item} href={href} className="group rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+                      <div className={`mb-5 inline-flex rounded-xl p-3 text-white ${colorClass}`}><RoleIcon className="h-7 w-7" /></div>
+                      <h2 className="text-xl font-extrabold text-[#0B2E59]">{t(itemDetail.title)}</h2>
+                      <p className="mt-2 min-h-12 text-sm leading-6 text-slate-600">{t(itemDetail.subtitle)}</p>
+                      <span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-emerald-700">{t('Continue to login')} <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" /></span>
+                    </a>
+                  );
+                })}
+              </div>
+            ) : (
+              <p role="status" className="mx-auto max-w-xl rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                {t('Secure portal links are loading. If this continues, refresh the page.')}
+              </p>
+            )}
           </>
         ) : (
           <div className="mx-auto grid max-w-4xl overflow-hidden rounded-3xl bg-white shadow-xl md:grid-cols-[0.9fr_1.1fr]">
@@ -466,7 +476,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
                 <div className="space-y-5">
                   <a href="/login" className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('All login options')}</a>
                   <h2 className="text-2xl font-extrabold text-[#0B2E59]">{t('Institute sign-in is unavailable')}</h2>
-                  <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">{t(unavailableMessage(role))}</div>
+                  <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">{t(unavailableMessage(role, providers))}</div>
                   {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
                   {role === 'center' && (
                     <button type="button" onClick={startInstituteResubmission} className="w-full text-center text-sm font-bold text-sky-800 hover:underline">
@@ -487,7 +497,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
                 />
               ) : (
                 <>
-              <a href="/login" className="mb-7 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('All login options')}</a>
+              <a href={role === 'official' ? '/' : '/login'} className="mb-7 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('All login options')}</a>
               <h2 className="text-2xl font-extrabold text-[#0B2E59]">
                 {t(isResubmitting ? 'Correct and resubmit institute details' : isRegistering ? 'Request institute access' : 'Sign in to your account')}
               </h2>

@@ -445,7 +445,7 @@ export default function App() {
   if (pathname.startsWith('/login')) {
     if (authLoading) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure session…</main>;
     if (loggedInUser) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Opening your dashboard…</main>;
-    return <RoleLoginPage role={loginRole} onBack={() => navigate('/')} onLogin={handlePortalLogin} />;
+    return <RoleLoginPage role={loginRole} surfaceHostnames={surfaceHostnames} onBack={() => navigate('/')} onLogin={handlePortalLogin} />;
   }
 
   if (pathname.startsWith('/dashboard/')) {

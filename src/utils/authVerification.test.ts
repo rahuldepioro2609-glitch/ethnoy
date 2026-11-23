@@ -1,20 +1,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { googleLinkNotice, googleNotice, isChallenge, secondsUntil, signInAvailable, studentGoogleSignInOption, studentGoogleSignUpOption, studentMobileOption, unavailableMessage, verificationMessage, type ProviderStatus } from './authVerification.ts';
+import { googleLinkNotice, googleNotice, isChallenge, secondsUntil, signInAvailable, studentMobileOption, studentGoogleSignInOption, studentGoogleSignUpOption, unavailableMessage, verificationMessage, type ProviderStatus } from './authVerification.ts';
 
 const none: ProviderStatus = { sms: { available: false, reason: 'x' }, email: { available: false, reason: 'x' }, google: { available: false, reason: 'x' } };
 const smsOnly: ProviderStatus = { ...none, sms: { available: true, reason: null } };
+const emailOnly: ProviderStatus = { ...none, email: { available: true, reason: null } };
 const both: ProviderStatus = { ...smsOnly, email: { available: true, reason: null } };
 
 test('sign-in availability follows the server status; Super Admin/Official is never affected', () => {
   assert.equal(signInAvailable('candidate', null), null, 'unknown until the server answers');
   assert.equal(signInAvailable('candidate', none), false);
-  assert.equal(signInAvailable('candidate', smsOnly), true);
+  assert.equal(signInAvailable('candidate', smsOnly), true, 'Students need SMS verification');
+  assert.equal(signInAvailable('candidate', emailOnly), false, 'email alone cannot verify Student sign-in');
   assert.equal(signInAvailable('center', smsOnly), false, 'institutes need mobile AND email');
   assert.equal(signInAvailable('center', both), true);
   assert.equal(signInAvailable('official', none), true);
-  assert.match(unavailableMessage('candidate'), /mobile/);
-  assert.match(unavailableMessage('center'), /mobile and email/i);
+  assert.match(unavailableMessage('candidate'), /mobile/i);
+  assert.match(unavailableMessage('center'), /email/i);
 });
 
 test('error codes map to fixed messages; attempts remaining are shown; unknown codes use the server text', () => {
@@ -42,11 +44,12 @@ test('Student options stay visible with an explicit state: checking, available o
   assert.deepEqual(studentMobileOption(null), { state: 'checking' });
   const mobileOff = studentMobileOption(none);
   assert.equal(mobileOff.state, 'unavailable');
-  assert.match(mobileOff.state === 'unavailable' ? mobileOff.reason : '', /not been set up/);
+  assert.match(mobileOff.state === 'unavailable' ? mobileOff.reason : '', /mobile.*verification/i);
   assert.deepEqual(studentMobileOption(smsOnly), { state: 'available' });
   const googleOff = studentGoogleSignInOption({ ...smsOnly, google: { available: false, reason: 'Google sign-in is not configured.' } });
   assert.deepEqual(googleOff, { state: 'unavailable', reason: 'Google sign-in is not configured.' }, "the server's reason is shown");
   assert.deepEqual(studentGoogleSignInOption({ ...smsOnly, google: { available: true, reason: null } }), { state: 'available' });
+  assert.deepEqual(studentGoogleSignInOption({ ...none, google: { available: true, reason: null } }), { state: 'unavailable', reason: mobileOff.state === 'unavailable' ? mobileOff.reason : '' }, 'Google must still be able to finish with SMS OTP');
   const signUp = studentGoogleSignUpOption();
   assert.equal(signUp.state, 'unavailable', 'the server never creates accounts from Google');
   assert.match(signUp.state === 'unavailable' ? signUp.reason : '', /mobile number/);

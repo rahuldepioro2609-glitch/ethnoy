@@ -28,14 +28,20 @@ export function signInAvailable(role: PortalSignInRole, providers: ProviderStatu
   return role === 'candidate' ? providers.sms.available : providers.sms.available && providers.email.available;
 }
 
-export function unavailableMessage(role: PortalSignInRole): string {
-  return role === 'candidate'
-    ? 'Student sign-in and registration are temporarily unavailable. Mobile verification has not been set up yet, and students can only sign in after verifying their mobile number.'
-    : 'Institute sign-in and registration are temporarily unavailable. Mobile and email verification have not been set up yet, and institutes can only enter the portal after both are verified.';
+export function unavailableMessage(role: PortalSignInRole, providers: ProviderStatus | null = null): string {
+  if (role === 'candidate') {
+    return 'Student sign-in and registration are temporarily unavailable. Mobile verification has not been set up yet, and students can only sign in after verifying their mobile number.';
+  }
+  if (providers) {
+    const missing = [!providers.sms.available ? 'mobile' : null, !providers.email.available ? 'email' : null].filter(Boolean);
+    if (missing.length) return `Institute sign-in and registration are paused until ${missing.join(' and ')} verification is configured.`;
+  }
+  return 'Institute sign-in and registration are temporarily unavailable. Mobile and email verification have not been set up yet, and institutes can only enter the portal after both are verified.';
 }
 
 const MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   OTP_PROVIDER_NOT_CONFIGURED: 'Mobile verification is not available yet. Please try again later.',
+  PROVIDER_CHECK_FAILED: 'Code verification is temporarily unavailable. Please try again.',
   EMAIL_PROVIDER_NOT_CONFIGURED: 'Email verification is not available yet. Please try again later.',
   GOOGLE_OAUTH_NOT_CONFIGURED: 'Google sign-in is not available.',
   PROVIDER_DELIVERY_FAILED: 'The verification code could not be sent. Please sign in again later.',
@@ -48,6 +54,8 @@ const MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   TOO_MANY_VERIFICATION_REQUESTS: 'Too many verification requests for this account. Please try again later.',
   NO_VERIFICATION_IN_PROGRESS: 'No verification is in progress. Please sign in again.',
   INVALID_MOBILE: 'Enter a valid 10-digit Indian mobile number.',
+  INVALID_EMAIL: 'Enter a valid email address.',
+  EMAIL_REQUIRED: 'Enter your email address to verify this Student account.',
   RATE_LIMITED: 'Too many attempts. Please wait and try again.',
   APPROVAL_PENDING: 'Your institute registration is awaiting approval.',
   ACCOUNT_REJECTED: 'This account was not approved. Contact the portal administrator.',
@@ -72,7 +80,7 @@ export const STUDENT_MOBILE_UNAVAILABLE = 'Mobile sign-in is not available yet: 
 export const STUDENT_GOOGLE_UNAVAILABLE = 'Google sign-in has not been set up.';
 export const STUDENT_GOOGLE_SIGN_UP_UNSUPPORTED = 'Google cannot create a new account. Create your account with your mobile number; after you sign in, you can link Google from your dashboard.';
 
-/** The mobile (password + OTP) option: available only when the server reports SMS verification. */
+/** Student sign-in and registration use mobile OTP. */
 export function studentMobileOption(providers: ProviderStatus | null): OptionState {
   if (!providers) return { state: 'checking' };
   return providers.sms.available ? { state: 'available' } : { state: 'unavailable', reason: STUDENT_MOBILE_UNAVAILABLE };
@@ -81,6 +89,7 @@ export function studentMobileOption(providers: ProviderStatus | null): OptionSta
 /** "Continue with Google" for sign-in: only linked accounts, and it still ends with the mobile code. */
 export function studentGoogleSignInOption(providers: ProviderStatus | null): OptionState {
   if (!providers) return { state: 'checking' };
+  if (!providers.sms.available) return { state: 'unavailable', reason: STUDENT_MOBILE_UNAVAILABLE };
   return providers.google.available ? { state: 'available' } : { state: 'unavailable', reason: providers.google.reason ?? STUDENT_GOOGLE_UNAVAILABLE };
 }
 
