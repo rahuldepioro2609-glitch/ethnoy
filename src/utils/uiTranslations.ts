@@ -313,7 +313,13 @@ const emailOnlyVerificationTranslations: Record<string, TranslationSet> = {
   'Student sign-in and registration are temporarily unavailable. Email verification has not been set up yet, and students can only sign in after confirming a code sent to their email.': { Hindi: 'विद्यार्थी साइन इन और पंजीकरण अस्थायी रूप से उपलब्ध नहीं हैं। ईमेल सत्यापन अभी सेट नहीं किया गया है, और विद्यार्थी अपने ईमेल पर भेजे गए कोड की पुष्टि के बाद ही साइन इन कर सकते हैं।', Kannada: 'ವಿದ್ಯಾರ್ಥಿ ಸೈನ್ ಇನ್ ಮತ್ತು ನೋಂದಣಿ ತಾತ್ಕಾಲಿಕವಾಗಿ ಲಭ್ಯವಿಲ್ಲ. ಇಮೇಲ್ ಪರಿಶೀಲನೆಯನ್ನು ಇನ್ನೂ ಹೊಂದಿಸಲಾಗಿಲ್ಲ, ಮತ್ತು ವಿದ್ಯಾರ್ಥಿಗಳು ತಮ್ಮ ಇಮೇಲ್‌ಗೆ ಕಳುಹಿಸಿದ ಕೋಡ್ ದೃಢೀಕರಿಸಿದ ನಂತರವೇ ಸೈನ್ ಇನ್ ಮಾಡಬಹುದು.', Bengali: 'শিক্ষার্থী সাইন ইন ও নিবন্ধন সাময়িকভাবে বন্ধ আছে। ইমেল যাচাই এখনও চালু করা হয়নি, এবং শিক্ষার্থীরা তাদের ইমেলে পাঠানো কোড নিশ্চিত করার পরেই সাইন ইন করতে পারবে।', Marathi: 'विद्यार्थी साइन इन आणि नोंदणी तात्पुरती उपलब्ध नाही. ईमेल पडताळणी अद्याप सेट केलेली नाही, आणि विद्यार्थी त्यांच्या ईमेलवर पाठवलेल्या कोडची पुष्टी केल्यानंतरच साइन इन करू शकतात.' },
 };
 
+/** Public-site link back to the Institute dashboard (display-only hint, utils/portalHint.ts). */
+const portalHintTranslations: Record<string, TranslationSet> = {
+  'Return to the institute dashboard': { Hindi: 'संस्थान डैशबोर्ड पर वापस जाएँ', Kannada: 'ಸಂಸ್ಥೆಯ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್‌ಗೆ ಹಿಂತಿರುಗಿ', Bengali: 'প্রতিষ্ঠানের ড্যাশবোর্ডে ফিরে যান', Marathi: 'संस्था डॅशबोर्डवर परत जा' },
+};
+
 const translations: Record<string, TranslationSet> = {
+  ...portalHintTranslations,
   ...emailOnlyVerificationTranslations,
   ...instituteDashboardTranslations,
   ...baseTranslations,

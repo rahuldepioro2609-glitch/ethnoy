@@ -30,6 +30,7 @@ import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './
 import { LANGUAGE_LOCALES, Language } from './utils/languageLogic';
 import { useLanguage } from './utils/languageContext';
 import { ADMIN_HOME_PATH, planSurfaceNavigation, requiredSurfaceForPath, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
+import { clearPortalHintInBrowser, readPortalHintFromBrowser, type PortalHint } from './utils/portalHint';
 
 function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
   const examDate = String(exam.examDate).slice(0, 10);
@@ -108,6 +109,8 @@ export default function App() {
   // GET /api/surface-hostnames: public surfaces omit the private Admin hostname.
   const [surfaceHostnames, setSurfaceHostnames] = useState<DisclosedSurfaceHostnames | null>(null);
   const [surfaceRoutingFailed, setSurfaceRoutingFailed] = useState(false);
+  // Display-only "signed in on the Institute site" hint (utils/portalHint.ts). Never a credential.
+  const [portalHint, setPortalHint] = useState<PortalHint | null>(() => readPortalHintFromBrowser());
 
   const navigate = (path: string) => {
     window.history.pushState({}, '', path);
@@ -242,6 +245,8 @@ export default function App() {
   const handleLogout = async () => {
     try {
       await apiRequest<void>('/api/auth/logout', { method: 'POST' });
+      clearPortalHintInBrowser();
+      setPortalHint(null);
       setLoggedInUser(null);
       navigate('/');
     } catch (error) {
@@ -407,6 +412,22 @@ export default function App() {
     }
   }, [authLoading, loggedInUser, pathname, platformStaffPage]);
 
+  // Only the Institute site can see the Institute session. If it finds none (expired, signed out
+  // elsewhere), the public "back to dashboard" hint is stale: remove it.
+  useEffect(() => {
+    if (authLoading || loggedInUser || !surfaceHostnames?.institution) return;
+    if (window.location.hostname !== surfaceHostnames.institution) return;
+    clearPortalHintInBrowser();
+    setPortalHint(null);
+  }, [authLoading, loggedInUser, surfaceHostnames]);
+
+  // Public site: "<Institute> → dashboard" under the logo, linking to the Institute site (never to an
+  // address taken from the cookie). Not shown when someone is signed in on this site itself.
+  const instituteReturn = !loggedInUser && portalHint && surfaceHostnames?.institution
+    && window.location.hostname !== surfaceHostnames.institution
+    ? { name: portalHint.name, href: `${window.location.protocol}//${surfaceHostnames.institution}/dashboard/center` }
+    : null;
+
   const handlePortalLogin = (user: { name: string; id: string; role: PortalRole; isSuperAdmin: boolean }) => {
     const roleLabels: Record<PortalRole, string> = {
       candidate: 'Registered Candidate',
@@ -503,6 +524,7 @@ export default function App() {
         onOpenResultsPortal={handleOpenResults}
         onOpenAnswerKeyPortal={handleOpenAnswerKey}
         onOpenInstituteDashboard={() => navigate('/login/center')}
+        instituteReturn={instituteReturn}
         examinations={publishedExams}
         activeNavTab={activeNavTab}
         setActiveNavTab={setActiveNavTab}
