@@ -19,16 +19,17 @@ import { NoticeDetailModal } from './components/NoticeDetailModal';
 import { ExamApplyModal } from './components/ExamApplyModal';
 import { CandidateResultModal } from './components/CandidateResultModal';
 import { AnswerKeyObjectionModal } from './components/AnswerKeyObjectionModal';
-import { NotFoundPage, ResetPasswordPage, VerifyEmailPage } from './components/AccountPages';
-import { PrivacyPage, TermsPage } from './components/LegalPages';
 import { FeedbackSlideOut } from './components/FeedbackSlideOut';
 import { ExamItem, NoticeItem } from './data/portalData';
 import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
-import { ApiError, apiRequest } from './api';
+import { ApiError, apiRequest, apiRequestWithMeta } from './api';
 import { PortalRole, RoleDashboard, RoleLoginPage } from './components/RolePortal';
+import { PlatformStaffPortal } from './components/staff/PlatformStaffPortal';
+import { isPlatformStaffPath } from './utils/staffAccess';
 import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './utils/examSchedule';
-import { LANGUAGE_LOCALES } from './utils/languageLogic';
-import { useTranslation } from './i18n';
+import { LANGUAGE_LOCALES, Language } from './utils/languageLogic';
+import { useLanguage } from './utils/languageContext';
+import { ADMIN_HOME_PATH, planSurfaceNavigation, requiredSurfaceForPath, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
 
 function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
   const examDate = String(exam.examDate).slice(0, 10);
@@ -80,7 +81,7 @@ export default function App() {
   const [pathname, setPathname] = useState(window.location.pathname);
   const [fontSizeLevel, setFontSizeLevel] = useState<number>(0);
   const [highContrast, setHighContrast] = useState<boolean>(false);
-  const { language, t } = useTranslation();
+  const { language, t } = useLanguage();
   const [activeNavTab, setActiveNavTab] = useState<string>('Home');
 
   // Active Modals
@@ -101,17 +102,12 @@ export default function App() {
   const [noticeLoadError, setNoticeLoadError] = useState<string | null>(null);
 
   // User state
-  const [loggedInUser, setLoggedInUser] = useState<{ name: string; role: string; id: string; accountRole: PortalRole } | null>(null);
+  const [loggedInUser, setLoggedInUser] = useState<{ name: string; role: string; id: string; accountRole: PortalRole; isSuperAdmin: boolean } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [systemAlert, setSystemAlert] = useState<string | null>(null);
-
-  // null until known; false on public hosts, where staff pages must not render.
-  const [staffPortal, setStaffPortal] = useState<boolean | null>(null);
-  useEffect(() => {
-    apiRequest<{ staffPortal?: boolean }>('/api/auth/options')
-      .then((options) => setStaffPortal(options.staffPortal !== false))
-      .catch(() => setStaffPortal(false));
-  }, []);
+  // GET /api/surface-hostnames: public surfaces omit the private Admin hostname.
+  const [surfaceHostnames, setSurfaceHostnames] = useState<DisclosedSurfaceHostnames | null>(null);
+  const [surfaceRoutingFailed, setSurfaceRoutingFailed] = useState(false);
 
   const navigate = (path: string) => {
     window.history.pushState({}, '', path);
@@ -148,13 +144,23 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // On the Exam surface GET /api/exams needs a Student session, so the list is reloaded whenever a
+  // Student signs in or out (not for Institute/Official sign-ins). Only the latest request may update
+  // state, and a failed load clears the list so lookups show their unavailable state.
+  const candidateSessionKey = loggedInUser?.accountRole === 'candidate' ? loggedInUser.id : null;
   useEffect(() => {
+    let active = true;
     apiRequest<{ exams: Record<string, unknown>[] }>('/api/exams')
-      .then(({ exams }) => setPublishedExams(exams.map((exam) => mapPublishedExam(exam, LANGUAGE_LOCALES[language]))))
+      .then(({ exams }) => {
+        if (active) setPublishedExams(exams.map((exam) => mapPublishedExam(exam, LANGUAGE_LOCALES[language])));
+      })
       .catch((error: unknown) => {
-        setSystemAlert(error instanceof Error ? error.message : t('app.loadExamsError'));
+        if (!active) return;
+        setPublishedExams([]);
+        setSystemAlert(error instanceof Error ? error.message : 'Could not load published exam forms.');
       });
-  }, [language]);
+    return () => { active = false; };
+  }, [language, candidateSessionKey]);
 
   useEffect(() => {
     let active = true;
@@ -165,7 +171,7 @@ export default function App() {
         })
         .catch((error: unknown) => {
           if (active) {
-            setSystemAlert(error instanceof Error ? error.message : t('app.loadInstituteFormsError'));
+            setSystemAlert(error instanceof Error ? error.message : 'Could not load approved institute forms.');
           }
         });
     };
@@ -190,7 +196,7 @@ export default function App() {
         })
         .catch((error: unknown) => {
           if (!active) return;
-          setNoticeLoadError(error instanceof Error ? error.message : t('app.loadNoticesError'));
+          setNoticeLoadError(error instanceof Error ? error.message : 'Could not load published notices.');
         });
     };
     loadNotices();
@@ -204,20 +210,30 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
-    apiRequest<{
-      user: { loginId: string; name: string; role: 'candidate' | 'center' | 'official' };
+    // apiRequestWithMeta (rather than apiRequest) so the error carries the server's `code`.
+    apiRequestWithMeta<{
+      user: { loginId: string; name: string; role: 'candidate' | 'center' | 'official'; isSuperAdmin: boolean };
     }>('/api/auth/me')
-      .then(({ user }) => {
+      .then(({ data: { user } }) => {
         const roleLabels = {
           candidate: 'Registered Candidate',
           center: 'Test Center Admin',
           official: 'Assessment Official',
         };
-        setLoggedInUser({ name: user.name, role: roleLabels[user.role], id: user.loginId, accountRole: user.role });
+        setLoggedInUser({
+          name: user.name,
+          role: roleLabels[user.role],
+          id: user.loginId,
+          accountRole: user.role,
+          isSuperAdmin: user.isSuperAdmin,
+        });
       })
       .catch((error: unknown) => {
-        if (!(error instanceof ApiError && error.status === 401)) {
-          setSystemAlert(error instanceof Error ? error.message : t('app.accountServiceError'));
+        // AUTH C1.9.2: an Official session without MFA (for example one issued before MFA) is refused by
+        // the server, which also clears its cookie. That is a signed-out state, not a system fault.
+        const signedOut = error instanceof ApiError && (error.status === 401 || (error.status === 403 && error.code === 'ADMIN_MFA_REQUIRED'));
+        if (!signedOut) {
+          setSystemAlert(error instanceof Error ? error.message : 'Could not connect to the account service.');
         }
       })
       .finally(() => setAuthLoading(false));
@@ -229,7 +245,7 @@ export default function App() {
       setLoggedInUser(null);
       navigate('/');
     } catch (error) {
-      setSystemAlert(error instanceof Error ? error.message : t('app.signOutError'));
+      setSystemAlert(error instanceof Error ? error.message : 'Could not sign out. Please try again.');
     }
   };
 
@@ -239,7 +255,7 @@ export default function App() {
       return;
     }
     if (loggedInUser) {
-      setSystemAlert(t('app.studentSignInRequired'));
+      setSystemAlert('Please sign in with a student account to use this service.');
       return;
     }
     setPendingServiceAction(() => action);
@@ -258,7 +274,7 @@ export default function App() {
         {
           const openExam = publishedExams.find((exam) => exam.isButtonActive);
           if (openExam) handleOpenExamApply(openExam);
-          else setSystemAlert(t('app.noOpenApplications'));
+          else setSystemAlert('No exam applications are currently open.');
         }
         break;
       case 'login-student':
@@ -302,9 +318,12 @@ export default function App() {
     requireCandidateLogin(() => setActiveApplyExam(exam));
   };
 
-  // The helpdesk is open to everyone, including people who cannot sign in.
   const handleOpenGrievance = () => {
-    setIsFeedbackOpen(true);
+    requireCandidateLogin(() => {
+      setIsFeedbackOpen(true);
+      setSystemAlert('Candidate helpdesk is open. Submit your issue using the feedback panel.');
+      setTimeout(() => setSystemAlert(null), 6000);
+    });
   };
 
   const handleNoticeCategoryFilter = (category: string) => {
@@ -326,20 +345,69 @@ export default function App() {
   const dashboardRole = pathname.match(/^\/dashboard\/(candidate|center|official)\/?$/)?.[1] as PortalRole | undefined;
   const loginRole = pathname.match(/^\/login\/(candidate|center|official)\/?$/)?.[1] as PortalRole | undefined;
 
+  // SM-1: Platform Staff pages have their own session and are never redirected by portal sessions.
+  const platformStaffPage = isPlatformStaffPath(pathname);
+  const pathSurface = requiredSurfaceForPath(pathname);
+  // The Exam root is the candidate home. Wait for its host-only session lookup before
+  // deciding whether a root visit belongs on Exam or public Marketing.
+  const requiredSurface = platformStaffPage ? 'admin' : pathname === '/'
+    ? authLoading ? null : loggedInUser?.accountRole === 'candidate' ? 'exam' : 'marketing'
+    : pathSurface;
+
+  // Each role's session cookie belongs to its own hostname. Public surfaces disclose only the public
+  // hostnames, so the public site can never route to (or learn) the private Admin hostname.
   useEffect(() => {
-    if (authLoading || !pathname.startsWith('/dashboard/')) return;
+    let active = true;
+    apiRequest<{ hostnames: DisclosedSurfaceHostnames }>('/api/surface-hostnames')
+      .then(({ hostnames }) => {
+        if (active) setSurfaceHostnames(hostnames);
+      })
+      .catch(() => {
+        if (active) setSurfaceRoutingFailed(true);
+      });
+    return () => { active = false; };
+  }, []);
+
+  const navigationPlan = surfaceHostnames
+    ? planSurfaceNavigation(window.location.href, requiredSurface, surfaceHostnames)
+    : null;
+  const navigationKey = navigationPlan
+    ? `${navigationPlan.action}:${navigationPlan.action === 'redirect' ? navigationPlan.url : pathname}`
+    : null;
+
+  // Move role flows to their own host, return signed-out visitors to Marketing for public content, and
+  // keep the Admin host on Admin sign-in instead of public pages.
+  useEffect(() => {
+    if (!navigationPlan) return;
+    if (navigationPlan.action === 'redirect') window.location.assign(navigationPlan.url);
+    else if (navigationPlan.action === 'admin_home') {
+      window.history.replaceState({}, '', ADMIN_HOME_PATH);
+      setPathname(ADMIN_HOME_PATH);
+    } else if (navigationPlan.action === 'invalid') {
+      setSystemAlert('The portal hostname configuration is invalid. Please contact support.');
+    }
+  }, [navigationKey]);
+
+  useEffect(() => {
+    if (surfaceRoutingFailed && requiredSurface && requiredSurface !== 'admin') {
+      setSystemAlert('Could not load portal routing configuration. Please try again.');
+    }
+  }, [surfaceRoutingFailed, requiredSurface]);
+
+  useEffect(() => {
+    if (authLoading || platformStaffPage || !pathname.startsWith('/dashboard/')) return;
     if (!dashboardRole || !loggedInUser || loggedInUser.accountRole !== dashboardRole) {
       navigate(loggedInUser ? `/dashboard/${loggedInUser.accountRole}` : `/login/${dashboardRole ?? 'candidate'}`);
     }
-  }, [authLoading, dashboardRole, loggedInUser, pathname]);
+  }, [authLoading, dashboardRole, loggedInUser, pathname, platformStaffPage]);
 
   useEffect(() => {
-    if (!authLoading && loggedInUser && pathname.startsWith('/login')) {
+    if (!authLoading && loggedInUser && !platformStaffPage && pathname.startsWith('/login')) {
       navigate(`/dashboard/${loggedInUser.accountRole}`);
     }
-  }, [authLoading, loggedInUser, pathname]);
+  }, [authLoading, loggedInUser, pathname, platformStaffPage]);
 
-  const handlePortalLogin = (user: { name: string; id: string; role: PortalRole }) => {
+  const handlePortalLogin = (user: { name: string; id: string; role: PortalRole; isSuperAdmin: boolean }) => {
     const roleLabels: Record<PortalRole, string> = {
       candidate: 'Registered Candidate',
       center: 'Test Center Admin',
@@ -355,44 +423,44 @@ export default function App() {
     }
   };
 
-  if (pathname === '/reset-password') {
-    return <ResetPasswordPage onHome={() => navigate('/')} onSignIn={(role) => { setLoggedInUser(null); navigate(`/login/${role}`); }} />;
+  // Admin and Platform Staff pages render only on the Admin host, confirmed by the server's surface
+  // answer. Anywhere else (the public site, a static preview, a failed lookup) they are "not found".
+  if (requiredSurface === 'admin' && navigationPlan?.action !== 'stay') {
+    if (surfaceRoutingFailed || navigationPlan?.action === 'not_found') {
+      return (
+        <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-700">
+          <h1 className="text-2xl font-black text-[#0B2E59]">Page not found</h1>
+          <p className="mt-2 text-sm text-slate-600">This page is not available on this website.</p>
+          <button type="button" onClick={() => navigate('/')} className="mt-6 rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-600">Go to the home page</button>
+        </main>
+      );
+    }
+    return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure connection…</main>;
   }
 
-  const isStaffPath = /^\/(login|dashboard)\/official\/?$/i.test(pathname);
-  if (isStaffPath && staffPortal === null) {
-    return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('common.loading')}</main>;
-  }
-  if (isStaffPath && staffPortal === false) {
-    return <NotFoundPage onHome={() => navigate('/')} />;
-  }
-
-  if (pathname === '/privacy') {
-    return <PrivacyPage onHome={() => navigate('/')} />;
-  }
-
-  if (pathname === '/terms') {
-    return <TermsPage onHome={() => navigate('/')} />;
-  }
-
-  if (pathname === '/verify-email') {
-    return <VerifyEmailPage onHome={() => navigate('/')} />;
+  if (platformStaffPage) {
+    return <PlatformStaffPortal pathname={pathname} navigate={navigate} onHome={() => navigate('/')} />;
   }
 
   if (pathname.startsWith('/login')) {
-    if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('app.checkingSession')}</main>;
-    if (loggedInUser) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('app.openingDashboard')}</main>;
-    return <RoleLoginPage role={loginRole} onBack={() => navigate('/')} onLogin={handlePortalLogin} />;
+    if (authLoading) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure session…</main>;
+    if (loggedInUser) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Opening your dashboard…</main>;
+    return <RoleLoginPage role={loginRole} surfaceHostnames={surfaceHostnames} onBack={() => navigate('/')} onLogin={handlePortalLogin} />;
   }
 
   if (pathname.startsWith('/dashboard/')) {
-    if (authLoading) return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('app.checkingSession')}</main>;
+    if (authLoading) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure session…</main>;
     if (!loggedInUser || !dashboardRole || loggedInUser.accountRole !== dashboardRole) {
-      return <main className="min-h-screen bg-[#eef5fa] p-10 text-center text-slate-600">{t('app.redirectingSignIn')}</main>;
+      return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Redirecting to sign in…</main>;
     }
     return (
       <RoleDashboard
-        user={{ name: loggedInUser.name, id: loggedInUser.id, role: loggedInUser.accountRole }}
+        user={{
+          name: loggedInUser.name,
+          id: loggedInUser.id,
+          role: loggedInUser.accountRole,
+          isSuperAdmin: loggedInUser.isSuperAdmin,
+        }}
         onLogout={handleLogout}
         onHome={() => navigate('/')}
         onOpenAdmitCard={() => {
@@ -410,7 +478,7 @@ export default function App() {
   return (
     <div
       className={`min-h-screen flex flex-col transition-all ${loggedInUser ? 'pb-24' : ''} ${getFontSizeClass()} ${
-        highContrast ? 'bg-black text-amber-300' : 'bg-white text-slate-900'
+        highContrast ? 'bg-black text-amber-300' : 'bg-[#F5F7FB] text-slate-900'
       }`}
     >
       {/* Top Utility Bar (Dark Navy #0B2E59): Welcome | Helpdesk | Phone | Email | Language */}
@@ -440,12 +508,15 @@ export default function App() {
         setActiveNavTab={setActiveNavTab}
       />
 
+      <div role="note" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-950">
+        {t('Preview environment: exam schedules, center details, and answer keys may contain sample content. Verify all information before accepting public applications.')}
+      </div>
 
-      <section id="latest-updates" aria-label={t('app.latestUpdatesAria')} className="border-b border-slate-200 bg-white">
+      <section aria-label="Latest portal updates" className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-[1440px] flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:gap-3 sm:px-6 lg:px-8">
           <div className="flex shrink-0 items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-[#0B2E59]">
             <BellRing className="h-4 w-4 text-amber-600" />
-            <span>{t('app.latestUpdates')}</span>
+            <span>{t('Latest updates')}</span>
           </div>
           <div className="min-w-0 flex-1 overflow-hidden">
             {portalNotices.length ? <div className="portal-news-track flex w-max items-center gap-6 py-1">
@@ -455,19 +526,19 @@ export default function App() {
                 type="button"
                 onClick={() => setActiveNotice(notice)}
                 className="max-w-[280px] truncate text-left text-xs font-semibold text-slate-700 transition hover:text-emerald-700 sm:max-w-[360px]"
-                aria-label={t('app.openNotice', { title: notice.title })}
+                aria-label={`Open ${notice.category} notice: ${notice.title}`}
               >
                 <span className="mr-1.5 text-emerald-700">•</span>{notice.title}
               </button>
             ))}
-            </div> : <p role={noticeLoadError ? 'alert' : 'status'} className="py-1 text-xs text-slate-500">{noticeLoadError ? t('app.noticesFailed', { error: noticeLoadError }) : t('app.noUpdates')}</p>}
+            </div> : <p role={noticeLoadError ? 'alert' : 'status'} className="py-1 text-xs text-slate-500">{noticeLoadError ? `Notices could not be loaded: ${noticeLoadError}` : t('No updates have been published yet.')}</p>}
           </div>
           <button
             type="button"
             onClick={() => document.getElementById('exam-list')?.scrollIntoView({ behavior: 'smooth' })}
             className="hidden shrink-0 items-center gap-1 text-xs font-bold text-emerald-800 hover:text-emerald-600 sm:inline-flex"
           >
-            <CalendarDays className="h-4 w-4" /> {t('app.examCalendar')}
+            <CalendarDays className="h-4 w-4" /> {t('Exam calendar')}
           </button>
         </div>
       </section>
@@ -486,7 +557,7 @@ export default function App() {
             <div className="min-w-0 flex-1 leading-tight">
               <p className="truncate text-sm font-bold text-slate-900">{loggedInUser.name}</p>
               <p className="truncate text-[11px] font-medium text-slate-500">
-                {t(`app.roleLabel.${loggedInUser.accountRole}`)} <span className="px-1 text-slate-300">·</span> {t('app.idLabel', { id: loggedInUser.id })}
+                {loggedInUser.role} <span className="px-1 text-slate-300">·</span> ID: {loggedInUser.id}
               </p>
             </div>
             <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide sm:inline-flex ${
@@ -494,15 +565,15 @@ export default function App() {
                 : loggedInUser.accountRole === 'center' ? 'bg-sky-50 text-sky-800'
                   : 'bg-emerald-50 text-emerald-800'
             }`}>
-              {t(`app.roleBadge.${loggedInUser.accountRole}`)}
+              {loggedInUser.accountRole === 'official' ? 'Admin' : loggedInUser.accountRole === 'center' ? 'Institute' : 'Student'}
             </span>
             <button
               onClick={() => void handleLogout()}
               className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full bg-slate-900 px-4 text-xs font-bold text-white transition hover:bg-slate-700"
-              aria-label={t('app.signOut')}
+              aria-label="Sign out"
             >
               <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">{t('app.signOut')}</span>
+              <span className="hidden sm:inline">{t('Sign out')}</span>
             </button>
           </div>
         </div>
@@ -517,7 +588,7 @@ export default function App() {
             onClick={() => setSystemAlert(null)}
             className="ml-3 text-slate-300 hover:text-white underline text-[11px]"
           >
-            {t('app.dismiss')}
+            Dismiss
           </button>
         </div>
       )}
@@ -529,7 +600,7 @@ export default function App() {
           onOpenApply={() => {
             const openExam = publishedExams.find((exam) => exam.isButtonActive);
             if (openExam) handleOpenExamApply(openExam);
-            else setSystemAlert(t('app.noOpenApplications'));
+            else setSystemAlert('No exam applications are currently open.');
           }}
           hasOpenExams={publishedExams.some((exam) => exam.isButtonActive)}
           onOpenMockExam={handleOpenMockExam}
@@ -552,38 +623,37 @@ export default function App() {
           examinations={publishedExams}
           notices={portalNotices}
           filterExamId={selectedExamFilter}
-          onClearExamFilter={() => setSelectedExamFilter(undefined)}
           isAuthenticated={Boolean(loggedInUser)}
         />
 
         <section aria-labelledby="institute-opportunities-heading" className="bg-white py-8">
           <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
             <div className="mb-4">
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">{t('instituteForms.badge')}</p>
-              <h2 id="institute-opportunities-heading" className="mt-1 text-2xl font-black text-[#0B2E59]">{t('instituteForms.titlePlain')}</h2>
-              <p className="mt-1 text-sm text-slate-600">{t('instituteForms.intro')}</p>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">Approved by ELTNOY Super Admin</p>
+              <h2 id="institute-opportunities-heading" className="mt-1 text-2xl font-black text-[#0B2E59]">Institute exam & teacher forms</h2>
+              <p className="mt-1 text-sm text-slate-600">These listings are published only after institute and form review. Applications are handled by the institute.</p>
             </div>
             {publishedInstituteForms.length ? (
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {publishedInstituteForms.map((form) => (
                   <article key={String(form.id)} className="rounded-xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-                    <span className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-800">{form.form_type === 'teacher_recruitment' ? t('instituteForms.teacher') : t('instituteForms.exam')}</span>
+                    <span className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-800">{form.form_type === 'teacher_recruitment' ? 'Teacher recruitment' : 'Exam application'}</span>
                     <h3 className="mt-3 text-lg font-extrabold text-[#0B2E59]">{String(form.title)}</h3>
                     <p className="mt-1 text-sm font-semibold text-slate-600">{String(form.institute_name)}</p>
                     <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{String(form.description)}</p>
-                    <p className="mt-3 text-sm text-slate-600"><strong>{t('instituteForms.eligibility')}</strong> {String(form.eligibility)}</p>
-                    {typeof form.application_deadline === 'string' && form.application_deadline && <p className="mt-2 text-sm text-slate-600"><strong>{t('instituteForms.deadline')}</strong> {form.application_deadline.slice(0, 10)}</p>}
+                    <p className="mt-3 text-sm text-slate-600"><strong>Eligibility:</strong> {String(form.eligibility)}</p>
+                    {typeof form.application_deadline === 'string' && form.application_deadline && <p className="mt-2 text-sm text-slate-600"><strong>Deadline:</strong> {form.application_deadline.slice(0, 10)}</p>}
                     {typeof form.external_url === 'string' && form.external_url ? (
-                      <a href={form.external_url} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">{t('instituteForms.apply')}</a>
+                      <a href={form.external_url} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">Apply on institute website</a>
                     ) : typeof form.contact_email === 'string' && form.contact_email ? (
-                      <a href={`mailto:${form.contact_email}`} className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">{t('instituteForms.contact')}</a>
+                      <a href={`mailto:${form.contact_email}`} className="mt-4 inline-flex rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600">Contact institute</a>
                     ) : (
-                      <p className="mt-4 text-xs text-slate-500">{t('instituteForms.contactHint')}</p>
+                      <p className="mt-4 text-xs text-slate-500">Contact the institute directly for application instructions.</p>
                     )}
                   </article>
                 ))}
               </div>
-            ) : <p className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">{t('instituteForms.none')}</p>}
+            ) : <p className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">No approved institute forms are currently available.</p>}
           </div>
         </section>
 
@@ -594,7 +664,7 @@ export default function App() {
           onOpenExamApply={() => {
             const openExam = publishedExams.find((exam) => exam.isButtonActive);
             if (openExam) handleOpenExamApply(openExam);
-            else setSystemAlert(t('app.noOpenApplications'));
+            else setSystemAlert('No exam applications are currently open.');
           }}
           onOpenCenterLocator={handleOpenCenterLocator}
           onOpenFeedback={handleOpenGrievance}
@@ -614,6 +684,7 @@ export default function App() {
       <AdmitCardModal
         isOpen={isAdmitCardOpen}
         onClose={() => setIsAdmitCardOpen(false)}
+        publishedExams={publishedExams}
       />
 
       <CbtMockExamModal
@@ -657,6 +728,7 @@ export default function App() {
       <CandidateResultModal
         isOpen={isResultOpen}
         onClose={() => setIsResultOpen(false)}
+        publishedExams={publishedExams}
       />
 
       {/* Answer Key & Objection Tracker */}

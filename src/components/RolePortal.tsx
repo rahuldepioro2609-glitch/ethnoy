@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -15,24 +15,44 @@ import {
   Eye,
   EyeOff,
   FileText,
+  FolderOpen,
   GraduationCap,
+  Home,
+  LayoutDashboard,
   LockKeyhole,
   LogOut,
+  Menu,
   PlusCircle,
   RefreshCw,
   ShieldCheck,
   Upload,
   UserRound,
   Wallet,
+  X,
 } from 'lucide-react';
-import { apiRequest } from '../api';
+import { ApiError, apiRequest, apiRequestWithMeta } from '../api';
+import { VerificationStep } from './VerificationStep';
+import { AdminMfaChallenge } from './AdminMfaChallenge';
+import { AdminMfaEnrollment } from './AdminMfaEnrollment';
+import { adminMfaStartStatus } from '../utils/adminMfa';
+import { StudentAuthPanel } from './StudentAuthPanel';
+import { StudentGoogleLinkCard } from './StudentGoogleLinkCard';
+import { emailOnlyVerification, googleNotice, isChallenge, signInAvailable, unavailableMessage, verificationMessage, type ProviderStatus, type VerificationChallengeView } from '../utils/authVerification';
 import { OnlineExamRunner } from './OnlineExamRunner';
-import { AdminObjectionsPanel } from './AdminObjectionsPanel';
-import { AccountEmailCard, ChangePasswordCard, GoogleAccountCard } from './AccountPages';
-import { useTranslation } from '../i18n';
-import { translate } from '../i18n/translate';
 import { BrandLogo } from './BrandLogo';
-import { GoogleSignInButton, useGoogleClientId } from './GoogleSignInButton';
+import { useLanguage } from '../utils/languageContext';
+import { NO_LINKED_APPLICATIONS_MESSAGE } from '../utils/candidateDashboard';
+import type { DisclosedSurfaceHostnames } from '../utils/surfaceNavigation';
+import { describeOnlineExamAttempt } from '../utils/onlineExamDashboard';
+import { adminPermissions, canLoadAdminSection, canSeeAdminTab, SUPER_ADMIN_ONLY_TEXT, withdrawalPaymentState } from '../utils/adminPermissions';
+import { DashboardSectionLoader, getDashboardSectionContentState, type DashboardSectionStatusMap } from '../utils/dashboardData';
+import { InstitutionDocumentManagement } from './InstitutionDocumentManagement';
+import { PendingInstitutionSubmission } from './PendingInstitutionSubmission';
+import { PlatformStaffAdminPanel } from './staff/PlatformStaffAdminPanel';
+import { OrganizationStaffOwnerPanel } from './staff/OrganizationStaffOwnerPanel';
+import { InstituteVerificationPanel } from './admin/InstituteVerificationPanel';
+import { InstituteDashboardOverview } from './InstituteDashboardOverview';
+import { ErrorState, LoadingState } from './ui';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
 
@@ -40,6 +60,7 @@ export interface PortalUser {
   name: string;
   id: string;
   role: PortalRole;
+  isSuperAdmin: boolean;
 }
 
 const roleDetails: Record<PortalRole, { title: string; subtitle: string; label: string; icon: typeof UserRound; accent: string }> = {
@@ -74,7 +95,7 @@ const dashboardTheme: Record<PortalRole, { shell: string; header: string; eyebro
     description: 'Track your exam applications, admit card, results, and practice history.',
   },
   center: {
-    shell: 'bg-sky-50/60',
+    shell: 'bg-[#EEF3FA]',
     header: 'from-sky-950 via-sky-900 to-[#0B2E59]',
     eyebrow: 'Institute workspace',
     description: 'Manage candidate check-ins, submit public form listings, request profile changes, and track wallet activity.',
@@ -99,70 +120,135 @@ const rolePath: Record<PortalRole, string> = {
   official: '/login/official',
 };
 
+const StudentEmailContactPanel: React.FC = () => {
+  const [email, setEmail] = useState('');
+  const [verifiedEmail, setVerifiedEmail] = useState<string | null>(null);
+  const [challenge, setChallenge] = useState<VerificationChallengeView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const result = await apiRequest<{ email: string | null }>('/api/auth/student/email');
+      setVerifiedEmail(result.email);
+      if (result.email) setEmail(result.email);
+    } catch {
+      setError('Could not load your verified email address. Please refresh and try again.');
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const result = (await apiRequestWithMeta<Record<string, unknown>>('/api/auth/student/email', {
+        method: 'POST', body: JSON.stringify({ email: email.trim() }),
+      })).data;
+      if (isChallenge(result)) setChallenge(result);
+      else if (result.status === 'already_verified') setVerifiedEmail(String(result.email));
+      else setError('The server did not start email verification. Please try again.');
+    } catch (caught) {
+      setError(caught instanceof ApiError ? verificationMessage(caught.code, caught.message) : 'Could not start email verification. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      {challenge ? (
+        <VerificationStep
+          challenge={challenge}
+          onSignedIn={() => setChallenge(null)}
+          onContactsVerified={() => { setChallenge(null); void load(); }}
+          onRestart={(message) => { setChallenge(null); setError(message); }}
+        />
+      ) : (
+        <>
+          <h2 className="text-lg font-extrabold text-[#0B2E59]">Student email</h2>
+          <p className="mt-1 text-sm text-slate-600">{verifiedEmail ? `Verified: ${verifiedEmail}` : 'Add an email address and verify the code we send to it.'}</p>
+          <form onSubmit={(event) => void submit(event)} className="mt-4 flex flex-col gap-3 sm:flex-row">
+            <label className="sr-only" htmlFor="student-contact-email">Email address</label>
+            <input id="student-contact-email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email address" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
+            <button type="submit" disabled={busy || !email.trim()} className="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">{busy ? 'Please wait…' : verifiedEmail ? 'Change email' : 'Send verification code'}</button>
+          </form>
+          {error && <p role="alert" className="mt-3 text-sm text-rose-700">{error}</p>}
+        </>
+      )}
+    </section>
+  );
+};
+
 interface RoleLoginPageProps {
   role?: PortalRole;
+  surfaceHostnames?: DisclosedSurfaceHostnames | null;
   onBack: () => void;
   onLogin: (user: PortalUser) => void;
 }
 
-type LoginMode = 'signin' | 'register' | 'forgot';
-
-const inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100';
-
-const ROLE_BENEFITS: Record<'candidate' | 'center', string[]> = {
-  candidate: ['login.benefit.candidate1', 'login.benefit.candidate2', 'login.benefit.candidate3'],
-  center: ['login.benefit.center1', 'login.benefit.center2', 'login.benefit.center3'],
-};
-
-/** 0 = empty, 1 = weak, 2 = fair, 3 = strong. Only a hint; the server enforces the 12-character minimum. */
-export function passwordStrength(password: string): 0 | 1 | 2 | 3 {
-  if (!password) return 0;
-  if (password.length < 12) return 1;
-  const kinds = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(password)).length;
-  return password.length >= 16 || kinds >= 3 ? 3 : 2;
-}
-
-const strengthStyles = ['bg-slate-200', 'bg-rose-500', 'bg-amber-500', 'bg-emerald-600'];
-const strengthKeys = ['', 'login.strengthWeak', 'login.strengthFair', 'login.strengthStrong'];
-
-export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLogin }) => {
-  const { t } = useTranslation();
-  const googleClientId = useGoogleClientId();
-  const [mode, setMode] = useState<LoginMode>('signin');
+export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, surfaceHostnames, onBack, onLogin }) => {
+  const { t } = useLanguage();
   const [loginId, setLoginId] = useState('');
   const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
   const [registrationNumber, setRegistrationNumber] = useState('');
   const [registeredAddress, setRegisteredAddress] = useState('');
   const [website, setWebsite] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  const [isResubmitting, setIsResubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [instituteSubmitted, setInstituteSubmitted] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [showSubmissionAccess, setShowSubmissionAccess] = useState(false);
+  const [submissionAccessMessage, setSubmissionAccessMessage] = useState('');
+  // AUTH-1: server-reported provider availability and an in-progress verification (server-started only).
+  const [mobile, setMobile] = useState('');
+  const [providers, setProviders] = useState<ProviderStatus | null>(null);
+  const [verification, setVerification] = useState<VerificationChallengeView | null>(null);
+  // AUTH C1.9.2: Official / Super Admin authenticator step (shown only after the server's 202 mfa_required).
+  const [adminMfaPending, setAdminMfaPending] = useState(false);
+  const [adminMfaEnrolmentPending, setAdminMfaEnrolmentPending] = useState(false);
 
-  const isRegistering = mode === 'register';
-  const strength = passwordStrength(password);
-  const passwordsDiffer = isRegistering && confirmPassword.length > 0 && confirmPassword !== password;
+  useEffect(() => {
+    if (role !== 'candidate' && role !== 'center') return;
+    let cancelled = false;
+    const closed = { available: false, reason: null };
+    apiRequestWithMeta<ProviderStatus>('/api/auth/providers')
+      .then(({ data }) => { if (!cancelled) setProviders(data); })
+      .catch(() => { if (!cancelled) setProviders({ sms: closed, email: closed, google: closed }); });
+    const notice = googleNotice(window.location.search);
+    if (notice) setError(notice);
+    if (role === 'candidate' && new URLSearchParams(window.location.search).get('verification') === 'pending') {
+      apiRequestWithMeta<VerificationChallengeView>('/api/auth/verification')
+        .then(({ data }) => { if (!cancelled && isChallenge(data)) setVerification(data); })
+        .catch(() => undefined);
+    }
+    return () => { cancelled = true; };
+  }, [role]);
 
-  const signInWithGoogle = async (credential: string) => {
-    if (!role || role === 'official') return;
-    setError(null);
-    setMessage(null);
-    setIsSubmitting(true);
+  const describeError = (caught: unknown, fallback: string) => (caught instanceof ApiError
+    ? verificationMessage(caught.code, caught.message)
+    : caught instanceof Error ? caught.message : fallback);
+
+  /** After the SERVER reports a verified session, confirm it through /api/auth/me as before. */
+  const finishVerifiedSignIn = async () => {
     try {
-      const { user } = await apiRequest<{ user: { loginId: string; name: string; role: PortalRole } }>('/api/auth/google', {
-        method: 'POST',
-        body: JSON.stringify({ credential, role }),
-      });
-      onLogin({ id: user.loginId, name: user.name, role: user.role });
-    } catch (googleError) {
-      setError(googleError instanceof Error ? googleError.message : t('login.genericError'));
-    } finally {
-      setIsSubmitting(false);
+      const { user } = await apiRequest<{
+        user: { id: string; loginId: string; name: string; role: PortalRole; isSuperAdmin: boolean };
+      }>('/api/auth/me');
+      setVerification(null);
+      setAdminMfaPending(false);
+      setAdminMfaEnrolmentPending(false);
+      onLogin({ id: user.loginId, name: user.name, role: user.role, isSuperAdmin: user.isSuperAdmin });
+    } catch (caught) {
+      setVerification(null);
+      setAdminMfaPending(false);
+      setError(describeError(caught, 'Sign in failed. Please try again.'));
     }
   };
 
@@ -170,66 +256,120 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
     event.preventDefault();
     if (!role) return;
     setError(null);
-    setMessage(null);
-    if (isRegistering && password !== confirmPassword) {
-      setError(t('login.passwordMismatch'));
-      return;
-    }
     setIsSubmitting(true);
     try {
-      if (mode === 'forgot') {
-        const result = await apiRequest<{ message: string }>('/api/auth/password-reset/request', {
-          method: 'POST',
-          body: JSON.stringify({ loginId: loginId.trim(), email: email.trim() }),
-        });
-        setMessage(result.message);
-      } else if (mode === 'register' && role === 'candidate') {
-        const { user } = await apiRequest<{
-          user: { id: string; loginId: string; name: string; role: PortalRole };
-        }>('/api/auth/register', {
-          method: 'POST',
-          body: JSON.stringify({ loginId: loginId.trim(), name: fullName.trim(), email: email.trim(), password }),
-        });
-        onLogin({ id: user.loginId, name: user.name, role: user.role });
-      } else if (mode === 'register' && role === 'center') {
-        await apiRequest<{ message: string }>('/api/center/register', {
-          method: 'POST',
-          body: JSON.stringify({
-            loginId: loginId.trim(),
-            name: fullName.trim(),
-            contactEmail: email.trim(),
-            registrationNumber: registrationNumber.trim(),
-            registeredAddress: registeredAddress.trim(),
-            website: website.trim(),
-            password,
-          }),
-        });
+      const result = await apiRequestWithMeta<Record<string, unknown>>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ loginId: loginId.trim(), password, role }),
+      });
+      // AUTH-1: Students (and Institutes still verifying contacts) get a verification step, not a session.
+      if (result.status === 202 && isChallenge(result.data)) {
         setPassword('');
-        setConfirmPassword('');
-        setInstituteSubmitted(true);
-      } else {
-        const { user } = await apiRequest<{
-          user: { id: string; loginId: string; name: string; role: PortalRole };
-        }>('/api/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({ loginId: loginId.trim(), password, role }),
-        });
-        onLogin({ id: user.loginId, name: user.name, role: user.role });
+        setVerification(result.data);
+        return;
       }
-    } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : t('login.genericError'));
+      // AUTH C1.9.2: an Official's password never yields a session. The server answers 202 and either
+      // started an authenticator challenge (its cookie is HttpOnly; nothing is read here) or reports that
+      // no authenticator is set up (enrolment is not available in the portal yet).
+      if (role === 'official' && result.status === 202) {
+        setPassword('');
+        const start = adminMfaStartStatus(result.data);
+        if (start === 'mfa_required') setAdminMfaPending(true);
+        else if (start === 'mfa_enrolment_required') setAdminMfaEnrolmentPending(true);
+        else setError('Sign in failed. Please try again.');
+        return;
+      }
+      // Verify the session was durably persisted before updating UI state.
+      const { user } = await apiRequest<{
+        user: { id: string; loginId: string; name: string; role: PortalRole; isSuperAdmin: boolean };
+      }>('/api/auth/me');
+      onLogin({ id: user.loginId, name: user.name, role: user.role, isSuperAdmin: user.isSuperAdmin });
+    } catch (loginError) {
+      setError(describeError(loginError, 'Sign in failed. Please try again.'));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const changeMode = (next: LoginMode) => {
-    setMode(next);
+  const register = async (event: React.FormEvent) => {
+    event.preventDefault();
+    // Students register in StudentAuthPanel; this form serves Institutes only.
+    if (role !== 'center') return;
+    setError(null);
+    setMessage(null);
+    setIsSubmitting(true);
+    try {
+      const { message: registrationMessage, verification: started } = await apiRequest<{ message: string; verification?: unknown }>('/api/center/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          loginId: loginId.trim(),
+          name: fullName.trim(),
+          contactEmail: contactEmail.trim(),
+          contactMobile: mobile.trim(),
+          registrationNumber: registrationNumber.trim(),
+          registeredAddress: registeredAddress.trim(),
+          website: website.trim(),
+          password,
+        }),
+      });
+      setSubmissionAccessMessage(registrationMessage);
+      setShowSubmissionAccess(true);
+      setPassword('');
+      if (isChallenge(started)) setVerification(started);
+    } catch (registrationError) {
+      setError(describeError(registrationError, 'Could not submit registration.'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const resubmitInstitute = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (role !== 'center') return;
+    setError(null);
+    setMessage(null);
+    setIsSubmitting(true);
+    try {
+      const { message: resubmissionMessage, submissionReference } = await apiRequest<{
+        message: string;
+        submissionReference: string;
+      }>('/api/center/resubmit', {
+        method: 'POST',
+        body: JSON.stringify({
+          loginId: loginId.trim(),
+          password,
+          name: fullName.trim(),
+          contactEmail: contactEmail.trim(),
+          registrationNumber: registrationNumber.trim(),
+          registeredAddress: registeredAddress.trim(),
+          website: website.trim(),
+        }),
+      });
+      setSubmissionAccessMessage(`${resubmissionMessage} Reference: ${submissionReference}`);
+      setPassword('');
+      setIsResubmitting(false);
+      setIsRegistering(false);
+      setShowSubmissionAccess(true);
+    } catch (resubmissionError) {
+      setError(resubmissionError instanceof Error ? resubmissionError.message : 'Could not resubmit institute details.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const startInstituteResubmission = () => {
+    setIsRegistering(true);
+    setIsResubmitting(true);
     setIsPasswordVisible(false);
-    setPassword('');
-    setConfirmPassword('');
-    setAcceptedTerms(false);
-    setInstituteSubmitted(false);
+    setError(null);
+    setMessage(null);
+  };
+
+  const changeRegistrationMode = (enabled: boolean) => {
+    setShowSubmissionAccess(false);
+    setIsRegistering(enabled);
+    setIsResubmitting(false);
+    setIsPasswordVisible(false);
     setError(null);
     setMessage(null);
   };
@@ -237,308 +377,231 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   const detail = role ? roleDetails[role] : null;
   const Icon = detail?.icon ?? GraduationCap;
   const accent = accentClasses[detail?.accent ?? 'emerald'];
-  const focusRing = role === 'center' ? 'focus:border-sky-600 focus:ring-sky-100' : '';
-  const linkColor = role === 'center' ? 'text-sky-800' : 'text-emerald-800';
-
-  const heading = mode === 'forgot'
-    ? t('login.forgotTitle')
-    : isRegistering
-      ? t(role === 'candidate' ? 'login.registerStudentTitle' : 'login.registerInstituteTitle')
-      : t('login.signInTitle');
-  const intro = mode === 'forgot'
-    ? t('login.forgotIntro')
-    : isRegistering
-      ? t(role === 'candidate' ? 'login.registerStudentIntro' : 'login.registerInstituteIntro')
-      : t(role === 'candidate' ? 'login.signInStudentIntro' : role === 'center' ? 'login.signInInstituteIntro' : 'login.signInStaffIntro');
-  const submitLabel = isSubmitting
-    ? t('common.pleaseWait')
-    : mode === 'forgot'
-      ? t('login.sendResetLink')
-      : isRegistering
-        ? t(role === 'candidate' ? 'login.createAccount' : 'login.submitForApproval')
-        : t('login.secureSignIn');
-  // Google can create student accounts; institutes must register for approval first, then may sign in with Google.
-  const showGoogle = Boolean(googleClientId) && role !== 'official' && (mode === 'signin' || (isRegistering && role === 'candidate'));
-
-  const passwordToggle = (
-    <button
-      type="button"
-      onClick={() => setIsPasswordVisible((visible) => !visible)}
-      aria-label={isPasswordVisible ? t('account.hidePassword') : t('account.showPassword')}
-      aria-pressed={isPasswordVisible}
-      className="absolute inset-y-0 right-0 inline-flex items-center justify-center px-3 text-slate-500 hover:text-[#0B2E59] focus-visible:outline-2 focus-visible:outline-emerald-600"
-    >
-      {isPasswordVisible ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-    </button>
-  );
 
   return (
-    <main className="min-h-screen bg-[#eef5fa] text-slate-900">
+    <main className="min-h-screen bg-[#EEF6F1] text-slate-900">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-2">
           <div className="flex items-center gap-3">
             <BrandLogo />
           </div>
           <button onClick={onBack} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-[#0B2E59] hover:bg-emerald-50">
-            <ArrowLeft className="h-4 w-4" /> {t('account.home')}
+            <ArrowLeft className="h-4 w-4" /> {t('Home')}
           </button>
         </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-14">
+      <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-16">
         {!role ? (
           <>
             <div className="mx-auto mb-9 max-w-2xl text-center">
-              <p className="text-sm font-bold uppercase tracking-[0.2em] text-emerald-700">{t('login.secureAccess')}</p>
-              <h1 className="mt-2 text-3xl font-black text-[#0B2E59] sm:text-4xl">{t('login.choosePortal')}</h1>
-              <p className="mt-3 text-slate-600">{t('login.choosePortalIntro')}</p>
+              <p className="text-sm font-bold uppercase tracking-[0.2em] text-emerald-700">{t('Secure access')}</p>
+              <h1 className="mt-2 text-3xl font-black text-[#0B2E59] sm:text-4xl">{t('Choose your portal')}</h1>
+              <p className="mt-3 text-slate-600">{t('Select the account type shown on your ELTNOY credentials.')}</p>
             </div>
-            <div className="mx-auto grid max-w-3xl gap-5 md:grid-cols-2">
-              {(['candidate', 'center'] as const).map((item) => {
-                const RoleIcon = roleDetails[item].icon;
-                const colorClass = item === 'candidate' ? 'bg-emerald-600' : 'bg-sky-600';
-                return (
-                  <a key={item} href={rolePath[item]} className="group rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
-                    <div className={`mb-5 inline-flex rounded-xl p-3 text-white ${colorClass}`}><RoleIcon className="h-7 w-7" /></div>
-                    <h2 className="text-xl font-extrabold text-[#0B2E59]">{t(`role.${item}.title`)}</h2>
-                    <p className="mt-2 min-h-12 text-sm leading-6 text-slate-600">{t(`role.${item}.subtitle`)}</p>
-                    <ul className="mt-4 space-y-1.5">
-                      {ROLE_BENEFITS[item].map((key) => (
-                        <li key={key} className="flex items-start gap-2 text-xs text-slate-600"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />{t(key)}</li>
-                      ))}
-                    </ul>
-                    <span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-emerald-700">{t('login.continue')} <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" /></span>
-                  </a>
-                );
-              })}
-            </div>
+            {surfaceHostnames?.exam && surfaceHostnames.institution ? (
+              <div className="grid gap-5 md:grid-cols-2">
+                {(['candidate', 'center'] as const).map((item) => {
+                  const itemDetail = roleDetails[item];
+                  const RoleIcon = itemDetail.icon;
+                  const colorClass = item === 'candidate' ? 'bg-emerald-600' : 'bg-sky-600';
+                  const targetSurface = item === 'candidate' ? 'exam' : 'institution';
+                  const href = `${window.location.protocol}//${surfaceHostnames[targetSurface]}${rolePath[item]}`;
+                  return (
+                    <a key={item} href={href} className="group rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+                      <div className={`mb-5 inline-flex rounded-xl p-3 text-white ${colorClass}`}><RoleIcon className="h-7 w-7" /></div>
+                      <h2 className="text-xl font-extrabold text-[#0B2E59]">{t(itemDetail.title)}</h2>
+                      <p className="mt-2 min-h-12 text-sm leading-6 text-slate-600">{t(itemDetail.subtitle)}</p>
+                      <span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-emerald-700">{t('Continue to login')} <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" /></span>
+                    </a>
+                  );
+                })}
+              </div>
+            ) : (
+              <p role="status" className="mx-auto max-w-xl rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                {t('Secure portal links are loading. If this continues, refresh the page.')}
+              </p>
+            )}
           </>
         ) : (
-          <div className="mx-auto grid max-w-5xl overflow-hidden rounded-3xl bg-white shadow-xl md:grid-cols-[0.85fr_1.15fr]">
-            <section className={`relative flex flex-col justify-between overflow-hidden ${accent.panel} p-7 text-white sm:p-10`}>
-              <div aria-hidden className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-white/10" />
-              <div aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 h-72 w-72 rounded-full bg-black/10" />
-              <div className="relative">
+          <div className="mx-auto grid max-w-4xl overflow-hidden rounded-3xl bg-white shadow-xl md:grid-cols-[0.9fr_1.1fr]">
+            <section className={`flex min-h-64 flex-col justify-between ${accent.panel} p-8 text-white sm:p-10`}>
+              <div>
                 <div className="inline-flex rounded-2xl bg-white/15 p-3"><Icon className="h-8 w-8" /></div>
-                <p className="mt-6 text-sm font-bold uppercase tracking-[0.18em] text-white/75">{t(`role.${role}.label`)}</p>
-                <h1 className="mt-2 text-3xl font-black">{t(`role.${role}.title`)}</h1>
-                <p className="mt-3 max-w-sm text-sm leading-6 text-white/85">{t(`role.${role}.subtitle`)}</p>
-                {role !== 'official' && (
-                  <ul className="mt-7 hidden space-y-3 md:block">
-                    {ROLE_BENEFITS[role].map((key) => (
-                      <li key={key} className="flex items-start gap-3 text-sm text-white/90">
-                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-white" />
-                        <span>{t(key)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <p className="mt-8 text-sm font-bold uppercase tracking-[0.18em] text-white/75">{detail?.label}</p>
+                <h1 className="mt-2 text-3xl font-black">{detail?.title}</h1>
+                <p className="mt-3 max-w-sm text-sm leading-6 text-white/85">{detail?.subtitle}</p>
               </div>
-              <div className="relative mt-8 hidden md:block">
-                <p className="flex items-center gap-2 text-xs text-white/80"><ShieldCheck className="h-4 w-4" /> {t('login.secureNote')}</p>
-                <p className="mt-3 text-xs text-white/60">{t('login.tagline')}</p>
-              </div>
+              <p className="mt-8 text-xs text-white/70">{t('Your Future, Our Mission')}</p>
             </section>
-            <section className="p-6 sm:p-10">
-              <a href="/login" className="mb-6 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('login.allOptions')}</a>
-
-              {mode !== 'forgot' && role !== 'official' && !instituteSubmitted && (
-                <div role="tablist" aria-label={t(`role.${role}.title`)} className="mb-6 grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-sm font-bold">
-                  {(['signin', 'register'] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      role="tab"
-                      aria-selected={mode === tab}
-                      onClick={() => mode !== tab && changeMode(tab)}
-                      className={`rounded-lg px-3 py-2 transition ${mode === tab ? 'bg-white text-[#0B2E59] shadow-sm' : 'text-slate-500 hover:text-[#0B2E59]'}`}
-                    >
-                      {t(tab === 'signin' ? 'login.tabSignIn' : 'login.tabRegister')}
+            <section className="p-7 sm:p-10">
+              {verification ? (
+                <VerificationStep
+                  challenge={verification}
+                  onSignedIn={() => void finishVerifiedSignIn()}
+                  onContactsVerified={(verifiedMessage) => {
+                    setVerification(null);
+                    setShowSubmissionAccess(false);
+                    setIsRegistering(false);
+                    setMessage(verifiedMessage);
+                  }}
+                  onRestart={(restartMessage) => {
+                    setVerification(null);
+                    setError(restartMessage);
+                  }}
+                />
+              ) : role === 'official' && adminMfaPending ? (
+                <AdminMfaChallenge
+                  buttonClass={accent.button}
+                  onSignedIn={() => void finishVerifiedSignIn()}
+                  onRestart={(restartMessage) => {
+                    setAdminMfaPending(false);
+                    setError(restartMessage);
+                  }}
+                />
+              ) : role === 'official' && adminMfaEnrolmentPending ? (
+                <AdminMfaEnrollment
+                  buttonClass={accent.button}
+                  onSignedIn={() => void finishVerifiedSignIn()}
+                  onRestart={(restartMessage) => {
+                    setAdminMfaEnrolmentPending(false);
+                    setError(restartMessage);
+                  }}
+                />
+              ) : role === 'candidate' ? (
+                // AUTH-1: Student sign-in (mobile + password, then OTP; Google; legacy Student ID link).
+                // Every option stays visible; unavailable providers are shown explicitly.
+                <StudentAuthPanel providers={providers} initialError={error} buttonClass={accent.button} onChallenge={setVerification} />
+              ) : role === 'center' && !isResubmitting && !showSubmissionAccess && signInAvailable(role, providers) === false ? (
+                <div className="space-y-5">
+                  <a href="/login" className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('All login options')}</a>
+                  <h2 className="text-2xl font-extrabold text-[#0B2E59]">{t('Institute sign-in is unavailable')}</h2>
+                  <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">{t(unavailableMessage(role, providers))}</div>
+                  {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
+                  {role === 'center' && (
+                    <button type="button" onClick={startInstituteResubmission} className="w-full text-center text-sm font-bold text-sky-800 hover:underline">
+                      {t('Rejected application? Correct details and resubmit')}
                     </button>
-                  ))}
+                  )}
                 </div>
-              )}
-
-              {instituteSubmitted ? (
-                <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center">
-                  <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-600" />
-                  <h2 className="mt-3 text-xl font-extrabold text-[#0B2E59]">{t('login.instituteSubmittedTitle')}</h2>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{t('login.instituteSubmittedBody')}</p>
-                  <button type="button" onClick={() => changeMode('signin')} className={`mt-5 inline-flex items-center justify-center gap-2 rounded-lg ${accent.button} px-5 py-2.5 text-sm font-bold text-white hover:brightness-110`}>
-                    {t('login.backToSignIn')}
-                  </button>
-                </div>
+              ) : role === 'center' && showSubmissionAccess ? (
+                <PendingInstitutionSubmission
+                  message={submissionAccessMessage}
+                  onReturnToLogin={() => {
+                    setShowSubmissionAccess(false);
+                    setIsRegistering(false);
+                    setIsResubmitting(false);
+                    setMessage(null);
+                    setError(null);
+                  }}
+                />
               ) : (
                 <>
-                  <h2 className="text-2xl font-extrabold text-[#0B2E59]">{heading}</h2>
-                  <p className="mt-1 text-sm text-slate-500">{intro}</p>
-
-                  {error && <div role="alert" className="mt-5 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
-                  {message && <div role="status" className="mt-5 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{message}</div>}
-
-                  {showGoogle && googleClientId && (
-                    <div className="mt-6">
-                      <GoogleSignInButton
-                        clientId={googleClientId}
-                        text={isRegistering ? 'signup_with' : 'continue_with'}
-                        onCredential={(credential) => void signInWithGoogle(credential)}
-                      />
-                      {role === 'center' && <p className="mt-2 text-center text-xs text-slate-500">{t('login.googleInstituteHint')}</p>}
-                      <div className="my-5 flex items-center gap-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        <span className="h-px flex-1 bg-slate-200" />{t('login.or')}<span className="h-px flex-1 bg-slate-200" />
-                      </div>
-                    </div>
-                  )}
-
-                  <form className={`${showGoogle ? '' : 'mt-6'} space-y-4`} onSubmit={(event) => void submit(event)}>
-                    {isRegistering && (
-                      <div>
-                        <label htmlFor="role-register-name" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                          {t(role === 'candidate' ? 'login.studentName' : 'login.instituteName')}
-                        </label>
-                        <input id="role-register-name" autoComplete={role === 'candidate' ? 'name' : 'organization'} value={fullName} onChange={(event) => setFullName(event.target.value)} required minLength={2} maxLength={120} className={`${inputClass} ${focusRing}`} />
-                      </div>
-                    )}
-                    <div>
-                      <label htmlFor="role-login-id" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                        {mode === 'signin' && role !== 'official'
-                          ? t('login.idOrEmail')
-                          : role === 'candidate'
-                            ? t(isRegistering ? 'login.chooseStudentId' : 'login.studentId')
-                            : t(isRegistering ? 'login.chooseInstituteId' : 'login.staffId')}
-                      </label>
-                      <input
-                        id="role-login-id"
-                        autoComplete="username"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                        value={loginId}
-                        onChange={(event) => setLoginId(event.target.value)}
-                        required
-                        minLength={isRegistering ? 4 : 1}
-                        maxLength={isRegistering ? 50 : 254}
-                        pattern={isRegistering ? '[A-Za-z0-9._\\-]+' : undefined}
-                        title={isRegistering ? t('login.idRule') : undefined}
-                        placeholder={mode === 'signin' && role !== 'official' ? t(role === 'center' ? 'login.idOrEmailPlaceholderInstitute' : 'login.idOrEmailPlaceholder') : undefined}
-                        className={`${inputClass} ${focusRing}`}
-                      />
-                      {isRegistering && <p className="mt-1 text-xs text-slate-500">{t('login.idRule')}</p>}
-                    </div>
-                    {isRegistering || mode === 'forgot' ? (
-                      <div>
-                        <label htmlFor="role-email" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                          {t(role === 'center' ? 'login.instituteEmail' : 'login.email')}
-                        </label>
-                        <input id="role-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} placeholder="name@example.com" className={`${inputClass} ${focusRing}`} />
-                        {isRegistering && role === 'candidate' && <p className="mt-1 text-xs text-slate-500">{t('login.emailHint')}</p>}
-                      </div>
-                    ) : null}
-                    {isRegistering && role === 'center' && (
-                      <>
-                        <div>
-                          <label htmlFor="institute-registration-number" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.registrationNumber')}</label>
-                          <input id="institute-registration-number" value={registrationNumber} onChange={(event) => setRegistrationNumber(event.target.value)} required minLength={3} maxLength={100} className={`${inputClass} ${focusRing}`} />
-                        </div>
-                        <div>
-                          <label htmlFor="institute-registered-address" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.registeredAddress')}</label>
-                          <textarea id="institute-registered-address" autoComplete="street-address" value={registeredAddress} onChange={(event) => setRegisteredAddress(event.target.value)} required minLength={10} maxLength={500} rows={3} className={`${inputClass} ${focusRing}`} />
-                        </div>
-                        <div>
-                          <label htmlFor="institute-website" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.website')}</label>
-                          <input id="institute-website" type="url" autoComplete="url" value={website} onChange={(event) => setWebsite(event.target.value)} maxLength={200} placeholder="https://example.org" className={`${inputClass} ${focusRing}`} />
-                        </div>
-                      </>
-                    )}
-                    {mode !== 'forgot' && (
-                      <div>
-                        <div className="mb-1.5 flex items-center justify-between gap-2">
-                          <label htmlFor="role-login-password" className="block text-sm font-semibold text-slate-700">{t('login.password')}</label>
-                          {mode === 'signin' && (
-                            <button type="button" onClick={() => changeMode('forgot')} className={`text-xs font-bold ${linkColor} hover:underline`}>{t('login.forgotLink')}</button>
-                          )}
-                        </div>
-                        <div className="relative">
-                          <input
-                            id="role-login-password"
-                            type={isPasswordVisible ? 'text' : 'password'}
-                            autoComplete={isRegistering ? 'new-password' : 'current-password'}
-                            minLength={isRegistering ? 12 : undefined}
-                            maxLength={128}
-                            value={password}
-                            onChange={(event) => setPassword(event.target.value)}
-                            required
-                            placeholder={mode === 'signin' ? t('login.passwordPlaceholder') : undefined}
-                            className={`${inputClass} ${focusRing} pr-12`}
-                          />
-                          {passwordToggle}
-                        </div>
-                        {isRegistering && (
-                          <>
-                            <div className="mt-2 flex items-center gap-2" aria-live="polite">
-                              <div className="grid flex-1 grid-cols-3 gap-1">
-                                {[1, 2, 3].map((level) => (
-                                  <span key={level} className={`h-1.5 rounded-full ${strength >= level ? strengthStyles[strength] : 'bg-slate-200'}`} />
-                                ))}
-                              </div>
-                              {strength > 0 && <span className="w-14 text-right text-xs font-semibold text-slate-500">{t(strengthKeys[strength])}</span>}
-                            </div>
-                            <p className="mt-1 text-xs text-slate-500">{t('account.passwordRule')}</p>
-                          </>
-                        )}
-                      </div>
-                    )}
-                    {isRegistering && (
-                      <div>
-                        <label htmlFor="role-confirm-password" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('login.confirmPassword')}</label>
-                        <input
-                          id="role-confirm-password"
-                          type={isPasswordVisible ? 'text' : 'password'}
-                          autoComplete="new-password"
-                          maxLength={128}
-                          value={confirmPassword}
-                          onChange={(event) => setConfirmPassword(event.target.value)}
-                          required
-                          aria-invalid={passwordsDiffer}
-                          aria-describedby={passwordsDiffer ? 'role-confirm-password-error' : undefined}
-                          className={`${inputClass} ${focusRing} ${passwordsDiffer ? 'border-rose-400' : ''}`}
-                        />
-                        {passwordsDiffer && <p id="role-confirm-password-error" className="mt-1 text-xs font-semibold text-rose-700">{t('login.passwordMismatch')}</p>}
-                      </div>
-                    )}
-                    {isRegistering && (
-                      <label className="flex items-start gap-2.5 text-sm text-slate-600">
-                        <input type="checkbox" checked={acceptedTerms} onChange={(event) => setAcceptedTerms(event.target.checked)} required className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 accent-emerald-700" />
-                        <span>{t('login.agreeTerms')}</span>
-                      </label>
-                    )}
-                    <button type="submit" disabled={isSubmitting} className={`flex w-full items-center justify-center gap-2 rounded-lg ${accent.button} px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:brightness-110 disabled:cursor-wait disabled:opacity-60`}>
-                      <LockKeyhole className="h-4 w-4" /> {submitLabel}
+              <a href={role === 'official' ? '/' : '/login'} className="mb-7 inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('All login options')}</a>
+              <h2 className="text-2xl font-extrabold text-[#0B2E59]">
+                {t(isResubmitting ? 'Correct and resubmit institute details' : isRegistering ? 'Request institute access' : 'Sign in to your account')}
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {t(isResubmitting
+                  ? 'Use the existing rejected institute login ID and password. Corrected details will be submitted under the same account for review; this does not restore portal access.'
+                  : isRegistering
+                  ? 'Submit your institute details. Portal access starts only after Super Admin approval.'
+                  : 'Enter the credentials provided by your portal administrator.')}
+              </p>
+              <form className="mt-7 space-y-5" onSubmit={(event) => void (isResubmitting ? resubmitInstitute(event) : isRegistering ? register(event) : submit(event))}>
+                {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
+                {message && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{message}</div>}
+                {isRegistering && (
+                  <div>
+                    <label htmlFor="role-register-name" className="mb-1.5 block text-sm font-semibold text-slate-700">
+                      {t(isResubmitting ? 'Corrected institute name' : 'Institute name')}
+                    </label>
+                    <input id="role-register-name" autoComplete="name" value={fullName} onChange={(event) => setFullName(event.target.value)} required maxLength={120} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                  </div>
+                )}
+                <div>
+                  <label htmlFor="role-login-id" className="mb-1.5 block text-sm font-semibold text-slate-700">
+                    {t(isRegistering ? 'Choose institute / center ID' : role === 'center' ? 'Institute email or Staff / Center ID' : 'Staff / Center ID')}
+                  </label>
+                  <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={isRegistering ? 4 : 1} maxLength={isRegistering ? 50 : role === 'center' ? 254 : 50} pattern={isRegistering || role === 'official' ? '[A-Za-z0-9._-]+' : undefined} title={isRegistering || role === 'official' ? 'Use 4-50 letters, numbers, dots, underscores or hyphens.' : undefined} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm uppercase outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                </div>
+                {isRegistering && !isResubmitting && (
+                  <div>
+                    <label htmlFor="role-register-mobile" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Institute contact mobile number')}</label>
+                    <input id="role-register-mobile" type="tel" inputMode="numeric" autoComplete="tel-national" value={mobile} onChange={(event) => setMobile(event.target.value)} required maxLength={16} placeholder="10-digit mobile number" className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-600/15" />
+                    <p className="mt-1 text-xs text-slate-500">{t(emailOnlyVerification(providers)
+                      ? 'Contact number for institute records. It is not verified while mobile verification is off; the one-time code is sent to your email.'
+                      : 'A one-time code will be sent to this number. You can sign in only after it is verified.')}</p>
+                  </div>
+                )}
+                {isRegistering && role === 'center' && (
+                  <div>
+                    <label htmlFor="institute-contact-email" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Contact email')}</label>
+                    <input id="institute-contact-email" type="email" autoComplete="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} required maxLength={254} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                  </div>
+                )}
+                <div>
+                  <label htmlFor="role-login-password" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Password')}</label>
+                  <div className="relative">
+                    <input id="role-login-password" type={isPasswordVisible ? 'text' : 'password'} autoComplete={isRegistering ? 'new-password' : 'current-password'} minLength={isRegistering ? 12 : undefined} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 pr-12 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                    <button
+                      type="button"
+                      onClick={() => setIsPasswordVisible((visible) => !visible)}
+                      aria-label={t(isPasswordVisible ? 'Hide password' : 'Show password')}
+                      aria-pressed={isPasswordVisible}
+                      className="absolute inset-y-0 right-0 inline-flex items-center justify-center px-3 text-slate-500 hover:text-[#0B2E59] focus-visible:outline-2 focus-visible:outline-emerald-600"
+                    >
+                      {isPasswordVisible ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                     </button>
-                  </form>
-
-                  {mode === 'forgot' && (
-                    <>
-                      <button type="button" onClick={() => changeMode('signin')} className={`mt-5 w-full text-center text-sm font-bold ${linkColor} hover:underline`}>{t('login.backToSignIn')}</button>
-                      <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">{t('login.forgotNoEmail')}</p>
-                    </>
-                  )}
-                  {mode !== 'forgot' && role !== 'official' && (
-                    <p className="mt-5 text-center text-sm text-slate-600">
-                      <button type="button" onClick={() => changeMode(isRegistering ? 'signin' : 'register')} className={`font-bold ${linkColor} hover:underline`}>
-                        {isRegistering ? t('login.haveAccount') : t(role === 'candidate' ? 'login.newStudent' : 'login.newInstitute')}
-                      </button>
+                  </div>
+                  {isRegistering && <p className="mt-1 text-xs text-slate-500">{t('Use at least 12 characters. Keep your login ID and password safe.')}</p>}
+                </div>
+                {role === 'center' && isRegistering && (
+                  <>
+                    <div>
+                      <label htmlFor="institute-registration-number" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Institute registration / recognition number')}</label>
+                      <input id="institute-registration-number" value={registrationNumber} onChange={(event) => setRegistrationNumber(event.target.value)} required minLength={3} maxLength={100} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                    </div>
+                    <div>
+                      <label htmlFor="institute-registered-address" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Registered address')}</label>
+                      <textarea id="institute-registered-address" value={registeredAddress} onChange={(event) => setRegisteredAddress(event.target.value)} required minLength={10} maxLength={500} rows={3} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                    </div>
+                    <div>
+                      <label htmlFor="institute-website" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Official website (optional)')}</label>
+                      <input id="institute-website" type="url" value={website} onChange={(event) => setWebsite(event.target.value)} maxLength={200} placeholder="https://example.org" className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                    </div>
+                    <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                      {t('Registration does not grant immediate access. Super Admin must independently verify these details before approval. Approved institutes may submit exam and teacher-recruitment listings for Super Admin review; no documents are uploaded here.')}
                     </p>
+                  </>
+                )}
+                <button type="submit" disabled={isSubmitting} className={`flex w-full items-center justify-center gap-2 rounded-lg ${accent.button} px-4 py-3 text-sm font-bold text-white transition hover:brightness-110 disabled:cursor-wait disabled:opacity-60`}>
+                  <LockKeyhole className="h-4 w-4" /> {t(isSubmitting ? 'Please wait…' : isResubmitting ? 'Resubmit corrected details' : isRegistering ? 'Submit for approval' : 'Secure sign in')}
+                </button>
+              </form>
+              {role !== 'official' && (
+                <div className="mt-5 space-y-3">
+                  <button type="button" onClick={() => changeRegistrationMode(!isRegistering)} className="w-full text-center text-sm font-bold text-emerald-800 hover:underline">
+                    {t(isRegistering ? 'Already registered? Sign in' : 'Institute needs access? Register for approval')}
+                  </button>
+                  {role === 'center' && !isResubmitting && (
+                    <button
+                      type="button"
+                      onClick={startInstituteResubmission}
+                      className="w-full text-center text-sm font-bold text-sky-800 hover:underline"
+                    >
+                      {t('Rejected application? Correct details and resubmit')}
+                    </button>
                   )}
-                  {role === 'center' && isRegistering && (
-                    <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">{t('login.instituteNotice')}</p>
+                  {role === 'center' && isResubmitting && (
+                    <button type="button" onClick={() => changeRegistrationMode(false)} className="w-full text-center text-sm font-bold text-slate-600 hover:underline">
+                      {t('Return to institute sign in')}
+                    </button>
                   )}
+                </div>
+              )}
                 </>
               )}
-              <p className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-slate-100 pt-5 text-xs text-slate-500">
-                <a href="/terms" className="hover:text-[#0B2E59] hover:underline">{t('login.termsLink')}</a>
-                <span aria-hidden>·</span>
-                <a href="/privacy" className="hover:text-[#0B2E59] hover:underline">{t('login.privacyLink')}</a>
-              </p>
             </section>
           </div>
         )}
@@ -547,7 +610,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, onBack, onLo
   );
 };
 
-type DashboardTab = 'overview' | 'exams' | 'institutes' | 'applications' | 'feedback' | 'attempts' | 'results' | 'admit-cards' | 'online-exams' | 'answer-keys' | 'notices' | 'data-export';
+type DashboardTab = 'overview' | 'exams' | 'institutes' | 'institution-documents' | 'applications' | 'feedback' | 'attempts' | 'results' | 'admit-cards' | 'online-exams' | 'answer-keys' | 'notices' | 'data-export' | 'platform-staff' | 'institute-verification';
 
 interface RoleDashboardProps {
   user: PortalUser;
@@ -558,18 +621,6 @@ interface RoleDashboardProps {
 }
 
 type PortalData = Record<string, unknown>;
-
-interface CheckinCandidate {
-  applicationNumber: string;
-  candidateName: string;
-  fatherName: string;
-  examCode: string;
-  rollNumber: string;
-  examTiming: string;
-  checkinStatus: string | null;
-  photoUrl: string;
-  signatureUrl: string;
-}
 
 interface ExamDraft {
   code: string;
@@ -650,22 +701,20 @@ const emptyNoticeDraft: NoticeDraft = {
 };
 
 export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, onHome, onOpenAdmitCard, onOpenResults }) => {
-  const { t: translateForLanguage } = useTranslation();
-  // Students see their chosen language; staff dashboards stay in English.
-  const t: typeof translateForLanguage = (key, params) => (
-    user.role === 'candidate' ? translateForLanguage(key, params) : translate('English', key, params)
-  );
+  const { t } = useLanguage();
   const [data, setData] = useState<PortalData>({});
   const [tab, setTab] = useState<DashboardTab>('overview');
-  const [loading, setLoading] = useState(true);
+  const [activeInstituteSection, setActiveInstituteSection] = useState('institute-overview');
+  const [isInstituteMenuOpen, setIsInstituteMenuOpen] = useState(false);
+  const instituteMenuRef = useRef<HTMLElement>(null);
+  const instituteMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const [sectionStatuses, setSectionStatuses] = useState<DashboardSectionStatusMap>({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [applicationNumber, setApplicationNumber] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [checkinStatus, setCheckinStatus] = useState('verified');
   const [checkinNote, setCheckinNote] = useState('');
-  const [checkinCandidate, setCheckinCandidate] = useState<CheckinCandidate | null>(null);
-  const [isCheckingCandidate, setIsCheckingCandidate] = useState(false);
   const [examDraft, setExamDraft] = useState<ExamDraft>(emptyExamDraft);
   const [noticeDraft, setNoticeDraft] = useState<NoticeDraft>(emptyNoticeDraft);
   const [instituteFormDraft, setInstituteFormDraft] = useState<InstituteFormDraft>(emptyInstituteFormDraft);
@@ -676,6 +725,8 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     registeredAddress: '',
     website: '',
   });
+  const [institutionDecisionReasons, setInstitutionDecisionReasons] = useState<Record<string, string>>({});
+  const [savingInstitutionDecisionId, setSavingInstitutionDecisionId] = useState<string | null>(null);
   const [withdrawalAmount, setWithdrawalAmount] = useState('');
   const [transferReferences, setTransferReferences] = useState<Record<string, string>>({});
   const [isSavingExam, setIsSavingExam] = useState(false);
@@ -684,58 +735,98 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const [isSavingInstituteProfile, setIsSavingInstituteProfile] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
   const [activeOnlineExam, setActiveOnlineExam] = useState<{ code: string; name: string } | null>(null);
-  const [objectionExamCode, setObjectionExamCode] = useState<string | null>(null);
+  const activeRoleRef = useRef(user.role);
+  const retryLoadRef = useRef<Record<string, () => Promise<void>>>({});
+  const dashboardLoader = useMemo(() => new DashboardSectionLoader(
+    (update) => setData((current) => ({ ...current, ...update })),
+    (update) => setSectionStatuses(update),
+  ), []);
 
   const refresh = async () => {
-    setError(null);
-    try {
-      if (user.role === 'candidate') {
-        const [portal, attempts, onlineExams] = await Promise.all([
-          apiRequest<PortalData>('/api/candidate/portal'),
-          apiRequest<PortalData>('/api/mock-exams/mine'),
-          apiRequest<PortalData>('/api/online-exams'),
-        ]);
-        setData({ ...portal, attempts: attempts.attempts, onlineExams: onlineExams.exams });
-      } else if (user.role === 'center') {
-        const [checkins, workspace] = await Promise.all([
-          apiRequest<PortalData>('/api/center/checkins'),
-          apiRequest<PortalData>('/api/center/workspace'),
-        ]);
-        setData({ ...workspace, checkins: checkins.checkins });
-      } else {
-        const [applications, feedback, attempts, results, exams, institutes, instituteManagement, onlineExams, answerKeys, notices] = await Promise.all([
-          apiRequest<PortalData>('/api/admin/applications'),
-          apiRequest<PortalData>('/api/admin/feedback'),
-          apiRequest<PortalData>('/api/admin/mock-exams/attempts'),
-          apiRequest<PortalData>('/api/admin/results'),
-          apiRequest<PortalData>('/api/admin/exams'),
-          apiRequest<PortalData>('/api/admin/institutes'),
-          apiRequest<PortalData>('/api/admin/institute-management'),
-          apiRequest<PortalData>('/api/admin/online-exams'),
-          apiRequest<PortalData>('/api/admin/answer-keys'),
-          apiRequest<PortalData>('/api/admin/notices'),
-        ]);
-        setData({
-          applications: applications.applications,
-          feedback: feedback.entries,
-          attempts: attempts.attempts,
-          results: results.results,
-          exams: exams.exams,
-          institutes: institutes.institutes,
-          instituteForms: instituteManagement.forms,
-          profileChanges: instituteManagement.profileChanges,
-          withdrawals: instituteManagement.withdrawals,
-          walletBalances: instituteManagement.walletBalances,
-          onlineExams: onlineExams.exams,
-          answerKeys: answerKeys.exams,
-          notices: notices.notices,
-        });
-      }
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Could not load portal data.');
-    } finally {
-      setLoading(false);
+    if (activeRoleRef.current !== user.role) {
+      dashboardLoader.reset();
+      activeRoleRef.current = user.role;
+      retryLoadRef.current = {};
+      setData({});
+      setSectionStatuses({});
     }
+    setError(null);
+    const requests: Promise<void>[] = [];
+    const loadSection = (
+      name: string,
+      path: string,
+      select: (response: PortalData) => PortalData,
+    ) => {
+      const key = `${user.role}:${name}`;
+      const retry = () => dashboardLoader.load(key, async () => (
+        select(await apiRequest<PortalData>(path))
+      ));
+      retryLoadRef.current[key] = retry;
+      requests.push(retry());
+    };
+
+    if (user.role === 'candidate') {
+      loadSection('portal', '/api/candidate/portal', (portal) => ({
+        applications: portal.applications,
+        results: portal.results,
+      }));
+      loadSection('attempts', '/api/mock-exams/mine', (attempts) => ({
+        attempts: attempts.attempts,
+      }));
+      loadSection('online-exams', '/api/online-exams', (onlineExams) => ({
+        onlineExams: onlineExams.exams,
+      }));
+    } else if (user.role === 'center') {
+      loadSection('checkins', '/api/center/checkins', (checkins) => ({
+        checkins: checkins.checkins,
+      }));
+      loadSection('workspace', '/api/center/workspace', (workspace) => workspace);
+    } else {
+      loadSection('applications', '/api/admin/applications', (applications) => ({
+        applications: applications.applications,
+      }));
+      // P0-3 (A-14, P3-D4): ordinary Officials never request helpdesk data.
+      if (canLoadAdminSection(user, 'feedback')) {
+        loadSection('feedback', '/api/admin/feedback', (feedback) => ({
+          feedback: feedback.entries,
+        }));
+      }
+      loadSection('attempts', '/api/admin/mock-exams/attempts', (attempts) => ({
+        attempts: attempts.attempts,
+      }));
+      loadSection('results', '/api/admin/results', (results) => ({
+        results: results.results,
+      }));
+      loadSection('stats', '/api/admin/dashboard-stats', (stats) => ({
+        stats: stats.stats,
+      }));
+      loadSection('exams', '/api/admin/exams', (exams) => ({
+        exams: exams.exams,
+      }));
+      loadSection('institutes', '/api/admin/institutes', (institutes) => ({
+        institutes: institutes.institutes,
+      }));
+      loadSection('institution-cycles', '/api/institution-document-submission/admin/cycles', (cycles) => ({
+        institutionSubmissionCycles: cycles.submissions,
+      }));
+      loadSection('institute-management', '/api/admin/institute-management', (management) => ({
+        instituteForms: management.forms,
+        profileChanges: management.profileChanges,
+        withdrawals: management.withdrawals,
+        walletBalances: management.walletBalances,
+      }));
+      loadSection('online-exams', '/api/admin/online-exams', (onlineExams) => ({
+        onlineExams: onlineExams.exams,
+      }));
+      loadSection('answer-keys', '/api/admin/answer-keys', (answerKeys) => ({
+        answerKeys: answerKeys.exams,
+      }));
+      loadSection('notices', '/api/admin/notices', (notices) => ({
+        notices: notices.notices,
+      }));
+    }
+
+    await Promise.all(requests);
   };
 
   useEffect(() => { void refresh(); }, [user.role]);
@@ -795,10 +886,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
         body: JSON.stringify(noticeDraft),
       });
       setNoticeDraft(emptyNoticeDraft);
-      setNotice('Notice published. It is now available in Latest Updates and Public Notices.');
+      setNotice('Notice saved as a draft. A Super Admin can publish it after review.');
       await refresh();
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : 'Could not publish notice.');
+      setError(createError instanceof Error ? createError.message : 'Could not save notice draft.');
     } finally {
       setIsSavingNotice(false);
     }
@@ -822,17 +913,30 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     }
   };
 
-  const setInstituteApproval = async (id: string, status: 'approved' | 'rejected') => {
+  const setInstituteApproval = async (id: string, status: 'approved' | 'rejected', reason: string) => {
+    const normalizedReason = reason.trim();
+    if (normalizedReason.length < 10 || normalizedReason.length > 1000) {
+      setError('Enter an institution decision reason between 10 and 1,000 characters.');
+      return;
+    }
     setError(null);
+    setSavingInstitutionDecisionId(id);
     try {
       await apiRequest(`/api/admin/institutes/${encodeURIComponent(id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, reason: normalizedReason }),
+      });
+      setInstitutionDecisionReasons((reasons) => {
+        const next = { ...reasons };
+        delete next[id];
+        return next;
       });
       setNotice(status === 'approved' ? 'Institute access approved.' : 'Institute registration rejected.');
       await refresh();
     } catch (approvalError) {
       setError(approvalError instanceof Error ? approvalError.message : 'Could not update institute registration.');
+    } finally {
+      setSavingInstitutionDecisionId(null);
     }
   };
 
@@ -957,21 +1061,6 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const submitCheckin = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
-    if (!checkinCandidate) {
-      setIsCheckingCandidate(true);
-      try {
-        const { candidate } = await apiRequest<{ candidate: CheckinCandidate }>('/api/center/checkins/lookup', {
-          method: 'POST',
-          body: JSON.stringify({ applicationNumber, dateOfBirth }),
-        });
-        setCheckinCandidate(candidate);
-      } catch (lookupError) {
-        setError(lookupError instanceof Error ? lookupError.message : 'Could not find this candidate.');
-      } finally {
-        setIsCheckingCandidate(false);
-      }
-      return;
-    }
     try {
       await apiRequest('/api/center/checkins', {
         method: 'POST',
@@ -981,7 +1070,6 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
       setApplicationNumber('');
       setDateOfBirth('');
       setCheckinNote('');
-      setCheckinCandidate(null);
       await refresh();
     } catch (checkinError) {
       setError(checkinError instanceof Error ? checkinError.message : 'Could not verify this candidate.');
@@ -998,9 +1086,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
         headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
         body: await file.arrayBuffer(),
       });
-      setNotice(kind === 'admit-cards'
-        ? `${response.imported} admit card(s) imported and published. Candidates can download them now.`
-        : `${response.imported} row(s) imported as a draft. Review them and publish when ready.`);
+      setNotice(`${response.imported} row(s) imported. Review them and publish when ready.`);
       await refresh();
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : `Could not import ${kind}.`);
@@ -1053,21 +1139,83 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
 
   const detail = roleDetails[user.role];
   const theme = dashboardTheme[user.role];
+  const instituteNavItems = [
+    { id: 'institute-overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'institute-checkins', label: 'Applicants & verification', icon: ClipboardCheck },
+    { id: 'institute-forms', label: 'Examination forms', icon: FileText },
+    { id: 'institute-profile', label: 'My Institute', icon: Building2 },
+    { id: 'institute-wallet', label: 'Payments & fees', icon: Wallet },
+    { id: 'institute-documents', label: 'Institution documents', icon: FolderOpen },
+    { id: 'institute-staff', label: 'Staff & roles', icon: UserRound },
+  ];
+  const selectedInstituteSection = instituteNavItems.find((item) => item.id === activeInstituteSection) ?? instituteNavItems[0];
+  const instituteSectionDescriptions: Record<string, string> = {
+    'institute-overview': 'Manage examinations, applicants and institute activity in one place.',
+    'institute-checkins': 'Verify candidates assigned to your examination center and review recent check-ins.',
+    'institute-forms': 'Create institute form listings and review the forms you have submitted.',
+    'institute-profile': 'Request changes to your institute details and track their review status.',
+    'institute-wallet': 'View institute funds, wallet activity and withdrawal requests.',
+    'institute-documents': 'View and manage institution documents for verification.',
+    'institute-staff': 'Manage staff invitations and institute roles.',
+  };
   const navTabs: { id: DashboardTab; label: string }[] = user.role === 'official'
-    ? [{ id: 'overview', label: 'Overview' }, { id: 'institutes', label: 'Institute approvals & wallet' }, { id: 'exams', label: 'Exam forms' }, { id: 'notices', label: 'Latest updates' }, { id: 'admit-cards', label: 'Admit cards' }, { id: 'online-exams', label: 'Online exams' }, { id: 'answer-keys', label: 'Answer keys' }, { id: 'applications', label: 'Applications' }, { id: 'feedback', label: 'Helpdesk' }, { id: 'attempts', label: 'Mock tests' }, { id: 'results', label: 'Results' }, { id: 'data-export', label: 'Excel data' }]
+    ? [{ id: 'overview', label: 'Overview' }, { id: 'institutes', label: 'Institute approvals & wallet' }, { id: 'institution-documents', label: 'Institution documents' }, { id: 'exams', label: 'Exam forms' }, { id: 'notices', label: 'Latest updates' }, { id: 'admit-cards', label: 'Admit cards' }, { id: 'online-exams', label: 'Online exams' }, { id: 'answer-keys', label: 'Answer keys' }, { id: 'applications', label: 'Applications' }, { id: 'feedback', label: 'Helpdesk' }, { id: 'attempts', label: 'Mock tests' }, { id: 'results', label: 'Results' }, { id: 'data-export', label: 'Excel data' }, { id: 'platform-staff', label: 'Staff management' }, { id: 'institute-verification', label: 'Institutional verification' }]
     : [{ id: 'overview', label: 'Overview' }];
+  const permissions = adminPermissions(user);
+  const visibleNavTabs = navTabs.filter((item) => canSeeAdminTab(user, item.id));
 
   const list = (key: string) => Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : [];
   const record = (key: string) => typeof data[key] === 'object' && data[key] !== null
     ? data[key] as Record<string, unknown>
     : {};
+  const instituteProfile = record('profile');
+  const instituteDisplayName = typeof instituteProfile.display_name === 'string' && instituteProfile.display_name.trim()
+    ? instituteProfile.display_name
+    : user.name;
   const openWallet = () => {
     if (user.role === 'official') {
       setTab('institutes');
       window.setTimeout(() => document.getElementById('admin-institute-wallet')?.scrollIntoView({ behavior: 'smooth' }), 100);
       return;
     }
-    document.getElementById('institute-wallet')?.scrollIntoView({ behavior: 'smooth' });
+    setActiveInstituteSection('institute-wallet');
+    setIsInstituteMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const jumpToInstituteSection = (sectionId: string) => {
+    setActiveInstituteSection(sectionId);
+    setIsInstituteMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const isLoading = Object.entries(sectionStatuses).some(
+    ([key, status]) => key.startsWith(`${user.role}:`) && status.state === 'loading',
+  );
+  const currentSectionStatuses = Object.entries(sectionStatuses).filter(
+    ([key]) => key.startsWith(`${user.role}:`),
+  );
+  const dashboardStats = record('stats');
+  const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : '—';
+  const candidateSectionState = (section: string) => getDashboardSectionContentState(
+    sectionStatuses[`candidate:${section}`],
+  );
+  const candidateSectionStatus = (section: string, label: string) => {
+    const state = candidateSectionState(section);
+    if (state === 'loading') {
+      return <LoadingState label={`Loading ${label.toLowerCase()}…`} className="justify-start px-0 py-5" />;
+    }
+    if (state === 'error') {
+      return (
+        <ErrorState
+          title={`${label} unavailable`}
+          description="We couldn't load this section. Please try again."
+          onRetry={() => { void retryLoadRef.current[`candidate:${section}`]?.(); }}
+          className="mt-4"
+        />
+      );
+    }
+    return null;
   };
 
   useEffect(() => {
@@ -1083,50 +1231,206 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     }
   }, [data.profile]);
 
+  // The institute menu closes on Escape (from anywhere) and on a click or tap outside it.
+  useEffect(() => {
+    if (!isInstituteMenuOpen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setIsInstituteMenuOpen(false);
+      instituteMenuButtonRef.current?.focus();
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (instituteMenuRef.current?.contains(target) || instituteMenuButtonRef.current?.contains(target)) return;
+      setIsInstituteMenuOpen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [isInstituteMenuOpen]);
+
+  const instituteSectionErrors: Record<string, string> = {
+    'center:checkins': 'Candidate check-ins could not be loaded',
+    'center:workspace': 'Institute forms, profile and wallet could not be loaded',
+  };
+  const failedInstituteSections = user.role === 'center'
+    ? currentSectionStatuses.filter(([key, status]) => status.state === 'error' && instituteSectionErrors[key])
+    : [];
+
   return (
     <main className={`min-h-screen text-slate-900 ${theme.shell}`}>
-      <header className={`bg-gradient-to-r ${theme.header} text-white shadow-md`}>
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
-            <BrandLogo compact light />
-            <div className="min-w-0"><p className="font-black tracking-wide">{t('dash.portalName', { role: t(`role.${user.role}.label`) })}</p><p className="truncate text-xs text-slate-300">{user.name} · {user.id}</p></div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={onHome} className="rounded-lg px-3 py-2 text-sm text-slate-200 hover:bg-white/10">{t('dash.publicWebsite')}</button>
-            {(user.role === 'center' || user.role === 'official') && (
-              <button onClick={openWallet} className="inline-flex items-center gap-2 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
-                <Wallet className="h-4 w-4" /> Wallet
-              </button>
-            )}
-            <button onClick={() => void onLogout()} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold hover:bg-emerald-500"><LogOut className="h-4 w-4" /> {t('app.signOut')}</button>
+      {user.role === 'center' && (
+        <div className="bg-[#0B2E59] text-white">
+          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 py-2 text-[11px] font-bold tracking-[0.12em] sm:px-6">
+            <span className="uppercase">ELTNOY {t('Examination portal')}</span>
+            <span className="hidden text-blue-100 sm:inline"><span className="uppercase">{t('Institute workspace')}</span> · {instituteDisplayName}</span>
           </div>
         </div>
+      )}
+      <header className={`${user.role === 'center' ? 'sticky top-0 z-40 bg-white text-slate-900 border-b border-slate-200 shadow-sm' : 'bg-gradient-to-r ' + theme.header + ' text-white shadow-md'}`}>
+        {/* Institute: one row at every width (icon-only buttons on phones) and the same 1600px
+            width as the top bar and the page content. Other roles keep the original header. */}
+        <div className={user.role === 'center'
+          ? 'relative mx-auto flex max-w-[1600px] items-center justify-between gap-2 px-4 py-3 sm:gap-4 sm:px-6'
+          : 'mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6'}
+        >
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            {user.role === 'center' && (
+              <button
+                ref={instituteMenuButtonRef}
+                type="button"
+                aria-label={t(isInstituteMenuOpen ? 'Close institute workspace menu' : 'Open institute workspace menu')}
+                aria-controls="institute-section-menu"
+                aria-expanded={isInstituteMenuOpen}
+                onClick={() => setIsInstituteMenuOpen((isOpen) => !isOpen)}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"
+              >
+                {isInstituteMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+              </button>
+            )}
+            {user.role === 'center' ? <BrandLogo compact /> : <BrandLogo compact light />}
+            <div className={`min-w-0 ${user.role === 'center' ? 'hidden lg:block' : ''}`}><p className="truncate font-black tracking-wide">{user.role === 'center' ? t('Institute Dashboard') : `${t(detail.label)} ${t('Portal')}`}</p><p className={`truncate text-xs ${user.role === 'center' ? 'text-slate-500' : 'text-slate-300'}`}>{user.role === 'center' ? instituteDisplayName : user.name} · {user.id}</p></div>
+          </div>
+          {user.role === 'center' ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <button type="button" onClick={onHome} className="hidden whitespace-nowrap rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 md:inline-flex">{t('Public website')}</button>
+              <button type="button" aria-label={t('Open institute profile')} onClick={() => jumpToInstituteSection('institute-profile')} className="hidden h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 sm:grid"><UserRound className="h-5 w-5" /></button>
+              <button type="button" onClick={openWallet} className="inline-flex h-10 min-w-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 sm:px-3">
+                <Wallet className="h-4 w-4 shrink-0" /><span className="sr-only sm:not-sr-only">{t('Wallet')}</span>
+              </button>
+              <button type="button" onClick={() => void onLogout()} className="inline-flex h-10 min-w-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-600 px-2.5 text-sm font-bold text-white hover:bg-emerald-500 sm:px-3">
+                <LogOut className="h-4 w-4 shrink-0" /><span className="sr-only sm:not-sr-only">{t('Sign out')}</span>
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button onClick={onHome} className="rounded-lg px-3 py-2 text-sm text-slate-200 hover:bg-white/10">{t('Public website')}</button>
+              {user.role === 'official' && (
+                <button onClick={openWallet} className="inline-flex items-center gap-2 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
+                  <Wallet className="h-4 w-4" /> {t('Wallet')}
+                </button>
+              )}
+              <button onClick={() => void onLogout()} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold hover:bg-emerald-500"><LogOut className="h-4 w-4" /> {t('Sign out')}</button>
+            </div>
+          )}
+          {user.role === 'center' && (
+            <nav
+              ref={instituteMenuRef}
+              id="institute-section-menu"
+              aria-label={t('Institute sections')}
+              className={`${isInstituteMenuOpen ? 'block' : 'hidden'} absolute left-0 top-full z-50 mt-2 w-[min(90vw,320px)] rounded-2xl border border-slate-200 bg-[#071E49] p-3 text-white shadow-2xl`}
+            >
+              <p className="px-3 pb-2 pt-1 text-xs font-black uppercase tracking-[0.16em] text-blue-200">{t('Institute workspace')}</p>
+              <div className="space-y-1">
+                {instituteNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const active = activeInstituteSection === item.id;
+                  return (
+                    <a
+                      key={item.id}
+                      href={`#${item.id}`}
+                      aria-current={active ? 'page' : undefined}
+                      onClick={(event) => { event.preventDefault(); jumpToInstituteSection(item.id); }}
+                      className={`flex items-center gap-3 rounded-lg px-3 py-3 text-sm ${active ? 'bg-emerald-600 font-bold text-white' : 'font-semibold text-slate-200 hover:bg-white/10'}`}
+                    >
+                      <Icon className="h-5 w-5 shrink-0" />
+                      <span>{t(item.label)}</span>
+                      {!active && <ArrowRight className="ml-auto h-4 w-4" />}
+                    </a>
+                  );
+                })}
+              </div>
+              {/* The header hides this link below the md breakpoint, so phones reach it here. */}
+              <div className="mt-2 border-t border-white/15 pt-2 md:hidden">
+                <button type="button" onClick={() => { setIsInstituteMenuOpen(false); onHome(); }} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold text-slate-200 hover:bg-white/10">
+                  <Home className="h-5 w-5 shrink-0" />
+                  <span>{t('Public website')}</span>
+                </button>
+              </div>
+            </nav>
+          )}
+        </div>
       </header>
-      <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6">
+      <div className={`mx-auto w-full px-4 py-7 sm:px-6 ${user.role === 'center' ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className={`text-xs font-bold uppercase tracking-[0.16em] ${
               user.role === 'official' ? 'text-blue-800' : user.role === 'center' ? 'text-sky-800' : 'text-emerald-800'
-            }`}>{t(`dash.${user.role}.eyebrow`)}</p>
-            <h1 className="mt-1 text-2xl font-black text-[#0B2E59] sm:text-3xl">{t(`dash.${user.role}.title`)}</h1>
-            <p className="mt-1 text-sm text-slate-600">{t(`dash.${user.role}.description`)}</p>
+            }`}>{t(theme.eyebrow)}</p>
+            <h1 className="mt-1 text-2xl font-black text-[#0B2E59] sm:text-3xl">{user.role === 'center' ? activeInstituteSection === 'institute-overview' ? t('Welcome back, {name}').replace('{name}', instituteDisplayName) : t(selectedInstituteSection.label) : `${t(detail.title.replace('Login', '').trim())} ${t('Dashboard')}`}</h1>
+            <p className="mt-1 text-sm text-slate-600">{user.role === 'center' ? t(instituteSectionDescriptions[activeInstituteSection]) : t(theme.description)}</p>
           </div>
-          <button onClick={() => void refresh()} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> {t('dash.refresh')}</button>
+          <div className="flex flex-wrap items-center gap-2">
+            {user.role === 'center' && activeInstituteSection === 'institute-overview' && (
+              <>
+                <button type="button" onClick={() => jumpToInstituteSection('institute-forms')} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-bold text-emerald-800 shadow-sm hover:bg-emerald-50"><PlusCircle className="h-4 w-4" />{t('Create institute form')}</button>
+                <button type="button" onClick={() => jumpToInstituteSection('institute-checkins')} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-600"><ClipboardCheck className="h-4 w-4" />{t('Verify candidate')}</button>
+              </>
+            )}
+            <button onClick={() => void refresh()} disabled={isLoading} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} /> {t('Refresh')}</button>
+          </div>
         </div>
-        {error && <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
-        {notice && <div role="status" className="mb-4 flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />{notice}</span><button onClick={() => setNotice(null)} aria-label={t('app.dismiss')}>×</button></div>}
+        {notice && <div role="status" className="mb-4 flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />{notice}</span><button onClick={() => setNotice(null)} aria-label="Dismiss message">×</button></div>}
+        {error && <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800"><p>{error}</p></div>}
+        {failedInstituteSections.length > 0 && (
+          <div className="mb-5 space-y-3">
+            {failedInstituteSections.map(([key]) => (
+              <ErrorState
+                key={key}
+                title={t(instituteSectionErrors[key])}
+                description={t('Figures that depend on this data show “—” until it loads. Please try again.')}
+                retryLabel={t('Try again')}
+                onRetry={() => { void retryLoadRef.current[key]?.(); }}
+              />
+            ))}
+          </div>
+        )}
+        {user.role !== 'center' && currentSectionStatuses.length > 0 && (
+          <section aria-label="Dashboard data loading status" className="mb-5 rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="font-bold text-slate-800">{t('Dashboard data status')}</h2>
+            <ul className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {currentSectionStatuses.map(([key, status]) => {
+                const name = key.slice(user.role.length + 1).replaceAll('-', ' ');
+                return (
+                  <li key={key} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                    <span className="capitalize font-medium text-slate-700">{t(name)}</span>
+                    {status.state === 'loading'
+                      ? <span role="status" className="text-slate-500">{t('Loading…')}</span>
+                      : status.state === 'success'
+                        ? <span className="text-emerald-700">{t('Loaded')}</span>
+                        : <span className="flex flex-wrap items-center gap-2 text-rose-700">
+                            <span role="alert">{status.error}</span>
+                            <button
+                              type="button"
+                              onClick={() => void retryLoadRef.current[key]?.()}
+                              className="rounded border border-rose-300 bg-white px-2 py-1 font-semibold"
+                            >
+                              {t('Retry')}
+                            </button>
+                          </span>}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
         {user.role === 'official' && (
           <nav aria-label="Dashboard sections" className="mb-5 flex flex-wrap gap-2">
-            {navTabs.map((item) => <button key={item.id} onClick={() => setTab(item.id)} className={`rounded-lg px-4 py-2 text-sm font-bold ${tab === item.id ? 'bg-blue-900 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-blue-50'}`}>{item.label}</button>)}
+            {visibleNavTabs.map((item) => <button key={item.id} onClick={() => setTab(item.id)} className={`rounded-lg px-4 py-2 text-sm font-bold ${tab === item.id ? 'bg-blue-900 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-blue-50'}`}>{t(item.label)}</button>)}
           </nav>
         )}
-        {loading ? <div className="rounded-xl bg-white p-10 text-center text-sm text-slate-500">Loading secure portal data…</div> : (
-          <>
+        {user.role === 'official' && tab === 'institution-documents' && (
+          <InstitutionDocumentManagement role="official" canOpenDocuments={permissions.canOpenInstitutionDocuments} canReviewDocuments={permissions.canReviewInstitutionDocuments} />
+        )}
             {user.role === 'official' && tab === 'notices' && (
               <section className="space-y-5">
                 <form onSubmit={(event) => void createPortalNotice(event)} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div>
-                    <h2 className="text-lg font-extrabold text-[#0B2E59]">Publish a portal update</h2>
+                    <h2 className="text-lg font-extrabold text-[#0B2E59]">Create a portal notice draft</h2>
                     <p className="mt-1 text-sm text-slate-600">Published notices appear automatically in the scrolling Latest Updates bar, Public Notices, and site search.</p>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -1145,11 +1449,11 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                       <textarea required minLength={10} maxLength={10000} rows={6} value={noticeDraft.fullContent} onChange={(event) => setNoticeDraft((draft) => ({ ...draft, fullContent: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal" placeholder="Write the full notice. Line breaks are preserved." />
                     </label>
                     <label className="text-sm font-semibold text-slate-700">Reference number
-                      <input required minLength={3} maxLength={80} pattern="[A-Za-z0-9._\/\-]+" value={noticeDraft.referenceNumber} onChange={(event) => setNoticeDraft((draft) => ({ ...draft, referenceNumber: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-mono font-normal" placeholder="ELTNOY/NOTICE/2026/001" />
+                      <input required minLength={3} maxLength={80} pattern="[A-Za-z0-9._/-]+" value={noticeDraft.referenceNumber} onChange={(event) => setNoticeDraft((draft) => ({ ...draft, referenceNumber: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-mono font-normal" placeholder="ELTNOY/NOTICE/2026/001" />
                     </label>
                   </div>
-                  <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Publishing is immediate. Check dates, application links, and notice text before publishing. You can unpublish an item below.</p>
-                  <button disabled={isSavingNotice} type="submit" className="rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-600 disabled:opacity-60">{isSavingNotice ? 'Publishing…' : 'Publish update'}</button>
+                  <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">{SUPER_ADMIN_ONLY_TEXT.noticePublishing}</p>
+                  <button disabled={isSavingNotice} type="submit" className="rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-600 disabled:opacity-60">{isSavingNotice ? 'Saving…' : 'Save notice draft'}</button>
                 </form>
 
                 <section className="space-y-3">
@@ -1162,12 +1466,14 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="font-bold text-slate-900">{String(item.title)}</h3>
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${item.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{item.is_published ? 'Published' : 'Unpublished'}</span>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${item.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{item.is_published ? 'Published' : 'Draft'}</span>
                         </div>
                         <p className="mt-1 text-xs text-slate-500">{String(item.category)} · {String(item.reference_number)} · {new Date(String(item.created_at)).toLocaleString()}</p>
                         <p className="mt-2 text-sm text-slate-600">{String(item.summary)}</p>
                       </div>
-                      <button type="button" onClick={() => void publishAdminRecord(`/api/admin/notices/${encodeURIComponent(String(item.id))}`, !Boolean(item.is_published), 'Notice')} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">{item.is_published ? 'Unpublish' : 'Publish'}</button>
+                      {permissions.canPublishNotices
+                        ? <button type="button" onClick={() => void publishAdminRecord(`/api/admin/notices/${encodeURIComponent(String(item.id))}`, !Boolean(item.is_published), 'Notice')} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">{item.is_published ? 'Unpublish' : 'Publish'}</button>
+                        : <span className="text-xs text-slate-500">{SUPER_ADMIN_ONLY_TEXT.noticePublishing}</span>}
                     </article>
                   )) : <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">No portal updates yet. Publish the first notice above.</p>}
                 </section>
@@ -1181,6 +1487,8 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                   <div>
                     <h2 className="text-lg font-extrabold text-[#0B2E59]">Bulk admit-card upload</h2>
                     <p className="mt-1 text-sm text-slate-600">Upload an Excel workbook with an AdmitCards worksheet. Rows are matched to existing applications and published immediately; the whole upload rolls back if any row is invalid.</p>
+                    {!permissions.canWriteAdmitCards && <p role="note" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{SUPER_ADMIN_ONLY_TEXT.admitCards}</p>}
+                    {permissions.canWriteAdmitCards && <>
                     <button type="button" onClick={downloadUploadTemplates} className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-blue-800 hover:underline"><Download className="h-4 w-4" /> Download Excel templates</button>
                     <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-blue-50">
                       <Upload className="h-5 w-5" />
@@ -1188,6 +1496,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                       <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" disabled={uploading !== null} onChange={(event) => { void uploadWorkbook('admit-cards', event.target.files?.[0]); event.target.value = ''; }} />
                     </label>
                     <p className="mt-2 text-xs text-slate-500">Required columns are provided in the template. A successful upload publishes cards so candidates can look them up.</p>
+                    </>}
                   </div>
                 </div>
               </section>
@@ -1198,6 +1507,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">Create online exam from Excel</h2>
                   <p className="mt-1 text-sm text-slate-600">Upload one exam per workbook. Questions and correct answers are stored server-side; candidates never receive the answer key. New or replaced rows stay unpublished until reviewed.</p>
+                  {!permissions.canCorrectPublishedContent && <p role="note" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{SUPER_ADMIN_ONLY_TEXT.draftImports} {SUPER_ADMIN_ONLY_TEXT.publishing}</p>}
                   <button type="button" onClick={downloadUploadTemplates} className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-blue-800 hover:underline"><Download className="h-4 w-4" /> Download Excel templates</button>
                   <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-blue-50">
                     <Upload className="h-5 w-5" />
@@ -1208,7 +1518,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                   <table className="w-full min-w-[640px] text-left text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Exam</th><th className="p-4">Questions</th><th className="p-4">Duration</th><th className="p-4">Status</th><th className="p-4">Action</th></tr></thead>
-                    <tbody className="divide-y divide-slate-100">{list('onlineExams').map((exam) => <tr key={String(exam.exam_code)}><td className="p-4 font-bold">{String(exam.exam_name)}<span className="block text-xs text-slate-500">{String(exam.exam_code)}</span></td><td className="p-4">{String(exam.question_count)}</td><td className="p-4">{String(exam.duration_minutes)} min</td><td className="p-4">{exam.is_published ? 'Published' : 'Draft'}</td><td className="p-4"><button type="button" onClick={() => void publishAdminRecord(`/api/admin/online-exams/${encodeURIComponent(String(exam.exam_code))}`, !Boolean(exam.is_published), 'Online exam')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{exam.is_published ? 'Unpublish' : 'Publish exam'}</button></td></tr>)}</tbody>
+                    <tbody className="divide-y divide-slate-100">{list('onlineExams').map((exam) => <tr key={String(exam.exam_code)}><td className="p-4 font-bold">{String(exam.exam_name)}<span className="block text-xs text-slate-500">{String(exam.exam_code)}</span></td><td className="p-4">{String(exam.question_count)}</td><td className="p-4">{String(exam.duration_minutes)} min</td><td className="p-4">{exam.is_published ? 'Published' : 'Draft'}</td><td className="p-4">{permissions.canPublishOnlineExams ? <button type="button" onClick={() => void publishAdminRecord(`/api/admin/online-exams/${encodeURIComponent(String(exam.exam_code))}`, !Boolean(exam.is_published), 'Online exam')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{exam.is_published ? 'Unpublish' : 'Publish exam'}</button> : <span className="text-xs text-slate-500">Super Admin only</span>}</td></tr>)}</tbody>
                   </table>
                 </section>
               </section>
@@ -1219,6 +1529,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">Upload official answer keys</h2>
                   <p className="mt-1 text-sm text-slate-600">Import exam-specific questions and correct options from the AnswerKeys worksheet. Imports remain drafts; publish only after verification.</p>
+                  {!permissions.canCorrectPublishedContent && <p role="note" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{SUPER_ADMIN_ONLY_TEXT.draftImports} {SUPER_ADMIN_ONLY_TEXT.publishing}</p>}
                   <button type="button" onClick={downloadUploadTemplates} className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-blue-800 hover:underline"><Download className="h-4 w-4" /> Download Excel templates</button>
                   <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-blue-50">
                     <Upload className="h-5 w-5" />
@@ -1228,22 +1539,17 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 </div>
                 <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                   <table className="w-full min-w-[600px] text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Exam</th><th className="p-4">Questions</th><th className="p-4">Status</th><th className="p-4">Objections</th><th className="p-4">Action</th></tr></thead>
-                    <tbody className="divide-y divide-slate-100">{list('answerKeys').map((exam) => <tr key={String(exam.exam_code)}><td className="p-4 font-bold">{String(exam.exam_code)}</td><td className="p-4">{String(exam.question_count)}</td><td className="p-4">{exam.is_published ? 'Published' : 'Draft'}</td><td className="p-4 text-xs"><span className={exam.objections_open ? 'font-bold text-emerald-700' : 'text-slate-500'}>{exam.objections_open ? 'Window open' : 'Window closed'}</span>{Number(exam.pending_objections) > 0 && <span className="mt-1 block font-bold text-amber-700">{String(exam.pending_objections)} pending</span>}</td><td className="p-4"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void publishAdminRecord(`/api/admin/answer-keys/${encodeURIComponent(String(exam.exam_code))}`, !Boolean(exam.is_published), 'Answer key')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{exam.is_published ? 'Unpublish' : 'Publish key'}</button><button type="button" onClick={() => setObjectionExamCode(String(exam.exam_code))} className="rounded-lg border border-purple-300 px-3 py-2 text-xs font-bold text-purple-800 hover:bg-purple-50">Manage objections</button></div></td></tr>)}</tbody>
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Exam</th><th className="p-4">Questions</th><th className="p-4">Status</th><th className="p-4">Action</th></tr></thead>
+                    <tbody className="divide-y divide-slate-100">{list('answerKeys').map((exam) => <tr key={String(exam.exam_code)}><td className="p-4 font-bold">{String(exam.exam_code)}</td><td className="p-4">{String(exam.question_count)}</td><td className="p-4">{exam.is_published ? 'Published' : 'Draft'}</td><td className="p-4">{permissions.canPublishAnswerKeys ? <button type="button" onClick={() => void publishAdminRecord(`/api/admin/answer-keys/${encodeURIComponent(String(exam.exam_code))}`, !Boolean(exam.is_published), 'Answer key')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{exam.is_published ? 'Unpublish' : 'Publish key'}</button> : <span className="text-xs text-slate-500">Super Admin only</span>}</td></tr>)}</tbody>
                   </table>
                 </section>
-                {objectionExamCode && (
-                  <AdminObjectionsPanel
-                    key={objectionExamCode}
-                    examCode={objectionExamCode}
-                    onClose={() => setObjectionExamCode(null)}
-                    onChanged={(message) => { setNotice(message); void refresh(); }}
-                  />
-                )}
               </section>
             )}
 
-            {user.role === 'official' && tab === 'data-export' && (
+            {user.role === 'official' && user.isSuperAdmin && tab === 'platform-staff' && <PlatformStaffAdminPanel />}
+            {user.role === 'official' && user.isSuperAdmin && tab === 'institute-verification' && <InstituteVerificationPanel />}
+
+            {user.role === 'official' && user.isSuperAdmin && tab === 'data-export' && (
               <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="flex items-start gap-4">
                   <Download className="mt-1 h-6 w-6 text-blue-800" />
@@ -1269,7 +1575,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="text-sm font-semibold text-slate-700">Exam code
-                      <input required maxLength={30} pattern="[A-Za-z0-9\-]+" value={examDraft.code} onChange={(event) => setExamField('code', event.target.value.toUpperCase())} placeholder="e.g. ENT-2027" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase" />
+                      <input required maxLength={30} pattern="[A-Za-z0-9-]+" value={examDraft.code} onChange={(event) => setExamField('code', event.target.value.toUpperCase())} placeholder="e.g. ENT-2027" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase" />
                     </label>
                     <label className="text-sm font-semibold text-slate-700">Exam category
                       <select value={examDraft.category} onChange={(event) => setExamField('category', event.target.value as ExamDraft['category'])} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm">
@@ -1349,6 +1655,46 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
             {user.role === 'official' && tab === 'institutes' && (
               <div className="space-y-5">
               <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-extrabold text-[#0B2E59]">Pending document-submission cycles</h2>
+                <p className="mt-1 text-sm text-slate-500">Review visibility only. Category counts do not satisfy or enforce an approval gate; document uploads and completeness policy remain disabled.</p>
+                {list('institutionSubmissionCycles').length ? (
+                  <div className="mt-3 space-y-3">
+                    {list('institutionSubmissionCycles').map((submission) => {
+                      const counts = submission.category_counts && typeof submission.category_counts === 'object'
+                        ? submission.category_counts as Record<string, unknown>
+                        : {};
+                      const missing = Array.isArray(submission.missing_categories)
+                        ? submission.missing_categories.map(String)
+                        : [];
+                      const hasCycle = Boolean(submission.cycle_id);
+                      return (
+                        <article key={String(submission.institution_id)} className="rounded-lg border border-slate-200 p-4">
+                          <div className="flex flex-wrap justify-between gap-2">
+                            <div>
+                              <h3 className="font-bold text-slate-900">{String(submission.display_name)}</h3>
+                              <p className="text-xs text-slate-500">{String(submission.login_id)} · Account {String(submission.account_status)}</p>
+                            </div>
+                            <span className="text-xs font-semibold text-slate-600">
+                              {hasCycle
+                                ? `Cycle ${String(submission.submission_version)} · ${String(submission.source_type)}`
+                                : 'No submission cycle recorded'}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-sm text-slate-700">
+                            {hasCycle
+                              ? `Documents by confirmed category: ${Object.entries(counts).map(([category, count]) => `${category}: ${String(count)}`).join(' · ')}`
+                              : 'This existing pending account predates submission-cycle tracking.'}
+                          </p>
+                          {hasCycle && missing.length > 0 && (
+                            <p className="mt-1 text-xs text-slate-500">No document record yet for: {missing.join(', ')}</p>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                ) : <p className="mt-3 text-sm text-slate-500">No pending submission cycles are available.</p>}
+              </section>
+              <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="mb-4">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">Institute registration requests</h2>
                   <p className="mt-1 text-sm text-slate-500">Approve access only after independently verifying the institute. Institute forms, profile changes, credits, and withdrawals are managed separately below.</p>
@@ -1366,18 +1712,46 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                           {typeof institute.website === 'string' && institute.website.length > 0 && <p className="text-sm text-slate-600">Website: {institute.website}</p>}
                           <p className="mt-1 text-xs text-slate-500">Submitted {new Date(String(institute.created_at)).toLocaleString()}</p>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-col items-start gap-2">
                           <span className={`rounded-full px-2.5 py-1 text-xs font-bold capitalize ${
                             institute.account_status === 'approved' ? 'bg-emerald-100 text-emerald-800'
                               : institute.account_status === 'rejected' ? 'bg-rose-100 text-rose-800'
                                 : 'bg-amber-100 text-amber-800'
                           }`}>{String(institute.account_status)}</span>
                           {institute.account_status === 'pending' && (
-                            <>
-                              <button type="button" onClick={() => void setInstituteApproval(String(institute.id), 'approved')} className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-600">Approve access</button>
-                              <button type="button" onClick={() => void setInstituteApproval(String(institute.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50">Reject</button>
-                            </>
+                            <div className="space-y-2">
+                              <label className="block text-xs font-semibold text-slate-700">
+                                Decision reason (10–1,000 characters)
+                                <textarea
+                                  required
+                                  minLength={10}
+                                  maxLength={1000}
+                                  rows={2}
+                                  value={institutionDecisionReasons[String(institute.id)] || ''}
+                                  onChange={(event) => setInstitutionDecisionReasons((reasons) => ({
+                                    ...reasons,
+                                    [String(institute.id)]: event.target.value,
+                                  }))}
+                                  className="mt-1 block w-full min-w-64 rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"
+                                />
+                              </label>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  disabled={savingInstitutionDecisionId === institute.id || (institutionDecisionReasons[String(institute.id)] || '').trim().length < 10}
+                                  onClick={() => void setInstituteApproval(String(institute.id), 'approved', institutionDecisionReasons[String(institute.id)] || '')}
+                                  className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-600 disabled:opacity-50"
+                                >Approve access</button>
+                                <button
+                                  type="button"
+                                  disabled={savingInstitutionDecisionId === institute.id || (institutionDecisionReasons[String(institute.id)] || '').trim().length < 10}
+                                  onClick={() => void setInstituteApproval(String(institute.id), 'rejected', institutionDecisionReasons[String(institute.id)] || '')}
+                                  className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                                >Reject</button>
+                              </div>
+                            </div>
                           )}
+
                         </div>
                       </article>
                     ))}
@@ -1398,128 +1772,121 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               <section id="admin-institute-wallet" className="scroll-mt-24 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="flex items-center gap-2 text-lg font-extrabold text-[#0B2E59]"><Wallet className="h-5 w-5" /> Institute wallet management</h2>
                 <p className="mt-1 text-sm text-slate-500">Before recording a credit, independently verify the application-fee payment. This does not connect to a payment gateway.</p>
+                {!permissions.canCreditWallets && <p role="note" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{SUPER_ADMIN_ONLY_TEXT.wallet}</p>}
                 <div className="mt-3 space-y-3">{list('institutes').filter((institute) => institute.account_status === 'approved').map((institute) => {
                   const balance = list('walletBalances').find((item) => item.institute_id === institute.id);
-                  return <article key={String(institute.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><div><h3 className="font-bold">{String(institute.display_name)}</h3><p className="text-xs text-slate-500">{String(institute.login_id)}</p></div><strong>{formatPaise(balance?.balance_paise ?? 0)}</strong></div><form onSubmit={(event) => void recordInstituteCredit(event, String(institute.id))} className="mt-3 grid gap-2 sm:grid-cols-[140px_1fr_1fr_auto]"><input name="amount" required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?" placeholder="Amount ₹" aria-label="Credit amount in rupees" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input name="paymentReference" required minLength={3} maxLength={120} pattern="[A-Za-z0-9._\/\-]+" placeholder="Verified payment reference" aria-label="Verified payment reference" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input name="description" required minLength={3} maxLength={300} placeholder="Reason / fee details" aria-label="Credit description" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="submit" className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">Record credit</button></form></article>;
+                  return <article key={String(institute.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><div><h3 className="font-bold">{String(institute.display_name)}</h3><p className="text-xs text-slate-500">{String(institute.login_id)}</p></div><strong>{formatPaise(balance?.balance_paise ?? 0)}</strong></div>{permissions.canCreditWallets && <form onSubmit={(event) => void recordInstituteCredit(event, String(institute.id))} className="mt-3 grid gap-2 sm:grid-cols-[140px_1fr_1fr_auto]"><input name="amount" required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?" placeholder="Amount ₹" aria-label="Credit amount in rupees" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input name="paymentReference" required minLength={3} maxLength={120} pattern="[A-Za-z0-9._/-]+" placeholder="Verified payment reference" aria-label="Verified payment reference" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input name="description" required minLength={3} maxLength={300} placeholder="Reason / fee details" aria-label="Credit description" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="submit" className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">Record credit</button></form>}</article>;
                 })}</div>
                 <h3 className="mt-6 font-bold text-slate-800">Withdrawal requests</h3>
-                {list('withdrawals').length ? <div className="mt-3 space-y-3">{list('withdrawals').map((withdrawal) => <article key={String(withdrawal.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><div><strong>{String(withdrawal.institute_name)} · {String(withdrawal.login_id)}</strong><p className="text-sm">{formatPaise(withdrawal.amount_paise)} · <span className="capitalize">{String(withdrawal.status)}</span></p></div><span className="text-xs text-slate-500">{new Date(String(withdrawal.created_at)).toLocaleDateString()}</span></div>{withdrawal.status === 'pending' && <div className="mt-3 flex gap-2"><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'approved')} className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white">Approve</button><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700">Reject</button></div>}{withdrawal.status === 'approved' && <div className="mt-3 flex flex-wrap gap-2"><input value={transferReferences[String(withdrawal.id)] || ''} onChange={(event) => setTransferReferences((refs) => ({ ...refs, [String(withdrawal.id)]: event.target.value }))} required minLength={3} maxLength={120} pattern="[A-Za-z0-9._\/\-]+" placeholder="Manual transfer reference" aria-label={`Manual transfer reference for ${String(withdrawal.login_id)}`} className="min-w-60 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'paid')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">Mark paid</button><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700">Cancel approval</button></div>}</article>)}</div> : <p className="mt-2 text-sm text-slate-500">No withdrawal requests.</p>}
+                {list('withdrawals').length ? <div className="mt-3 space-y-3">{list('withdrawals').map((withdrawal) => <article key={String(withdrawal.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><div><strong>{String(withdrawal.institute_name)} · {String(withdrawal.login_id)}</strong><p className="text-sm">{formatPaise(withdrawal.amount_paise)} · <span className="capitalize">{String(withdrawal.status)}</span></p></div><span className="text-xs text-slate-500">{new Date(String(withdrawal.created_at)).toLocaleDateString()}</span></div>{permissions.canManageWithdrawals && withdrawal.status === 'pending' && <div className="mt-3 flex gap-2"><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'approved')} className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white">Approve</button><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700">Reject</button></div>}{permissions.canManageWithdrawals && withdrawal.status === 'approved' && (() => { const paymentState = withdrawalPaymentState(user, withdrawal); return <div className="mt-3 flex flex-wrap gap-2">{paymentState === 'allowed' ? <><input value={transferReferences[String(withdrawal.id)] || ''} onChange={(event) => setTransferReferences((refs) => ({ ...refs, [String(withdrawal.id)]: event.target.value }))} required minLength={3} maxLength={120} pattern="[A-Za-z0-9._/-]+" placeholder="Manual transfer reference" aria-label={`Manual transfer reference for ${String(withdrawal.login_id)}`} className="min-w-60 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'paid')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">Mark paid</button></> : <p role="note" className="basis-full text-xs text-amber-800">{paymentState === 'maker_checker' ? SUPER_ADMIN_ONLY_TEXT.makerChecker : SUPER_ADMIN_ONLY_TEXT.approverUnknown}</p>}<button type="button" onClick={() => void updateInstituteWithdrawal(String(withdrawal.id), 'rejected')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700">Cancel approval</button></div>; })()}</article>)}</div> : <p className="mt-2 text-sm text-slate-500">No withdrawal requests.</p>}
               </section>
               </div>
             )}
 
-            {(user.role === 'candidate' || user.role === 'center' || tab === 'overview') && (
+            {user.role === 'center' && activeInstituteSection === 'institute-overview' && (
+              <InstituteDashboardOverview
+                centerCode={user.id}
+                forms={list('forms')}
+                checkins={list('checkins')}
+                summary={data.dashboardSummary}
+                workspaceState={getDashboardSectionContentState(sectionStatuses['center:workspace'])}
+                checkinsState={getDashboardSectionContentState(sectionStatuses['center:checkins'])}
+                availableBalance={data.availablePaise === undefined ? '—' : formatPaise(data.availablePaise)}
+                onOpenForms={() => jumpToInstituteSection('institute-forms')}
+                onVerifyCandidate={() => jumpToInstituteSection('institute-checkins')}
+                onOpenProfile={() => jumpToInstituteSection('institute-profile')}
+                onOpenWallet={openWallet}
+              />
+            )}
+            {(user.role === 'candidate' || (user.role === 'official' && tab === 'overview')) && (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {(user.role === 'candidate' ? [
-                  { label: t('dash.stat.applications'), value: list('applications').length, icon: FileText },
-                  { label: t('dash.stat.mockTests'), value: list('attempts').length, icon: ClipboardCheck },
-                  { label: t('dash.stat.results'), value: list('results').length, icon: Award },
-                ] : user.role === 'center' ? [
-                  { label: 'Recorded check-ins', value: list('checkins').length, icon: ClipboardCheck },
-                  { label: 'Center code', value: user.id, icon: Building2 },
+                  { label: 'Applications', value: candidateSectionState('portal') === 'success' ? list('applications').length : '—', icon: FileText },
+                  { label: 'Mock tests', value: candidateSectionState('attempts') === 'success' ? list('attempts').length : '—', icon: ClipboardCheck },
+                  { label: 'Published results', value: candidateSectionState('portal') === 'success' ? list('results').length : '—', icon: Award },
                 ] : [
-                  { label: 'Applications', value: list('applications').length, icon: FileText },
-                  { label: 'Open helpdesk tickets', value: list('feedback').filter((item) => item.status !== 'resolved').length, icon: ClipboardCheck },
-                  { label: 'Mock test attempts', value: list('attempts').length, icon: Award },
-                  { label: 'Published results', value: list('results').length, icon: CheckCircle2 },
+                  { label: 'Applications', value: count(dashboardStats.applications), icon: FileText },
+                  ...(permissions.canSeeHelpdeskCount ? [{ label: 'Open helpdesk tickets', value: count(dashboardStats.openHelpdesk), icon: ClipboardCheck }] : []),
+                  { label: 'Mock test attempts', value: count(dashboardStats.mockExamAttempts), icon: Award },
+                  { label: 'Published results', value: count(dashboardStats.publishedResults), icon: CheckCircle2 },
                 ]).map((item) => {
                   const CardIcon = item.icon;
                   return <article key={item.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-500">{item.label}</p><CardIcon className="h-5 w-5 text-emerald-700" /></div><p className="mt-3 text-2xl font-black text-[#0B2E59]">{item.value}</p></article>;
                 })}
               </div>
             )}
-
-            {(user.role !== 'official' || tab === 'overview') && (
-              <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                {user.role !== 'center' && <AccountEmailCard />}
-                <ChangePasswordCard />
-                {user.role !== 'official' && <GoogleAccountCard />}
-              </div>
-            )}
+            {user.role === 'candidate' && <div className="mt-5"><StudentGoogleLinkCard /></div>}
+            {user.role === 'candidate' && <StudentEmailContactPanel />}
 
             {user.role === 'candidate' && (
               <div className="mt-5 grid gap-5 lg:grid-cols-2">
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('dash.myApplications')}</h2>
-                  {list('applications').length ? <div className="mt-4 space-y-3">{list('applications').map((item) => <article key={String(item.application_number)} className="rounded-lg border border-slate-100 bg-slate-50 p-4"><div className="flex flex-wrap justify-between gap-2"><strong>{String(item.exam_code)}</strong><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">{t(`dash.appStatus.${String(item.status)}`)}</span></div><p className="mt-2 text-sm text-slate-600">{t('dash.applicationNo', { number: String(item.application_number) })}</p>{item.roll_number !== null && item.roll_number !== undefined && <p className="mt-1 text-sm text-slate-600">{t('dash.rollCenter', { roll: String(item.roll_number), center: String(item.center_name) })}</p>}</article>)}</div> : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{t('dash.noApplications')}</p>}
-                  <button onClick={onOpenAdmitCard} className="mt-4 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600">{t('dash.openAdmitCard')}</button>
+                  <h2 className="text-lg font-extrabold text-[#0B2E59]">My applications</h2>
+                  {candidateSectionStatus('portal', 'Applications') ?? (
+                    list('applications').length
+                      ? <div className="mt-4 space-y-3">{list('applications').map((item) => <article key={String(item.application_number)} className="rounded-lg border border-slate-100 bg-slate-50 p-4"><div className="flex flex-wrap justify-between gap-2"><strong>{String(item.exam_code)}</strong><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold capitalize text-amber-800">{String(item.status)}</span></div><p className="mt-2 text-sm text-slate-600">Application {String(item.application_number)}</p>{item.roll_number !== null && item.roll_number !== undefined && <p className="mt-1 text-sm text-slate-600">Roll no. {String(item.roll_number)} · {String(item.center_name)}</p>}</article>)}</div>
+                      : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{t(NO_LINKED_APPLICATIONS_MESSAGE)}</p>
+                  )}
+                  <button onClick={onOpenAdmitCard} className="mt-4 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600">Open admit card lookup</button>
                 </section>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('dash.resultsPractice')}</h2>
-                  {list('results').length ? <p className="mt-3 text-sm text-emerald-800">{t('dash.resultsCount', { count: list('results').length })}</p> : <p className="mt-3 text-sm text-slate-600">{t('dash.noResults')}</p>}
-                  <button onClick={onOpenResults} className="mt-4 rounded-lg border border-emerald-700 px-4 py-2.5 text-sm font-bold text-emerald-800 hover:bg-emerald-50">{t('dash.checkResult')}</button>
-                  <h3 className="mt-6 font-bold text-slate-800">{t('dash.practiceHistory')}</h3>
-                  {list('attempts').length ? <ul className="mt-3 space-y-2 text-sm text-slate-600">{list('attempts').slice(0, 5).map((attempt) => <li key={String(attempt.id)} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>{t('dash.correctOf', { correct: String(attempt.correct), total: String(attempt.total_questions) })}</span><strong>{String(attempt.percentage)}%</strong></li>)}</ul> : <p className="mt-2 text-sm text-slate-500">{t('dash.noPractice')}</p>}
+                  <h2 className="text-lg font-extrabold text-[#0B2E59]">My results and practice</h2>
+                  {candidateSectionStatus('portal', 'Results') ?? (
+                    list('results').length
+                      ? <p className="mt-3 text-sm text-emerald-800">{list('results').length} result(s) published for your account.</p>
+                      : <p className="mt-3 text-sm text-slate-600">No official result has been published for this account.</p>
+                  )}
+                  <button onClick={onOpenResults} className="mt-4 rounded-lg border border-emerald-700 px-4 py-2.5 text-sm font-bold text-emerald-800 hover:bg-emerald-50">Check official result</button>
+                  <h3 className="mt-6 font-bold text-slate-800">Practice test history</h3>
+                  {candidateSectionStatus('attempts', 'Practice history') ?? (
+                    list('attempts').length
+                      ? <ul className="mt-3 space-y-2 text-sm text-slate-600">{list('attempts').slice(0, 5).map((attempt) => <li key={String(attempt.id)} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>{String(attempt.correct)} correct of {String(attempt.total_questions)}</span><strong>{String(attempt.percentage)}%</strong></li>)}</ul>
+                      : <p className="mt-2 text-sm text-slate-500">No practice attempts yet.</p>
+                  )}
                 </section>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">{t('dash.onlineExams')}</h2>
+                  <h2 className="text-lg font-extrabold text-[#0B2E59]">Online examinations</h2>
                   {list('onlineExams').length ? (
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {list('onlineExams').map((exam) => {
-                        const attempt = exam.attempt as Record<string, unknown> | null;
-                        const hasAttempt = Boolean(attempt);
-                        const submitted = Boolean(attempt?.submitted_at);
-                        const isActive = hasAttempt && !submitted && new Date(String(attempt?.expires_at)).getTime() > Date.now();
+                        // Uses the server-computed attempt.state (falls back to the previous logic if absent).
+                        const card = describeOnlineExamAttempt(exam.attempt as Record<string, unknown> | null, Date.now());
+                        const toneClass = { success: 'text-emerald-800', warning: 'text-amber-800', danger: 'text-rose-800', active: 'text-blue-800', neutral: 'text-slate-600' }[card.tone];
                         return (
                           <article key={String(exam.exam_code)} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                             <h3 className="font-bold text-slate-900">{String(exam.exam_name)}</h3>
-                            <p className="mt-1 text-xs text-slate-500">{t('dash.examMeta', { code: String(exam.exam_code), questions: String(exam.question_count), minutes: String(exam.duration_minutes) })}</p>
-                            {submitted && <p className="mt-2 text-sm text-emerald-800">{t('dash.attemptDone', { score: String((attempt?.score as Record<string, unknown> | undefined)?.totalScore ?? '—') })}</p>}
-                            {!submitted && hasAttempt && !isActive && <p className="mt-2 text-sm text-amber-800">{t('dash.attemptExpired')}</p>}
-                            <button type="button" disabled={hasAttempt && !isActive} onClick={() => setActiveOnlineExam({ code: String(exam.exam_code), name: String(exam.exam_name) })} className="mt-3 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">{isActive ? t('dash.resumeExam') : hasAttempt ? t('dash.attemptUsed') : t('dash.startExam')}</button>
+                            <p className="mt-1 text-xs text-slate-500">{String(exam.exam_code)} · {String(exam.question_count)} questions · {String(exam.duration_minutes)} minutes</p>
+                            {card.statusText && <p className={`mt-2 text-sm ${toneClass}`}>{card.statusText}</p>}
+                            <button type="button" disabled={!card.canOpen} onClick={() => setActiveOnlineExam({ code: String(exam.exam_code), name: String(exam.exam_name) })} className="mt-3 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">{card.buttonLabel}</button>
                           </article>
                         );
                       })}
                     </div>
-                  ) : <p className="mt-3 text-sm text-slate-500">{t('dash.noOnlineExams')}</p>}
+                  ) : candidateSectionStatus('online-exams', 'Online examinations') ?? <p className="mt-3 text-sm text-slate-500">No published online exams are available for your approved applications.</p>}
                 </section>
               </div>
             )}
 
-            {user.role === 'center' && (
-              <div className="mt-5 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+            {user.role === 'center' && activeInstituteSection === 'institute-checkins' && (
+              <div id="institute-checkins" className="scroll-mt-28 mt-5 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
                 <form onSubmit={(event) => void submitCheckin(event)} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">Verify a candidate</h2>
                   <p className="mt-1 text-sm text-slate-500">Only candidates assigned to center <strong>{user.id}</strong> can be checked in.</p>
-                  <label className="mt-4 block text-sm font-semibold text-slate-700">Application number<input required value={applicationNumber} onChange={(event) => { setApplicationNumber(event.target.value); setCheckinCandidate(null); }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase" /></label>
-                  <label className="mt-3 block text-sm font-semibold text-slate-700">Date of birth<input required type="date" value={dateOfBirth} onChange={(event) => { setDateOfBirth(event.target.value); setCheckinCandidate(null); }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" /></label>
-                  {checkinCandidate && (
-                    <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-3">
-                      <p className="text-xs font-bold uppercase tracking-wide text-sky-800">Compare with the person in front of you</p>
-                      <div className="mt-2 flex gap-3">
-                        {checkinCandidate.photoUrl
-                          ? <img src={checkinCandidate.photoUrl} alt={`Photograph of ${checkinCandidate.candidateName}`} className="h-28 w-24 rounded border border-slate-300 bg-white object-cover" />
-                          : <div className="flex h-28 w-24 items-center justify-center rounded border border-dashed border-slate-300 bg-white p-1 text-center text-[10px] text-slate-500">No photo on file</div>}
-                        <div className="min-w-0 text-sm">
-                          <p className="font-bold text-slate-900">{checkinCandidate.candidateName}</p>
-                          <p className="text-xs text-slate-600">Father/guardian: {checkinCandidate.fatherName}</p>
-                          <p className="text-xs text-slate-600">Roll {checkinCandidate.rollNumber} · {checkinCandidate.examCode}</p>
-                          <p className="text-xs text-slate-600">{checkinCandidate.examTiming}</p>
-                          {checkinCandidate.checkinStatus && <p className="mt-1 text-xs font-bold capitalize text-amber-800">Already recorded: {checkinCandidate.checkinStatus}</p>}
-                          {checkinCandidate.signatureUrl && <img src={checkinCandidate.signatureUrl} alt="Candidate signature" className="mt-2 h-10 max-w-40 rounded border border-slate-200 bg-white object-contain" />}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {checkinCandidate && (
-                    <>
-                      <label className="mt-3 block text-sm font-semibold text-slate-700">Check-in status<select value={checkinStatus} onChange={(event) => setCheckinStatus(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm"><option value="verified">Identity verified</option><option value="admitted">Admitted to exam</option><option value="flagged">Flag for review</option><option value="rejected">Entry denied</option></select></label>
-                      <label className="mt-3 block text-sm font-semibold text-slate-700">Note (optional)<textarea value={checkinNote} onChange={(event) => setCheckinNote(event.target.value)} maxLength={500} rows={2} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" /></label>
-                    </>
-                  )}
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="submit" disabled={isCheckingCandidate} className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600 disabled:opacity-60"><ClipboardCheck className="h-4 w-4" /> {checkinCandidate ? 'Save check-in' : isCheckingCandidate ? 'Looking up…' : 'Look up candidate'}</button>
-                    {checkinCandidate && <button type="button" onClick={() => setCheckinCandidate(null)} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>}
-                  </div>
+                  <label className="mt-4 block text-sm font-semibold text-slate-700">Application number<input required value={applicationNumber} onChange={(event) => setApplicationNumber(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase" /></label>
+                  <label className="mt-3 block text-sm font-semibold text-slate-700">Date of birth<input required type="date" value={dateOfBirth} onChange={(event) => setDateOfBirth(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" /></label>
+                  <label className="mt-3 block text-sm font-semibold text-slate-700">Check-in status<select value={checkinStatus} onChange={(event) => setCheckinStatus(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm"><option value="verified">Identity verified</option><option value="admitted">Admitted to exam</option><option value="flagged">Flag for review</option><option value="rejected">Entry denied</option></select></label>
+                  <label className="mt-3 block text-sm font-semibold text-slate-700">Note (optional)<textarea value={checkinNote} onChange={(event) => setCheckinNote(event.target.value)} maxLength={500} rows={2} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" /></label>
+                  <button type="submit" className="mt-4 inline-flex items-center gap-2 rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-600"><ClipboardCheck className="h-4 w-4" /> Verify and save</button>
                 </form>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-[#0B2E59]">Recent check-ins</h2>{list('checkins').length ? <div className="mt-4 space-y-2">{list('checkins').map((item) => <article key={String(item.id)} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-3"><div><strong className="text-sm">{String(item.candidate_name)}</strong><p className="text-xs text-slate-500">{String(item.application_number)} · {String(item.roll_number)} · {String(item.exam_code)}</p></div><span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold capitalize text-sky-800">{String(item.status)}</span></article>)}</div> : <p className="mt-4 text-sm text-slate-500">No check-ins recorded for this center.</p>}</section>
               </div>
             )}
 
-            {user.role === 'center' && (
+            {user.role === 'center' && ['institute-forms', 'institute-profile', 'institute-wallet'].includes(activeInstituteSection) && (
               <div className="mt-5 space-y-5">
-                <div className="grid gap-5 lg:grid-cols-2">
-                  <form onSubmit={(event) => void submitInstituteForm(event)} className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                {['institute-forms', 'institute-profile'].includes(activeInstituteSection) && <div className="grid gap-5 lg:grid-cols-2">
+                  {activeInstituteSection === 'institute-forms' && (
+                  <form onSubmit={(event) => void submitInstituteForm(event)} id="institute-forms" className="scroll-mt-28 space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                     <div>
                       <h2 className="text-lg font-extrabold text-[#0B2E59]">Submit an institute form</h2>
                       <p className="mt-1 text-sm text-slate-500">Super Admin must approve it before it appears on the public website.</p>
@@ -1549,9 +1916,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                     <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Candidates apply through your external link or contact details. ELTNOY does not collect applications or payments for these forms.</p>
                     <button disabled={isSavingInstituteForm} type="submit" className="rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">{isSavingInstituteForm ? 'Submitting…' : 'Submit for approval'}</button>
                   </form>
+                  )}
 
-                  <div className="space-y-5">
-                    <form onSubmit={(event) => void submitInstituteProfile(event)} className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  {activeInstituteSection === 'institute-profile' && <div className="space-y-5">
+                    <form onSubmit={(event) => void submitInstituteProfile(event)} id="institute-profile" className="scroll-mt-28 space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                       <div>
                         <h2 className="text-lg font-extrabold text-[#0B2E59]">Request profile update</h2>
                         <p className="mt-1 text-sm text-slate-500">Your currently approved profile stays unchanged until Super Admin approves the request.</p>
@@ -1567,10 +1935,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                       <h2 className="text-lg font-extrabold text-[#0B2E59]">Profile requests</h2>
                       {list('profileChanges').length ? <div className="mt-3 space-y-2">{list('profileChanges').map((change) => <article key={String(change.id)} className="rounded-lg bg-slate-50 p-3"><div className="flex justify-between gap-2"><strong className="text-sm">{String(change.display_name)}</strong><span className="text-xs font-bold capitalize text-slate-600">{String(change.status)}</span></div><p className="mt-1 text-xs text-slate-500">Submitted {new Date(String(change.created_at)).toLocaleDateString()}</p></article>)}</div> : <p className="mt-3 text-sm text-slate-500">No profile change requests.</p>}
                     </section>
-                  </div>
-                </div>
+                  </div>}
+                </div>}
 
-                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                {activeInstituteSection === 'institute-wallet' && <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div><h2 id="institute-wallet" className="flex scroll-mt-24 items-center gap-2 text-lg font-extrabold text-[#0B2E59]"><Wallet className="h-5 w-5" /> Institute wallet</h2><p className="mt-1 text-sm text-slate-500">View your wallet balance, verified credits, and withdrawal requests.</p></div>
                     <div className="grid grid-cols-2 gap-3 text-right"><div><p className="text-xs text-slate-500">Balance</p><p className="font-bold text-slate-900">{formatPaise(data.balancePaise)}</p></div><div><p className="text-xs text-slate-500">Available</p><p className="font-bold text-emerald-800">{formatPaise(data.availablePaise)}</p></div></div>
@@ -1586,18 +1954,24 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                     <div><h3 className="font-bold text-slate-800">Wallet activity</h3>{list('entries').length ? <div className="mt-2 space-y-2">{list('entries').map((entry) => <article key={String(entry.id)} className="flex justify-between gap-3 rounded-lg bg-slate-50 p-3 text-sm"><div><strong>{String(entry.description)}</strong><p className="text-xs text-slate-500">{String(entry.payment_reference || entry.transfer_reference || '')} · {new Date(String(entry.created_at)).toLocaleDateString()}</p></div><span className={`font-bold ${entry.entry_type === 'credit' ? 'text-emerald-700' : 'text-rose-700'}`}>{entry.entry_type === 'credit' ? '+' : '−'}{formatPaise(entry.amount_paise)}</span></article>)}</div> : <p className="mt-2 text-sm text-slate-500">No wallet transactions recorded.</p>}</div>
                     <div><h3 className="font-bold text-slate-800">Withdrawal requests</h3>{list('withdrawals').length ? <div className="mt-2 space-y-2">{list('withdrawals').map((withdrawal) => <article key={String(withdrawal.id)} className="flex justify-between gap-3 rounded-lg bg-slate-50 p-3 text-sm"><div><strong>{formatPaise(withdrawal.amount_paise)}</strong><p className="text-xs capitalize text-slate-500">{String(withdrawal.status)}{withdrawal.transfer_reference ? ` · ${String(withdrawal.transfer_reference)}` : ''}</p></div><span className="text-xs text-slate-500">{new Date(String(withdrawal.created_at)).toLocaleDateString()}</span></article>)}</div> : <p className="mt-2 text-sm text-slate-500">No withdrawal requests.</p>}</div>
                   </div>
-                </section>
+                </section>}
 
-                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                {activeInstituteSection === 'institute-forms' && <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">My submitted forms</h2>
                   {list('forms').length ? <div className="mt-3 grid gap-3 md:grid-cols-2">{list('forms').map((form) => <article key={String(form.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex justify-between gap-2"><h3 className="font-bold text-slate-900">{String(form.title)}</h3><span className="text-xs font-bold capitalize text-slate-600">{String(form.status)}</span></div><p className="mt-1 text-xs text-slate-500">{form.form_type === 'teacher_recruitment' ? 'Teacher recruitment' : 'Exam application'} · Submitted {new Date(String(form.created_at)).toLocaleDateString()}</p><p className="mt-2 text-sm text-slate-600">{String(form.description)}</p></article>)}</div> : <p className="mt-3 text-sm text-slate-500">No institute forms submitted yet.</p>}
-                </section>
+                </section>}
               </div>
             )}
 
-            {user.role === 'official' && tab === 'applications' && <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Candidate / exam</th><th className="p-4">Submitted</th><th className="p-4">Status</th><th className="p-4">Admit card</th></tr></thead><tbody className="divide-y divide-slate-100">{list('applications').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono font-bold">{String(item.application_number)}</td><td className="p-4">{String(item.candidate_name)}<span className="block text-xs text-slate-500">{String(item.exam_code)}</span>{(item.photo_file_id || item.signature_file_id) ? <span className="mt-1 flex gap-2 text-xs">{typeof item.photo_file_id === 'string' && <a href={`/api/files/${encodeURIComponent(item.photo_file_id)}`} target="_blank" rel="noreferrer" className="font-semibold text-blue-800 underline">Photo</a>}{typeof item.signature_file_id === 'string' && <a href={`/api/files/${encodeURIComponent(item.signature_file_id)}`} target="_blank" rel="noreferrer" className="font-semibold text-blue-800 underline">Signature</a>}</span> : <span className="mt-1 block text-xs text-amber-700">No photo/signature</span>}</td><td className="p-4 text-slate-500">{new Date(String(item.created_at)).toLocaleDateString()}</td><td className="p-4"><select aria-label={`Status for ${String(item.application_number)}`} value={String(item.status)} onChange={(event) => void updateApplication(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1"><option value="submitted">Submitted</option><option value="under_review">Under review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></td><td className="p-4 text-xs">{item.admit_card_published ? 'Published' : 'Not published'}</td></tr>)}</tbody></table></section>}
+            {user.role === 'center' && activeInstituteSection === 'institute-documents' && (
+              <div id="institute-documents" className="scroll-mt-28"><InstitutionDocumentManagement role="center" /></div>
+            )}
 
-            {user.role === 'official' && tab === 'feedback' && <section className="space-y-3">{list('feedback').length ? list('feedback').map((item) => <article key={String(item.id)} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-bold text-[#0B2E59]">{String(item.title)}</p><p className="mt-1 text-xs text-slate-500">{String(item.id)} · {String(item.type)} · {String(item.priority)}</p></div><select aria-label={`Status for ${String(item.id)}`} value={String(item.status)} onChange={(event) => void updateFeedback(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1 text-sm"><option value="under_review">Under review</option><option value="in_progress">In progress</option><option value="resolved">Resolved</option></select></div><p className="mt-3 text-sm text-slate-700">{String(item.description)}</p></article>) : <p className="rounded-xl bg-white p-6 text-sm text-slate-500">No helpdesk tickets have been submitted.</p>}</section>}
+            {user.role === 'center' && activeInstituteSection === 'institute-staff' && <div id="institute-staff" className="scroll-mt-28"><OrganizationStaffOwnerPanel /></div>}
+
+            {user.role === 'official' && tab === 'applications' && <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Candidate / exam</th><th className="p-4">Submitted</th><th className="p-4">Status</th><th className="p-4">Admit card</th></tr></thead><tbody className="divide-y divide-slate-100">{list('applications').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono font-bold">{String(item.application_number)}</td><td className="p-4">{String(item.candidate_name)}<span className="block text-xs text-slate-500">{String(item.exam_code)}</span></td><td className="p-4 text-slate-500">{new Date(String(item.created_at)).toLocaleDateString()}</td><td className="p-4"><select aria-label={`Status for ${String(item.application_number)}`} value={String(item.status)} onChange={(event) => void updateApplication(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1"><option value="submitted">Submitted</option><option value="under_review">Under review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></td><td className="p-4 text-xs">{item.admit_card_published ? 'Published' : 'Not published'}</td></tr>)}</tbody></table></section>}
+
+            {user.role === 'official' && tab === 'feedback' && permissions.canAccessHelpdesk && <section className="space-y-3">{list('feedback').length ? list('feedback').map((item) => <article key={String(item.id)} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-bold text-[#0B2E59]">{String(item.title)}</p><p className="mt-1 text-xs text-slate-500">{String(item.id)} · {String(item.type)} · {String(item.priority)}</p></div><select aria-label={`Status for ${String(item.id)}`} value={String(item.status)} onChange={(event) => void updateFeedback(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1 text-sm"><option value="under_review">Under review</option><option value="in_progress">In progress</option><option value="resolved">Resolved</option></select></div><p className="mt-3 text-sm text-slate-700">{String(item.description)}</p></article>) : <p className="rounded-xl bg-white p-6 text-sm text-slate-500">No helpdesk tickets have been submitted.</p>}</section>}
 
             {user.role === 'official' && tab === 'attempts' && <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[650px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Account</th><th className="p-4">Submitted</th><th className="p-4">Questions</th><th className="p-4">Score</th></tr></thead><tbody className="divide-y divide-slate-100">{list('attempts').map((item) => <tr key={String(item.id)}><td className="p-4">{String(item.display_name ?? item.login_id ?? 'Guest')}<span className="block text-xs text-slate-500">{String(item.login_id ?? '')}</span></td><td className="p-4">{new Date(String(item.submitted_at)).toLocaleString()}</td><td className="p-4">{String(item.correct)} / {String(item.total_questions)}</td><td className="p-4 font-bold">{String(item.percentage)}%</td></tr>)}</tbody></table></section>}
 
@@ -1605,7 +1979,8 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               <section className="space-y-5">
                 <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">Bulk result upload</h2>
-                  <p className="mt-1 text-sm text-slate-600">Import verified scorecards from the Results worksheet. They remain unpublished until you explicitly publish them below.</p>
+                  <p className="mt-1 text-sm text-slate-600">Import verified scorecards from the Results worksheet. They remain unpublished until a Super Admin explicitly publishes them below.</p>
+                  {!permissions.canCorrectPublishedContent && <p role="note" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{SUPER_ADMIN_ONLY_TEXT.draftImports} {SUPER_ADMIN_ONLY_TEXT.publishing}</p>}
                   <button type="button" onClick={downloadUploadTemplates} className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-blue-800 hover:underline"><Download className="h-4 w-4" /> Download Excel templates</button>
                   <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-blue-50">
                     <Upload className="h-5 w-5" />
@@ -1614,11 +1989,9 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                   </label>
                   <p className="mt-2 text-xs text-slate-500">The template uses a scorecardJson column containing the complete scorecard JSON for each row.</p>
                 </div>
-                <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Roll number</th><th className="p-4">Exam</th><th className="p-4">Status</th><th className="p-4">Published</th><th className="p-4">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{list('results').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono">{String(item.application_number)}</td><td className="p-4">{String(item.roll_number)}</td><td className="p-4">{String(item.exam_code)}</td><td className="p-4">{item.is_published ? 'Published' : 'Draft'}</td><td className="p-4">{new Date(String(item.published_at)).toLocaleString()}</td><td className="p-4"><button type="button" onClick={() => void publishAdminRecord(`/api/admin/results/${encodeURIComponent(String(item.id))}`, !Boolean(item.is_published), 'Result')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{item.is_published ? 'Unpublish' : 'Publish result'}</button></td></tr>)}</tbody></table></section>
+                <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Roll number</th><th className="p-4">Exam</th><th className="p-4">Status</th><th className="p-4">Published</th><th className="p-4">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{list('results').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono">{String(item.application_number)}</td><td className="p-4">{String(item.roll_number)}</td><td className="p-4">{String(item.exam_code)}</td><td className="p-4">{item.is_published ? 'Published' : 'Draft'}</td><td className="p-4">{new Date(String(item.published_at)).toLocaleString()}</td><td className="p-4">{permissions.canPublishResults ? <button type="button" onClick={() => void publishAdminRecord(`/api/admin/results/${encodeURIComponent(String(item.id))}`, !Boolean(item.is_published), 'Result')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{item.is_published ? 'Unpublish' : 'Publish result'}</button> : <span className="text-xs text-slate-500">Super Admin only</span>}</td></tr>)}</tbody></table></section>
               </section>
             )}
-          </>
-        )}
       </div>
       {activeOnlineExam && (
         <OnlineExamRunner

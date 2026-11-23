@@ -33,14 +33,14 @@ import {
   validateFeedback,
   filterFeedbackEntries,
 } from '../utils/feedbackLogic';
-import { useTranslation } from '../i18n';
 import { apiRequest } from '../api';
+import { canAdministerHelpdeskFromSlideOut } from '../utils/adminPermissions';
 
 interface FeedbackSlideOutProps {
   isOpen: boolean;
   onClose: () => void;
   onOpen: () => void;
-  loggedInUser?: { name: string; role: string; id: string } | null;
+  loggedInUser?: { name: string; role: string; id: string; accountRole?: string; isSuperAdmin?: boolean } | null;
 }
 
 export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
@@ -49,7 +49,6 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
   onOpen,
   loggedInUser,
 }) => {
-  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'submit' | 'history'>('submit');
   const [entries, setEntries] = useState<FeedbackEntry[]>([]);
 
@@ -77,7 +76,9 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
   const [historyFilterType, setHistoryFilterType] = useState<string>('all');
   const [historyFilterStatus, setHistoryFilterStatus] = useState<string>('all');
 
-  const isOfficial = loggedInUser?.role === 'Assessment Official';
+  // P0-3 (A-14): the admin ticket view (and its request) is Super Admin-only. Every other user,
+  // including ordinary Officials, sees the submit form only.
+  const isOfficial = canAdministerHelpdeskFromSlideOut(loggedInUser);
 
   useEffect(() => {
     if (!isOfficial) {
@@ -88,7 +89,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
     apiRequest<{ entries: FeedbackEntry[] }>('/api/admin/feedback')
       .then(({ entries: storedEntries }) => setEntries(storedEntries))
       .catch((loadError: unknown) => {
-        setApiError(loadError instanceof Error ? loadError.message : t('feedback.loadError'));
+        setApiError(loadError instanceof Error ? loadError.message : 'Could not load feedback tickets.');
       });
   }, [isOfficial]);
 
@@ -148,7 +149,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
       setTitle('');
       setDescription('');
     } catch (submitError) {
-      setApiError(submitError instanceof Error ? submitError.message : t('feedback.submitError'));
+      setApiError(submitError instanceof Error ? submitError.message : 'Could not submit feedback.');
     } finally {
       setIsSubmitting(false);
     }
@@ -169,28 +170,28 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
   const getTypeBadge = (itemType: FeedbackType) => {
     switch (itemType) {
       case 'bug':
-        return { label: t('feedback.type.bug'), color: 'bg-rose-50 text-rose-700 border-rose-200', icon: Bug };
+        return { label: 'Bug Report', color: 'bg-rose-50 text-rose-700 border-rose-200', icon: Bug };
       case 'suggestion':
-        return { label: t('feedback.type.suggestion'), color: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: Lightbulb };
+        return { label: 'Suggestion', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: Lightbulb };
       case 'cbt_issue':
-        return { label: t('feedback.type.cbtIssue'), color: 'bg-amber-50 text-amber-700 border-amber-200', icon: Monitor };
+        return { label: 'CBT Issue', color: 'bg-amber-50 text-amber-700 border-amber-200', icon: Monitor };
       case 'admit_card':
-        return { label: t('feedback.type.admitCard'), color: 'bg-purple-50 text-purple-700 border-purple-200', icon: IdCard };
+        return { label: 'Admit Card', color: 'bg-purple-50 text-purple-700 border-purple-200', icon: IdCard };
       case 'performance':
-        return { label: t('feedback.type.performance'), color: 'bg-sky-50 text-sky-700 border-sky-200', icon: Zap };
+        return { label: 'Speed & UI', color: 'bg-sky-50 text-sky-700 border-sky-200', icon: Zap };
       default:
-        return { label: t('feedback.type.other'), color: 'bg-slate-50 text-slate-700 border-slate-200', icon: HelpCircle };
+        return { label: 'Other', color: 'bg-slate-50 text-slate-700 border-slate-200', icon: HelpCircle };
     }
   };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'resolved':
-        return { label: t('feedback.status.resolved'), color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+        return { label: 'Resolved', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
       case 'in_progress':
-        return { label: t('feedback.status.inProgress'), color: 'bg-sky-100 text-sky-800 border-sky-300' };
+        return { label: 'In Progress', color: 'bg-sky-100 text-sky-800 border-sky-300' };
       default:
-        return { label: t('feedback.status.underReview'), color: 'bg-amber-100 text-amber-800 border-amber-300' };
+        return { label: 'Under Review', color: 'bg-amber-100 text-amber-800 border-amber-300' };
     }
   };
 
@@ -200,12 +201,12 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
       <button
         onClick={onOpen}
         className="fixed right-0 top-1/2 -translate-y-1/2 z-40 bg-[#0B254E] hover:bg-[#16A34A] text-white py-3 px-2 rounded-l-xl shadow-xl border-l border-t border-b border-white/20 transition-all duration-300 flex flex-col items-center gap-2 group cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-emerald-400"
-        aria-label={t('feedback.openAria')}
+        aria-label="Open portal feedback and bug report panel"
         aria-expanded={isOpen}
       >
         <MessageSquarePlus className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
         <span className="text-[11px] font-bold tracking-wider uppercase [writing-mode:vertical-rl] rotate-180 select-none">
-          {t('feedback.tab')}
+          Feedback
         </span>
         <span className="w-5 h-5 rounded-full bg-[#16A34A] group-hover:bg-[#0B254E] text-white text-[10px] font-black flex items-center justify-center shadow-xs">
           {entries.length}
@@ -236,19 +237,19 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
             <div>
               <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 text-[11px] font-semibold mb-1 border border-sky-400/30">
                 <Sparkles className="w-3 h-3 text-sky-400" />
-                <span>{t('feedback.hub')}</span>
+                <span>Candidate Support Hub</span>
               </div>
               <h2 id="feedback-drawer-title" className="text-lg font-bold text-white flex items-center gap-2">
-                <span>{t('feedback.title')}</span>
+                <span>Portal Feedback &amp; Bug Report</span>
               </h2>
               <p className="text-xs text-sky-200/90 mt-0.5">
-                {t('feedback.subtitle')}
+                Report an examination issue or suggest improvements to ELTNOY
               </p>
             </div>
             <button
               onClick={onClose}
               className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
-              aria-label={t('feedback.close')}
+              aria-label="Close feedback panel"
             >
               <X className="w-5 h-5" />
             </button>
@@ -268,7 +269,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
               }`}
             >
               <MessageSquarePlus className="w-3.5 h-3.5" />
-              <span>{t('feedback.submitTab')}</span>
+              <span>Submit Feedback</span>
             </button>
 
             {isOfficial && (
@@ -303,10 +304,10 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900">
-                    {t('feedback.ticketCreated')}
+                    Feedback Ticket Generated!
                   </h3>
                   <p className="text-xs text-slate-600 mt-1 max-w-sm mx-auto">
-                    {t('feedback.ticketText')}
+                    Thank you for your report. Save the reference number below so you can share it with portal support.
                   </p>
                 </div>
 
@@ -314,7 +315,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center justify-between max-w-xs mx-auto">
                   <div className="text-left">
                     <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
-                      {t('feedback.ticketId')}
+                      Reference Ticket ID
                     </span>
                     <div className="text-sm font-black text-[#0B254E] tracking-tight">
                       {submittedTicket.id}
@@ -327,12 +328,12 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                     {copiedId ? (
                       <>
                         <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        <span className="text-emerald-700">{t('feedback.copied')}</span>
+                        <span className="text-emerald-700">Copied</span>
                       </>
                     ) : (
                       <>
                         <Copy className="w-3.5 h-3.5" />
-                        <span>{t('feedback.copy')}</span>
+                        <span>Copy</span>
                       </>
                     )}
                   </button>
@@ -341,13 +342,13 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 <div className="text-left text-xs bg-sky-50 border border-sky-100 rounded-lg p-3 text-sky-900 space-y-1">
                   <div className="font-semibold flex items-center gap-1.5 text-sky-800">
                     <ShieldCheck className="w-4 h-4 text-[#0284C7]" />
-                    <span>{t('feedback.workflow')}</span>
+                    <span>Resolution Workflow</span>
                   </div>
                   <p className="text-[11px] leading-relaxed text-sky-700">
                     Priority: <strong>{submittedTicket.priority.toUpperCase()}</strong> · Module: {submittedTicket.module}
                   </p>
                   <p className="text-[11px] leading-relaxed text-sky-700">
-                    {t('feedback.workflowText')}
+                    An official can review and update this ticket from the administration API.
                   </p>
                 </div>
 
@@ -356,14 +357,14 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                     onClick={() => setActiveTab('history')}
                     className="flex-1 py-2 px-3 bg-[#0B254E] hover:bg-[#091e3e] text-white text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5"
                   >
-                    <span>{t('feedback.viewHistory')}</span>
+                    <span>View in History</span>
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => setSubmittedTicket(null)}
                     className="py-2 px-3 border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
                   >
-                    {t('feedback.submitAnother')}
+                    Submit Another
                   </button>
                 </div>
               </div>
@@ -373,16 +374,16 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 {/* Category Selector */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    {t('feedback.category')} <span className="text-rose-500">*</span>
+                    Feedback Category <span className="text-rose-500">*</span>
                   </label>
                   <div className="grid grid-cols-3 gap-2">
                     {[
-                      { id: 'bug', label: t('feedback.type.bug'), icon: Bug, color: 'hover:border-rose-300' },
-                      { id: 'suggestion', label: t('feedback.type.suggestion'), icon: Lightbulb, color: 'hover:border-emerald-300' },
-                      { id: 'cbt_issue', label: t('feedback.type.cbtExamIssue'), icon: Monitor, color: 'hover:border-amber-300' },
-                      { id: 'admit_card', label: t('feedback.type.admitCard'), icon: IdCard, color: 'hover:border-purple-300' },
-                      { id: 'performance', label: t('feedback.type.performance'), icon: Zap, color: 'hover:border-sky-300' },
-                      { id: 'other', label: t('feedback.type.general'), icon: HelpCircle, color: 'hover:border-slate-300' },
+                      { id: 'bug', label: 'Bug Report', icon: Bug, color: 'hover:border-rose-300' },
+                      { id: 'suggestion', label: 'Suggestion', icon: Lightbulb, color: 'hover:border-emerald-300' },
+                      { id: 'cbt_issue', label: 'CBT Exam Issue', icon: Monitor, color: 'hover:border-amber-300' },
+                      { id: 'admit_card', label: 'Admit Card', icon: IdCard, color: 'hover:border-purple-300' },
+                      { id: 'performance', label: 'Speed & UI', icon: Zap, color: 'hover:border-sky-300' },
+                      { id: 'other', label: 'General Query', icon: HelpCircle, color: 'hover:border-slate-300' },
                     ].map((item) => {
                       const Icon = item.icon;
                       const isSelected = type === item.id;
@@ -410,19 +411,19 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 {/* Target Module Dropdown */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    {t('feedback.moduleLabel')}
+                    Portal Area / Module
                   </label>
                   <select
                     value={module}
                     onChange={(e) => setModule(e.target.value)}
                     className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] focus:border-transparent"
                   >
-                    <option value="Online CBT Exam Simulator">{t('feedback.module.cbt')}</option>
-                    <option value="Admit Card Download">{t('feedback.module.admit')}</option>
-                    <option value="Online Application Portal">{t('feedback.module.application')}</option>
-                    <option value="Knowledge Base & Center Locator">{t('feedback.module.centers')}</option>
-                    <option value="Result & Answer Key Verification">{t('feedback.module.results')}</option>
-                    <option value="Portal Navigation & General Speed">{t('feedback.module.navigation')}</option>
+                    <option value="Online CBT Exam Simulator">Online CBT Exam Simulator</option>
+                    <option value="Admit Card Download">Admit Card Download</option>
+                    <option value="Online Application Portal">Online Application Portal</option>
+                    <option value="Knowledge Base & Center Locator">Knowledge Base &amp; Center Locator</option>
+                    <option value="Result & Answer Key Verification">Result &amp; Answer Key Verification</option>
+                    <option value="Portal Navigation & General Speed">Portal Navigation &amp; General Speed</option>
                   </select>
                 </div>
 
@@ -430,23 +431,23 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 <div className="grid grid-cols-2 gap-3 bg-white p-3 rounded-xl border border-slate-200">
                   <div>
                     <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                      {t('feedback.urgency')}
+                      Urgency Level
                     </label>
                     <select
                       value={priority}
                       onChange={(e) => setPriority(e.target.value as FeedbackPriority)}
                       className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-medium text-slate-800"
                     >
-                      <option value="low">{t('feedback.priority.low')}</option>
-                      <option value="medium">{t('feedback.priority.medium')}</option>
-                      <option value="high">{t('feedback.priority.high')}</option>
-                      <option value="critical">{t('feedback.priority.critical')}</option>
+                      <option value="low">Low (General)</option>
+                      <option value="medium">Medium (Standard)</option>
+                      <option value="high">High (Affects Exam)</option>
+                      <option value="critical">Critical (Blocking)</option>
                     </select>
                   </div>
 
                   <div>
                     <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                      {t('feedback.rating')}
+                      Portal Rating
                     </label>
                     <div className="flex items-center gap-1 pt-0.5">
                       {[1, 2, 3, 4, 5].map((star) => (
@@ -457,7 +458,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                           onMouseLeave={() => setHoverRating(0)}
                           onClick={() => setRating(star)}
                           className="p-0.5 text-amber-400 hover:scale-110 transition-transform"
-                          aria-label={t('feedback.rateStar', { count: star })}
+                          aria-label={`Rate ${star} star`}
                         >
                           <Star
                             className={`w-4 h-4 ${
@@ -474,13 +475,13 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 {/* Subject / Title */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    {t('feedback.subject')} <span className="text-rose-500">*</span>
+                    Subject / Summary <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="text"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    placeholder={t('feedback.subjectPlaceholder')}
+                    placeholder="e.g. Timer lagging during section switch in CBT mock"
                     className={`w-full text-xs bg-white border rounded-lg p-2.5 text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] ${
                       errors.title ? 'border-rose-400 bg-rose-50/30' : 'border-slate-300'
                     }`}
@@ -488,7 +489,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                   {errors.title && (
                     <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1">
                       <AlertCircle className="w-3 h-3" />
-                      <span>{t(errors.title)}</span>
+                      <span>{errors.title}</span>
                     </p>
                   )}
                 </div>
@@ -497,7 +498,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-xs font-bold text-slate-700">
-                      {t('feedback.description')} <span className="text-rose-500">*</span>
+                      Detailed Description <span className="text-rose-500">*</span>
                     </label>
                     <span className="text-[10px] text-slate-400">
                       {description.length}/1000
@@ -507,7 +508,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                     rows={4}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    placeholder={t('feedback.descriptionPlaceholder')}
+                    placeholder="Please explain what happened, steps to reproduce, or your suggested enhancement..."
                     className={`w-full text-xs bg-white border rounded-lg p-2.5 text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] ${
                       errors.description ? 'border-rose-400 bg-rose-50/30' : 'border-slate-300'
                     }`}
@@ -515,7 +516,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                   {errors.description && (
                     <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1">
                       <AlertCircle className="w-3 h-3" />
-                      <span>{t(errors.description)}</span>
+                      <span>{errors.description}</span>
                     </p>
                   )}
                 </div>
@@ -524,9 +525,9 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-800">
-                      {t('feedback.details')}
+                      Candidate Details (Optional)
                     </span>
-                    <span className="text-[10px] text-slate-400">{t('feedback.detailsHint')}</span>
+                    <span className="text-[10px] text-slate-400">For ticket resolution follow-up</span>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
@@ -535,7 +536,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                         type="text"
                         value={candidateName}
                         onChange={(e) => setCandidateName(e.target.value)}
-                        placeholder={t('feedback.name')}
+                        placeholder="Full Name"
                         className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                     </div>
@@ -544,7 +545,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                         type="text"
                         value={applicationNumber}
                         onChange={(e) => setApplicationNumber(e.target.value)}
-                        placeholder={t('feedback.appNo')}
+                        placeholder="Application number"
                         className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                     </div>
@@ -555,19 +556,19 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder={t('feedback.email')}
+                      placeholder="Email address for status updates"
                       className={`w-full text-xs bg-slate-50 border rounded-lg p-2 text-slate-800 ${
                         errors.email ? 'border-rose-400' : 'border-slate-200'
                       }`}
                     />
                     {errors.email && (
-                      <p className="text-[11px] text-rose-500 mt-1">{t(errors.email)}</p>
+                      <p className="text-[11px] text-rose-500 mt-1">{errors.email}</p>
                     )}
                   </div>
                 </div>
 
                 <p className="text-[11px] text-slate-500">
-                  {t('feedback.noAttachments')}
+                  File attachments are not enabled yet. Please include relevant details in the description.
                 </p>
 
                 {/* Submit Action */}
@@ -579,12 +580,12 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                   {isSubmitting ? (
                     <>
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>{t('feedback.generating')}</span>
+                      <span>Generating Ticket...</span>
                     </>
                   ) : (
                     <>
                       <Send className="w-4 h-4" />
-                      <span>{t('feedback.submit')}</span>
+                      <span>Submit Feedback Ticket</span>
                     </>
                   )}
                 </button>
@@ -601,7 +602,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                     type="text"
                     value={historySearch}
                     onChange={(e) => setHistorySearch(e.target.value)}
-                    placeholder={t('feedback.searchPlaceholder')}
+                    placeholder="Search by ticket ID, keyword, module..."
                     className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#16A34A]"
                   />
                 </div>
@@ -609,11 +610,11 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <Filter className="w-3 h-3 text-slate-400 mr-0.5" />
                   {[
-                    { id: 'all', label: t('feedback.filter.all') },
-                    { id: 'bug', label: t('feedback.filter.bug') },
-                    { id: 'suggestion', label: t('feedback.filter.suggestion') },
-                    { id: 'cbt_issue', label: t('feedback.filter.cbt_issue') },
-                    { id: 'admit_card', label: t('feedback.filter.admit_card') },
+                    { id: 'all', label: 'All' },
+                    { id: 'bug', label: 'Bugs' },
+                    { id: 'suggestion', label: 'Ideas' },
+                    { id: 'cbt_issue', label: 'CBT' },
+                    { id: 'admit_card', label: 'Admit' },
                   ].map((filter) => (
                     <button
                       key={filter.id}
@@ -636,9 +637,9 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                   <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center">
                     <Search className="w-5 h-5" />
                   </div>
-                  <p className="text-xs font-bold text-slate-700">{t('feedback.noEntries')}</p>
+                  <p className="text-xs font-bold text-slate-700">No matching feedback entries</p>
                   <p className="text-[11px] text-slate-500">
-                    {t('feedback.noEntriesHint')}
+                    Try adjusting your search query or submit a new report.
                   </p>
                 </div>
               ) : (
@@ -688,7 +689,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                         {/* Resolution Note if available */}
                         {item.resolutionNote && (
                           <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-2 text-[11px] text-emerald-800">
-                            <span className="font-bold">{t('feedback.officialUpdate')}</span>
+                            <span className="font-bold">Directorate Update: </span>
                             {item.resolutionNote}
                           </div>
                         )}
@@ -696,7 +697,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
                         {/* Footer metadata */}
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px] text-slate-400">
                           <span className="truncate max-w-[200px]">
-                            {item.module} · {item.candidateName || t('feedback.anonymous')}
+                            {item.module} · {item.candidateName || 'Anonymous'}
                           </span>
                           <span>{dateFormatted}</span>
                         </div>
@@ -712,7 +713,7 @@ export const FeedbackSlideOut: React.FC<FeedbackSlideOutProps> = ({
         {/* Drawer Footer */}
         <div className="p-3 bg-white border-t border-slate-200 text-center shrink-0">
           <p className="text-[11px] text-slate-500">
-            {t('feedback.urgentNote')}
+            For urgent exam-day assistance, use the support contact details on your official admit card.
           </p>
         </div>
       </div>

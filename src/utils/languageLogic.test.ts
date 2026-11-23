@@ -3,21 +3,13 @@ import assert from 'node:assert/strict';
 import {
   LANGUAGES,
   LANGUAGE_OPTIONS,
+  TOP_BAR_TRANSLATIONS,
   getNextLanguage,
   getSavedLanguage,
+  getTopBarTranslation,
   LANGUAGE_LOCALES,
   Language,
 } from './languageLogic.js';
-import { registerDictionary, translate } from '../i18n/translate.ts';
-import hi from '../i18n/locales/hi.ts';
-import kn from '../i18n/locales/kn.ts';
-import bn from '../i18n/locales/bn.ts';
-import mr from '../i18n/locales/mr.ts';
-
-registerDictionary('Hindi', hi);
-registerDictionary('Kannada', kn);
-registerDictionary('Bengali', bn);
-registerDictionary('Marathi', mr);
 
 test('LANGUAGES contains the supported launch languages', () => {
   assert.deepEqual(LANGUAGES, ['English', 'Hindi', 'Kannada', 'Bengali', 'Marathi']);
@@ -39,14 +31,18 @@ test('getNextLanguage falls back gracefully if invalid language provided', () =>
   assert.equal(getNextLanguage('InvalidLang'), 'English');
 });
 
-test('top bar text is localized for each supported language', () => {
-  assert.equal(translate('English', 'topbar.welcome'), 'Welcome to ELTNOY Examination Portal');
-  assert.equal(translate('English', 'topbar.helpdesk'), 'Helpdesk');
-  assert.ok(translate('Hindi', 'topbar.welcome').includes('स्वागत'));
-  assert.equal(translate('Hindi', 'topbar.helpdesk'), 'सहायता केंद्र');
-  assert.ok(translate('Kannada', 'topbar.welcome').includes('ಸುಸ್ವಾಗತ'));
-  assert.ok(translate('Bengali', 'topbar.welcome').includes('স্বাগতম'));
-  assert.ok(translate('Marathi', 'topbar.welcome').includes('स्वागत'));
+test('getTopBarTranslation returns localized text for each supported language', () => {
+  const en = getTopBarTranslation('English');
+  assert.equal(en.welcome, 'Welcome to ELTNOY Examination Portal');
+  assert.equal(en.helpdesk, 'Helpdesk');
+
+  const hi = getTopBarTranslation('Hindi');
+  assert.ok(hi.welcome.includes('स्वागत'));
+  assert.equal(hi.helpdesk, 'सहायता केंद्र');
+
+  assert.ok(getTopBarTranslation('Kannada').welcome.includes('ಸುಸ್ವಾಗತ'));
+  assert.ok(getTopBarTranslation('Bengali').welcome.includes('স্বাগতম'));
+  assert.ok(getTopBarTranslation('Marathi').welcome.includes('स्वागत'));
   assert.deepEqual(LANGUAGE_LOCALES, {
     English: 'en-IN',
     Hindi: 'hi-IN',

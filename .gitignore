@@ -4,5 +4,20 @@ dist/
 coverage/
 .DS_Store
 *.log
+*.dump
+.dump.
+backup/
+backups/
 .env*
 !.env.example
+!.env.internal-testing.example
+.local-dev/
+
+# UD-1: database credential files and generated credentials (keep them outside the repository).
+secrets/
+*.secret
+*_password
+*_password.txt
+*.pgpass
+.pgpass
+pgpass.conf

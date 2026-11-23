@@ -1,11 +1,16 @@
-# Render Blueprint: free web service. Create the database separately (see README) and set
-# DATABASE_URL to its Internal Database URL. Free databases expire after about 30 days.
+# UNSUPPORTED — DO NOT DEPLOY THE CURRENT APPLICATION WITH THIS FILE.
+# This legacy Render configuration is incompatible with P1-B surface isolation, which requires a
+# separate public listener and Admin listener, two independently configured trusted-proxy lists
+# (ELTNOY_PUBLIC_PROXY_CIDRS, ELTNOY_ADMIN_PROXY_CIDRS), server-assigned listener identity and an
+# internal-only /api/health probe. With this file the API refuses to start (no surface settings)
+# and the platform health check on /api/health is answered 404.
+# Retained for reference only. Any future Render deployment needs a separately reviewed architecture
+# and explicit approval; current release planning targets the private AWS/WireGuard architecture.
+# See docs/operations/production-operator-runbook.md §14.
 services:
   - type: web
     name: eltnoy-portal
     runtime: node
-    plan: free
-    region: singapore
     buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run db:migrate && npm start
     healthCheckPath: /api/health
@@ -16,32 +21,5 @@ services:
         sync: false
       - key: DATABASE_SSL
         value: "false"
-      # Comma-separated; the first is used in email links, e.g. "https://eltnoy.com,https://eltnoy-portal.onrender.com".
       - key: APP_ORIGIN
-        sync: false
-      # Public domain, and hosts that redirect to it, e.g. CANONICAL_HOST=eltnoy.com, REDIRECT_HOSTS=eltnoy.in,www.eltnoy.in,www.eltnoy.com
-      - key: CANONICAL_HOST
-        sync: false
-      - key: REDIRECT_HOSTS
-        sync: false
-      # The only host(s) where the Super Admin portal works, e.g. eltnoy-portal.onrender.com.
-      - key: STAFF_HOSTS
-        sync: false
-      # Creates the first Super Admin on start-up if it does not exist (the free plan has no Shell).
-      - key: BOOTSTRAP_ADMIN_LOGIN_ID
-        sync: false
-      - key: BOOTSTRAP_ADMIN_PASSWORD
-        sync: false
-      # Public Google OAuth Web client ID (ends in .apps.googleusercontent.com); leave unset to hide Google sign-in.
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_PORT
-        sync: false
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
-      - key: MAIL_FROM
         sync: false

@@ -1,0 +1,423 @@
+# ELTNOY Docker Compose — P1-D.2: isolated public and Admin API instances (Option B).
+#
+# Statically tested only (server/composeTopology.test.ts); NOT runtime-validated. Runtime checks are
+# reserved for P1-F. Network MEMBERSHIP is the isolation boundary (internal: true is not relied on
+# alone):
+#   nginx_public : public_ingress, public_app      api_public : public_app, db_public  (port 4000 only)
+#   nginx_admin  : admin_ingress, admin_app        api_admin  : admin_app, db_admin    (port 4001 only)
+#   postgres     : db_public, db_admin, db_ops     migrate    : db_ops (profile ops)
+# The two API services share no network; no Nginx joins a database network; no application or
+# PostgreSQL port is published. Every address, subnet and image digest comes from a required
+# variable (see .env.example); none is preconfigured here.
+# P1-D.4 (P4-8): explicit, stable project name, independent of the checkout directory name. The
+# deployment wrapper also passes --project-name with this value (runbook §14.9).
+name: eltnoy-production
+services:
+  api_public:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Both API services run this one image (built here, reused by api_admin). M-1: always built from
+    # this repository, never pulled; the name must be local-only (localhost/eltnoy-api:<tag>), which
+    # server/validateDeploymentConfig.ts enforces on the host preflight and in each API container.
+    image: ${ELTNOY_API_IMAGE:?Set ELTNOY_API_IMAGE to the local tag for the API image built from this Dockerfile}
+    pull_policy: build
+    restart: unless-stopped
+    # Dedicated non-login API identity (Dockerfile). Never add group_add: the secret files are
+    # group-readable by their own role's group only.
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Public listener only (Marketing, Exam, Institution). Owns online-exam recovery.
+      ELTNOY_API_LISTENERS: public
+      NODE_ENV: production
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:?Set DEPLOYMENT_MODE to production or development}
+      ELTNOY_SURFACE_MODE: ${ELTNOY_SURFACE_MODE:?Set ELTNOY_SURFACE_MODE to production, staging or development}
+      # Both instances receive BOTH single-address proxy lists (P1-B requires both, disjoint): the
+      # public Nginx address on public_app and the Admin Nginx address on admin_app.
+      ELTNOY_PUBLIC_PROXY_CIDRS: ${NGINX_PUBLIC_APP_ADDRESS:?Set NGINX_PUBLIC_APP_ADDRESS to the static address of nginx_public on public_app (chosen in P1-D and verified in P1-F)}
+      ELTNOY_ADMIN_PROXY_CIDRS: ${NGINX_ADMIN_APP_ADDRESS:?Set NGINX_ADMIN_APP_ADDRESS to the static address of nginx_admin on admin_app (chosen in P1-D and verified in P1-F)}
+      # Production: leave unset (pinned hostnames). Staging and development: all four are required.
+      ELTNOY_MARKETING_HOSTNAME: ${ELTNOY_MARKETING_HOSTNAME:-}
+      ELTNOY_EXAM_HOSTNAME: ${ELTNOY_EXAM_HOSTNAME:-}
+      ELTNOY_INSTITUTION_HOSTNAME: ${ELTNOY_INSTITUTION_HOSTNAME:-}
+      ELTNOY_ADMIN_HOSTNAME: ${ELTNOY_ADMIN_HOSTNAME:-}
+      PORT: "4000"
+      ADMIN_PORT: "4001"
+      # The API logs in as eltnoy_app; the password comes only from the mounted secret file.
+      DATABASE_URL: postgresql://eltnoy_app@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env.production}
+      DATABASE_PASSWORD_FILE: /run/secrets/eltnoy_app_password
+      DATABASE_SSL: ${DATABASE_SSL:?Set DATABASE_SSL explicitly in .env.production}
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+      NODE_EXTRA_CA_CERTS: /run/postgresql-ca/ca.crt
+      # Host paths, passed only so server/validateDeploymentConfig.ts can check them (never mounted here).
+      POSTGRES_CA_FILE: ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE in .env.production}
+      POSTGRES_TLS_DIR: ${POSTGRES_TLS_DIR:?Set POSTGRES_TLS_DIR in .env.production}
+      PUBLIC_TLS_CERT_DIR: ${PUBLIC_TLS_CERT_DIR:?Set PUBLIC_TLS_CERT_DIR to the public certificate directory}
+      ADMIN_TLS_CERT_DIR: ${ADMIN_TLS_CERT_DIR:?Set ADMIN_TLS_CERT_DIR to the separate Admin certificate directory}
+      # M-1/M-2 preflight inputs (validated only; the API does not use them otherwise). An invalid
+      # value stops this API, so the dependent Nginx never starts or publishes.
+      ELTNOY_API_IMAGE: ${ELTNOY_API_IMAGE:?Set ELTNOY_API_IMAGE to the local tag for the API image built from this Dockerfile}
+      PUBLIC_BIND_ADDRESS: ${PUBLIC_BIND_ADDRESS:?Set PUBLIC_BIND_ADDRESS to the private interface address for public traffic}
+      PUBLIC_BIND_MODE: ${PUBLIC_BIND_MODE:?Set PUBLIC_BIND_MODE to private-eni or direct-vps}
+      ADMIN_BIND_ADDRESS: ${ADMIN_BIND_ADDRESS:?Set ADMIN_BIND_ADDRESS to the WireGuard wg0 interface address}
+      WIREGUARD_INTERFACE_ADDRESS: ${WIREGUARD_INTERFACE_ADDRESS:?Set WIREGUARD_INTERFACE_ADDRESS to the address assigned to the host wg0 interface}
+      INSTITUTION_DOCUMENT_STORAGE_DIR: /var/lib/eltnoy/documents
+      # Optional. Unset or empty keeps automatic online-exam recovery disabled. When set, it must be
+      # an ISO-8601 time with an explicit offset (for example 2026-11-05T09:00:00Z); an invalid value
+      # stops the API at startup. Attempts that expired before it are never scored automatically.
+      # Set ONLY here: the Admin instance rejects it at startup (recovery is owned by api_public).
+      ONLINE_EXAM_RECOVERY_SINCE: ${ONLINE_EXAM_RECOVERY_SINCE:-}
+      # AUTH C1.3-B: SMS abuse-protection limits and the registration claim lifetime (runbook §3.8).
+      # api_public ONLY (SMS flows are served only on the Exam and Institution surfaces). Values are
+      # PENDING OWNER APPROVAL and have NO defaults: empty keeps SMS protection closed (every SMS is
+      # refused). The preflight accepts all eight AUTH_SMS_* empty or all eight valid, nothing between.
+      # Limits alone never enable SMS: Twilio and the OTP key must also be configured.
+      AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS: ${AUTH_SMS_UNVERIFIED_DESTINATION_WINDOW_SECONDS:-}
+      AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS: ${AUTH_SMS_UNVERIFIED_DESTINATION_MAX_SENDS:-}
+      AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS: ${AUTH_SMS_VERIFIED_DESTINATION_WINDOW_SECONDS:-}
+      AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS: ${AUTH_SMS_VERIFIED_DESTINATION_MAX_SENDS:-}
+      AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS: ${AUTH_SMS_ACCOUNT_DESTINATION_WINDOW_SECONDS:-}
+      AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS: ${AUTH_SMS_ACCOUNT_DESTINATION_MAX_SENDS:-}
+      AUTH_SMS_DAILY_MAX_SENDS: ${AUTH_SMS_DAILY_MAX_SENDS:-}
+      AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS: ${AUTH_SMS_DAILY_MAX_UNVERIFIED_SENDS:-}
+      AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS: ${AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS:-}
+      AUTH_SMS_PROVIDER: ${AUTH_SMS_PROVIDER:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
+      TWILIO_AUTH_TOKEN_FILE: /run/secrets/twilio_auth_token
+      TWILIO_VERIFY_SERVICE_SID: ${TWILIO_VERIFY_SERVICE_SID:-}
+      TWILIO_VERIFY_API_KEY_SID: ${TWILIO_VERIFY_API_KEY_SID:-}
+      TWILIO_VERIFY_API_KEY_SECRET_FILE: /run/secrets/twilio_verify_api_key_secret
+      # AUTH C1.4-B-2: email abuse-protection limits (runbook §3.10). api_public ONLY. Values are PENDING
+      # OWNER APPROVAL and have NO defaults: empty keeps every email refused. The preflight accepts all
+      # six empty or all six valid, nothing between. Limits alone never enable email; Resend config is
+      # also required. Provider values and secret mounts exist only on api_public.
+      AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS: ${AUTH_EMAIL_UNVERIFIED_DESTINATION_WINDOW_SECONDS:-}
+      AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS: ${AUTH_EMAIL_UNVERIFIED_DESTINATION_MAX_SENDS:-}
+      AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS: ${AUTH_EMAIL_ACCOUNT_DESTINATION_WINDOW_SECONDS:-}
+      AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS: ${AUTH_EMAIL_ACCOUNT_DESTINATION_MAX_SENDS:-}
+      AUTH_EMAIL_DAILY_MAX_SENDS: ${AUTH_EMAIL_DAILY_MAX_SENDS:-}
+      AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: ${AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS:-}
+      AUTH_EMAIL_PROVIDER: ${AUTH_EMAIL_PROVIDER:-}
+      # required (default when empty) or off: off lets Students and Institutes verify by email alone.
+      AUTH_MOBILE_VERIFICATION: ${AUTH_MOBILE_VERIFICATION:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
+      RESEND_API_KEY_FILE: /run/secrets/resend_api_key
+      AUTH_OTP_HMAC_KEY_FILE: /run/secrets/auth_otp_hmac_key
+    command:
+      - sh
+      - -ec
+      - node --import tsx server/validateDeploymentConfig.ts && exec node --import tsx server/index.ts
+    secrets:
+      - eltnoy_app_password
+    volumes:
+      - ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE in .env.production}:/run/postgresql-ca/ca.crt:ro
+      # Host paths are optional until a provider is activated. Missing/empty sources use /dev/null,
+      # which cannot satisfy the adapters' minimum secret lengths and therefore keeps delivery shut.
+      - ${TWILIO_AUTH_TOKEN_FILE:-/dev/null}:/run/secrets/twilio_auth_token:ro
+      - ${TWILIO_VERIFY_API_KEY_SECRET_FILE:-/dev/null}:/run/secrets/twilio_verify_api_key_secret:ro
+      - ${RESEND_API_KEY_FILE:-/dev/null}:/run/secrets/resend_api_key:ro
+      - ${AUTH_OTP_HMAC_KEY_FILE:-/dev/null}:/run/secrets/auth_otp_hmac_key:ro
+      - institution_documents:/var/lib/eltnoy/documents
+    networks:
+      public_app:
+        aliases:
+          - app
+        ipv4_address: ${API_PUBLIC_APP_ADDRESS:?Set API_PUBLIC_APP_ADDRESS to the static address of api_public on public_app}
+      db_public: {}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  api_admin:
+    # The same image as api_public (no separate build).
+    image: ${ELTNOY_API_IMAGE:?Set ELTNOY_API_IMAGE to the local tag for the API image built from this Dockerfile}
+    pull_policy: never
+    restart: unless-stopped
+    # Dedicated non-login API identity (Dockerfile). Never add group_add: the secret files are
+    # group-readable by their own role's group only.
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Admin listener only. Never set ONLINE_EXAM_RECOVERY_SINCE here.
+      ELTNOY_API_LISTENERS: admin
+      NODE_ENV: production
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:?Set DEPLOYMENT_MODE to production or development}
+      ELTNOY_SURFACE_MODE: ${ELTNOY_SURFACE_MODE:?Set ELTNOY_SURFACE_MODE to production, staging or development}
+      # Both instances receive BOTH single-address proxy lists (P1-B requires both, disjoint): the
+      # public Nginx address on public_app and the Admin Nginx address on admin_app.
+      ELTNOY_PUBLIC_PROXY_CIDRS: ${NGINX_PUBLIC_APP_ADDRESS:?Set NGINX_PUBLIC_APP_ADDRESS to the static address of nginx_public on public_app (chosen in P1-D and verified in P1-F)}
+      ELTNOY_ADMIN_PROXY_CIDRS: ${NGINX_ADMIN_APP_ADDRESS:?Set NGINX_ADMIN_APP_ADDRESS to the static address of nginx_admin on admin_app (chosen in P1-D and verified in P1-F)}
+      # Production: leave unset (pinned hostnames). Staging and development: all four are required.
+      ELTNOY_MARKETING_HOSTNAME: ${ELTNOY_MARKETING_HOSTNAME:-}
+      ELTNOY_EXAM_HOSTNAME: ${ELTNOY_EXAM_HOSTNAME:-}
+      ELTNOY_INSTITUTION_HOSTNAME: ${ELTNOY_INSTITUTION_HOSTNAME:-}
+      ELTNOY_ADMIN_HOSTNAME: ${ELTNOY_ADMIN_HOSTNAME:-}
+      PORT: "4000"
+      ADMIN_PORT: "4001"
+      # The API logs in as eltnoy_app; the password comes only from the mounted secret file.
+      DATABASE_URL: postgresql://eltnoy_app@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env.production}
+      DATABASE_PASSWORD_FILE: /run/secrets/eltnoy_app_password
+      DATABASE_SSL: ${DATABASE_SSL:?Set DATABASE_SSL explicitly in .env.production}
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+      NODE_EXTRA_CA_CERTS: /run/postgresql-ca/ca.crt
+      # Host paths, passed only so server/validateDeploymentConfig.ts can check them (never mounted here).
+      POSTGRES_CA_FILE: ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE in .env.production}
+      POSTGRES_TLS_DIR: ${POSTGRES_TLS_DIR:?Set POSTGRES_TLS_DIR in .env.production}
+      PUBLIC_TLS_CERT_DIR: ${PUBLIC_TLS_CERT_DIR:?Set PUBLIC_TLS_CERT_DIR to the public certificate directory}
+      ADMIN_TLS_CERT_DIR: ${ADMIN_TLS_CERT_DIR:?Set ADMIN_TLS_CERT_DIR to the separate Admin certificate directory}
+      # M-1/M-2 preflight inputs (validated only; the API does not use them otherwise). An invalid
+      # value stops this API, so the dependent Nginx never starts or publishes.
+      ELTNOY_API_IMAGE: ${ELTNOY_API_IMAGE:?Set ELTNOY_API_IMAGE to the local tag for the API image built from this Dockerfile}
+      PUBLIC_BIND_ADDRESS: ${PUBLIC_BIND_ADDRESS:?Set PUBLIC_BIND_ADDRESS to the private interface address for public traffic}
+      PUBLIC_BIND_MODE: ${PUBLIC_BIND_MODE:?Set PUBLIC_BIND_MODE to private-eni or direct-vps}
+      ADMIN_BIND_ADDRESS: ${ADMIN_BIND_ADDRESS:?Set ADMIN_BIND_ADDRESS to the WireGuard wg0 interface address}
+      WIREGUARD_INTERFACE_ADDRESS: ${WIREGUARD_INTERFACE_ADDRESS:?Set WIREGUARD_INTERFACE_ADDRESS to the address assigned to the host wg0 interface}
+      INSTITUTION_DOCUMENT_STORAGE_DIR: /var/lib/eltnoy/documents
+    command:
+      - sh
+      - -ec
+      - node --import tsx server/validateDeploymentConfig.ts && exec node --import tsx server/index.ts
+    secrets:
+      - eltnoy_app_password
+    volumes:
+      - ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE in .env.production}:/run/postgresql-ca/ca.crt:ro
+      # Read-write for now: the Admin content path runs ensurePrivateDirectories(), whose recursive
+      # mkdir on a read-only mount is not established statically (open hardening item, P1-F).
+      - institution_documents:/var/lib/eltnoy/documents
+    networks:
+      admin_app:
+        aliases:
+          - app
+        ipv4_address: ${API_ADMIN_APP_ADDRESS:?Set API_ADMIN_APP_ADDRESS to the static address of api_admin on admin_app}
+      db_admin: {}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  nginx_public:
+    # Digest-pinned nginxinc/nginx-unprivileged reference required (Nginx 1.19.4 or later for
+    # ssl_reject_handshake). No digest is preconfigured: verifying one is a deployment blocker.
+    image: ${NGINX_IMAGE:?Set NGINX_IMAGE to a digest-pinned nginx-unprivileged image (Nginx 1.19.4 or later)}
+    restart: unless-stopped
+    user: "101:101"
+    depends_on:
+      api_public:
+        condition: service_healthy
+    ports:
+      - "${PUBLIC_BIND_ADDRESS:?Set PUBLIC_BIND_ADDRESS to the private interface address for public traffic}:80:8080"
+      - "${PUBLIC_BIND_ADDRESS:?Set PUBLIC_BIND_ADDRESS to the private interface address for public traffic}:443:8443"
+    volumes:
+      # Replaces the image's built-in default configuration at the exact path.
+      - ./deploy/nginx/public.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/includes:/etc/nginx/includes:ro
+      # Public certificate and key only (SANs: eltnoy.com, exam.eltnoy.com, institution.eltnoy.com).
+      - ${PUBLIC_TLS_CERT_DIR:?Set PUBLIC_TLS_CERT_DIR to the public certificate directory}:/etc/nginx/tls:ro
+    networks:
+      public_ingress: {}
+      public_app:
+        ipv4_address: ${NGINX_PUBLIC_APP_ADDRESS:?Set NGINX_PUBLIC_APP_ADDRESS to the static address of nginx_public on public_app (chosen in P1-D and verified in P1-F)}
+    # Nginx-local probe on the HTTP default server; no Host header, never proxied.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:8080/_internal-health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  nginx_admin:
+    image: ${NGINX_IMAGE:?Set NGINX_IMAGE to a digest-pinned nginx-unprivileged image (Nginx 1.19.4 or later)}
+    restart: unless-stopped
+    user: "101:101"
+    depends_on:
+      api_admin:
+        condition: service_healthy
+    ports:
+      # HTTPS only, published only on the WireGuard (wg0) interface address. If the address is
+      # absent, Docker cannot bind and the Admin Nginx does not start (fail closed).
+      - "${ADMIN_BIND_ADDRESS:?Set ADMIN_BIND_ADDRESS to the WireGuard wg0 interface address}:443:8443"
+    volumes:
+      - ./deploy/nginx/admin.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/includes:/etc/nginx/includes:ro
+      # Admin certificate and key only (SAN: admin.eltnoy.in; private Admin domain, never public DNS).
+      - ${ADMIN_TLS_CERT_DIR:?Set ADMIN_TLS_CERT_DIR to the separate Admin certificate directory}:/etc/nginx/tls:ro
+    networks:
+      admin_ingress: {}
+      admin_app:
+        ipv4_address: ${NGINX_ADMIN_APP_ADDRESS:?Set NGINX_ADMIN_APP_ADDRESS to the static address of nginx_admin on admin_app (chosen in P1-D and verified in P1-F)}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:8080/_internal-health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # One-off migration runner, never started by "up":
+  #   docker compose --env-file .env.production --profile ops run --rm migrate
+  # Runs as the dedicated migration identity and receives only the migrator secret. Run the role
+  # bootstrap first (docs/operations/production-operator-runbook.md).
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Use the exact image already built by `build api_public`; otherwise an old implicitly tagged
+    # one-off migration image can be reused after the API image has been updated.
+    image: ${ELTNOY_API_IMAGE:?Set ELTNOY_API_IMAGE to the local tag for the API image built from this Dockerfile}
+    pull_policy: never
+    profiles:
+      - ops
+    restart: "no"
+    user: "10002:10002"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://eltnoy_migrator@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env.production}
+      DATABASE_PASSWORD_FILE: /run/secrets/eltnoy_migrator_password
+      DATABASE_SSL: ${DATABASE_SSL:?Set DATABASE_SSL explicitly in .env.production}
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+      NODE_EXTRA_CA_CERTS: /run/postgresql-ca/ca.crt
+    command:
+      - node
+      - --import
+      - tsx
+      - server/migrate.ts
+    secrets:
+      - eltnoy_migrator_password
+    volumes:
+      - ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE in .env.production}:/run/postgresql-ca/ca.crt:ro
+    networks:
+      db_ops: {}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    # Digest-pinned PostgreSQL 17 reference required (the data volume is PostgreSQL 17). No digest is
+    # preconfigured: verifying one is a deployment blocker.
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE to a digest-pinned postgres 17 image}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env.production}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env.production}
+      # Read only when the data volume is first initialised; an existing cluster keeps its password.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_superuser_password
+    secrets:
+      - postgres_superuser_password
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/postgresql-tls/server.crt
+      - -c
+      - ssl_key_file=/run/postgresql-tls/server.key
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ${POSTGRES_TLS_DIR:?Set POSTGRES_TLS_DIR in .env.production}:/run/postgresql-tls:ro
+    networks:
+      db_public: {}
+      db_admin: {}
+      db_ops: {}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+# Secret source files live OUTSIDE the repository, in ELTNOY_SECRETS_DIR (for example
+# /etc/eltnoy/secrets on the server, or ./.local-dev/secrets for local development). Compose ignores
+# mode/uid/gid for file secrets outside Swarm: the host file's owner and mode are the only control.
+#   postgres_superuser_password  root:root       0400
+#   eltnoy_app_password          root:10001      0440
+#   eltnoy_migrator_password     root:10002      0440
+secrets:
+  postgres_superuser_password:
+    file: ${ELTNOY_SECRETS_DIR:?Set ELTNOY_SECRETS_DIR to the directory holding the database secret files}/postgres_superuser_password
+  eltnoy_app_password:
+    file: ${ELTNOY_SECRETS_DIR:?Set ELTNOY_SECRETS_DIR to the directory holding the database secret files}/eltnoy_app_password
+  eltnoy_migrator_password:
+    file: ${ELTNOY_SECRETS_DIR:?Set ELTNOY_SECRETS_DIR to the directory holding the database secret files}/eltnoy_migrator_password
+
+
+networks:
+  # Ingress networks are not internal (Docker publishes ports only through a non-internal network);
+  # only the Nginx containers join them.
+  public_ingress:
+    driver: bridge
+  admin_ingress:
+    driver: bridge
+  # Application networks: internal, one Nginx and one API each, fixed subnets for static addresses.
+  public_app:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: ${PUBLIC_APP_SUBNET:?Set PUBLIC_APP_SUBNET to the subnet chosen in P1-D for public_app}
+  admin_app:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ADMIN_APP_SUBNET:?Set ADMIN_APP_SUBNET to the subnet chosen in P1-D for admin_app}
+  # Database networks: internal; PostgreSQL plus exactly one client service each.
+  db_public:
+    driver: bridge
+    internal: true
+  db_admin:
+    driver: bridge
+    internal: true
+  db_ops:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+  institution_documents:

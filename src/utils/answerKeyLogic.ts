@@ -3,60 +3,37 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type AnswerOption = 'A' | 'B' | 'C' | 'D';
-export type ProposedKey = AnswerOption | 'NONE';
-export type AnswerKeyStatus = 'Key Published' | 'Under Challenge' | 'Key Revised' | 'Question Dropped';
-
 export interface AnswerKeyQuestion {
   questionNumber: number;
   subject: 'Mathematics' | 'Physics' | 'Chemistry' | 'Logical Reasoning';
   questionText: string;
-  options: Record<AnswerOption, string>;
-  officialKey: AnswerOption;
-  /** The key before an objection-driven revision, if any. */
-  originalKey?: AnswerOption | null;
-  candidateResponse?: AnswerOption;
-  status: AnswerKeyStatus;
+  options: {
+    A: string;
+    B: string;
+    C: string;
+    D: string;
+  };
+  officialKey: 'A' | 'B' | 'C' | 'D';
+  candidateResponse?: 'A' | 'B' | 'C' | 'D';
+  status: 'Key Finalized' | 'Under Challenge' | 'Key Revised';
   explanation: string;
 }
 
-export const OBJECTION_CATEGORIES = [
-  'Incorrect Key',
-  'Ambiguous Question',
-  'Multiple Answers',
-  'Out of Syllabus',
-  'Typographical Discrepancy',
-] as const;
-export type ObjectionCategory = typeof OBJECTION_CATEGORIES[number];
-
 export interface CandidateObjection {
   id: string;
-  referenceNumber: string;
-  examCode: string;
   questionNumber: number;
-  officialKey: AnswerOption;
-  proposedKey: ProposedKey;
-  category: ObjectionCategory;
+  subject: string;
+  officialKey: 'A' | 'B' | 'C' | 'D';
+  proposedKey: 'A' | 'B' | 'C' | 'D' | 'All Options Invalid';
+  objectionCategory: 'Incorrect Key' | 'Ambiguous Question' | 'Multiple Answers' | 'Out of Syllabus' | 'Typographical Discrepancy';
   justification: string;
   referenceSource: string;
-  documentFileId: string | null;
-  documentName: string | null;
-  status: 'pending' | 'accepted' | 'rejected';
-  resolution: 'key_changed' | 'question_dropped' | 'no_change' | null;
-  reviewerRemarks: string | null;
-  reviewedAt: string | null;
-  createdAt: string;
-}
-
-export function proposedKeyLabel(key: ProposedKey): string {
-  return key === 'NONE' ? 'None of the options' : `Option ${key}`;
-}
-
-export function objectionStatusLabel(objection: Pick<CandidateObjection, 'status' | 'resolution'>): string {
-  if (objection.status === 'pending') return 'Under review by subject experts';
-  if (objection.resolution === 'question_dropped') return 'Accepted · question dropped';
-  if (objection.status === 'accepted') return 'Accepted · key revised';
-  return 'Not accepted · key upheld';
+  attachedDocumentName?: string;
+  attachedDocumentSize?: string;
+  feePaid: number;
+  submissionDate: string;
+  status: 'Under Review by Expert Panel' | 'Accepted (Marks Revised)' | 'Rejected (Official Key Upheld)';
+  expertRemarks?: string;
 }
 
 export const SAMPLE_ANSWER_KEYS: AnswerKeyQuestion[] = [
@@ -72,7 +49,7 @@ export const SAMPLE_ANSWER_KEYS: AnswerKeyQuestion[] = [
     },
     officialKey: 'B',
     candidateResponse: 'B',
-    status: 'Key Published',
+    status: 'Key Finalized',
     explanation: 'Multiplying both sides of A² - A + I = 0 by A⁻¹ gives A - I + A⁻¹ = 0, so A⁻¹ = I - A.',
   },
   {
@@ -87,7 +64,7 @@ export const SAMPLE_ANSWER_KEYS: AnswerKeyQuestion[] = [
     },
     officialKey: 'B',
     candidateResponse: 'B',
-    status: 'Key Published',
+    status: 'Key Finalized',
     explanation: 'Using King\'s property ∫ f(x) dx = ∫ f(a+b-x) dx, adding 2I gives ∫ dx = π/2, so I = π/4.',
   },
   {
@@ -117,7 +94,7 @@ export const SAMPLE_ANSWER_KEYS: AnswerKeyQuestion[] = [
     },
     officialKey: 'B',
     candidateResponse: 'B',
-    status: 'Key Published',
+    status: 'Key Finalized',
     explanation: 'Fringe width β = λD/d. In water, λ\' = λ/μ = 3/4 λ, so β\' = 3/4 β.',
   },
   {
@@ -147,10 +124,33 @@ export const SAMPLE_ANSWER_KEYS: AnswerKeyQuestion[] = [
     },
     officialKey: 'B',
     candidateResponse: 'B',
-    status: 'Key Published',
+    status: 'Key Finalized',
     explanation: 'Letter shift pattern: +2, +2, +2, +2. H(+2)=J, A(+2)=C, W(+2)=Y, K(+2)=M => JCYM.',
   },
 ];
+
+export const INITIAL_OBJECTIONS: CandidateObjection[] = [
+  {
+    id: 'OBJ-2025-014',
+    questionNumber: 3,
+    subject: 'Physics',
+    officialKey: 'B',
+    proposedKey: 'C',
+    objectionCategory: 'Incorrect Key',
+    justification: 'The question did not state whether amplitude displacement was measured from the extreme point or the equilibrium position. If measured from extreme, x\' differs.',
+    referenceSource: 'NCERT Physics Class XI, Chapter 14 Oscillations, Page 346, Problem 14.12',
+    attachedDocumentName: 'NCERT_Oscillations_Reference_Pg346.pdf',
+    attachedDocumentSize: '1.4 MB',
+    feePaid: 500,
+    submissionDate: '12 Apr 2025',
+    status: 'Under Review by Expert Panel',
+    expertRemarks: 'Subject Matter Committee review scheduled for 18 Apr 2025.',
+  },
+];
+
+export function calculateObjectionFee(questionCount: number, feePerQuestion: number = 500): number {
+  return Math.max(0, questionCount * feePerQuestion);
+}
 
 export function validateObjection(data: {
   questionNumber: number;

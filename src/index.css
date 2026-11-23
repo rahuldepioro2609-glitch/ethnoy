@@ -1,9 +1,77 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ELTNOY design tokens (source of truth: src/utils/designTokens.ts; kept in sync by its test).
+   Generates utilities such as bg-eltnoy-navy-800 and text-eltnoy-teal-700. Used by src/components/ui. */
+@theme {
+  /* Latin: bundled Plus Jakarta Sans. Indic scripts: installed system fonts (Windows: Nirmala UI;
+     macOS/iOS: Kohinoor and Sangam MN; Android/Linux: Noto). The browser picks per character. */
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans',
+    'Nirmala UI', 'Kohinoor Devanagari', 'Devanagari Sangam MN', 'Noto Sans Devanagari',
+    'Kohinoor Bangla', 'Bangla Sangam MN', 'Noto Sans Bengali',
+    'Kannada Sangam MN', 'Noto Sans Kannada',
+    'Helvetica Neue', Arial, sans-serif;
+  --color-eltnoy-navy-950: #071933;
+  --color-eltnoy-navy-900: #0B254E;
+  --color-eltnoy-navy-800: #0B2E59;
+  --color-eltnoy-brand-green: #16A34A;
+  --color-eltnoy-teal-600: #0D9488;
+  --color-eltnoy-teal-700: #0F766E;
+  --color-eltnoy-surface: #FFFFFF;
+  --color-eltnoy-surface-muted: #F7F6F1;
+  --color-eltnoy-surface-subtle: #EFEEE8;
+  --color-eltnoy-border: #E4E2DA;
+  --color-eltnoy-ink: #0E1A15;
+  --color-eltnoy-ink-muted: #4B5357;
+  --color-eltnoy-ink-subtle: #5F6964;
+  --color-eltnoy-success: #15803D;
+  --color-eltnoy-warning: #B45309;
+  --color-eltnoy-danger: #BE123C;
+  --color-eltnoy-info: #0369A1;
+  --color-eltnoy-teal-soft: #ECF7F1;
+  --color-eltnoy-success-soft: #F0FDF4;
+  --color-eltnoy-warning-soft: #FFFBEB;
+  --color-eltnoy-danger-soft: #FFF1F2;
+  --color-eltnoy-info-soft: #F0F9FF;
+
+  /* Colour refresh (2026-11-14): Tailwind's neutral slate scale, used across every page, is retinted to
+     warm off-white surfaces and near-black ink. Brand navy, the wordmark green, the teal accent and the
+     status, emerald, sky and blue palettes are unchanged. Text pairs keep WCAG AA contrast. */
+  --color-slate-50: #F7F6F1;
+  --color-slate-100: #EFEEE8;
+  --color-slate-200: #E4E2DA;
+  --color-slate-300: #CFCDC4;
+  --color-slate-400: #A3A29A;
+  --color-slate-500: #5F6964;
+  --color-slate-600: #4B5357;
+  --color-slate-700: #353D40;
+  --color-slate-800: #1C2023;
+  --color-slate-900: #0E1A15;
+  --color-slate-950: #07100C;
+}
+
+/* Plus Jakarta Sans, bundled locally (public/fonts/plus-jakarta-sans, SIL OFL 1.1). No CDN request.
+   Scripts outside these ranges (Devanagari, Kannada, Bengali) use the system fallbacks in --font-sans. */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url('/fonts/plus-jakarta-sans/plus-jakarta-sans-latin-ext-wght-normal.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url('/fonts/plus-jakarta-sans/plus-jakarta-sans-latin-wght-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @layer base {
   body {
-    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    font-family: var(--font-sans);
   }
 }
 

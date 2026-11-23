@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
   registration_number text,
   registered_address text,
   website text,
+  is_super_admin boolean NOT NULL DEFAULT false,
   account_status text NOT NULL DEFAULT 'approved'
     CHECK (account_status IN ('pending', 'approved', 'rejected')),
   created_at timestamptz NOT NULL DEFAULT now()
@@ -16,6 +17,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_email text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_number text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_address text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS website text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin boolean NOT NULL DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status text NOT NULL DEFAULT 'approved';
 DO $$
 BEGIN
@@ -26,6 +28,62 @@ BEGIN
       CHECK (account_status IN ('pending', 'approved', 'rejected'));
   END IF;
 END $$;
+
+CREATE TABLE IF NOT EXISTS institute_status_history (
+  id text PRIMARY KEY,
+  institution_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  previous_status text NOT NULL CHECK (previous_status IN ('pending', 'approved', 'rejected')),
+  new_status text NOT NULL CHECK (new_status IN ('pending', 'approved', 'rejected')),
+  reviewer_user_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  decision_at timestamptz NOT NULL DEFAULT now(),
+  decision_reason text NOT NULL CHECK (char_length(btrim(decision_reason)) BETWEEN 10 AND 1000),
+  CHECK (previous_status <> new_status)
+);
+CREATE INDEX IF NOT EXISTS institute_status_history_institution_idx
+  ON institute_status_history(institution_id, decision_at DESC);
+
+CREATE OR REPLACE FUNCTION reject_institute_status_history_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'institute status history is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS institute_status_history_append_only ON institute_status_history;
+CREATE TRIGGER institute_status_history_append_only
+  BEFORE UPDATE OR DELETE ON institute_status_history
+  FOR EACH ROW EXECUTE FUNCTION reject_institute_status_history_mutation();
+DROP TRIGGER IF EXISTS institute_status_history_no_truncate ON institute_status_history;
+CREATE TRIGGER institute_status_history_no_truncate
+  BEFORE TRUNCATE ON institute_status_history
+  FOR EACH STATEMENT EXECUTE FUNCTION reject_institute_status_history_mutation();
+
+CREATE TABLE IF NOT EXISTS institute_resubmissions (
+  id text PRIMARY KEY,
+  institution_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  submission_version integer NOT NULL CHECK (submission_version > 0),
+  submission_reference text NOT NULL UNIQUE,
+  submitted_data jsonb NOT NULL,
+  previous_status text NOT NULL DEFAULT 'rejected' CHECK (previous_status = 'rejected'),
+  new_status text NOT NULL DEFAULT 'pending' CHECK (new_status = 'pending'),
+  submitted_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (institution_id, submission_version)
+);
+CREATE INDEX IF NOT EXISTS institute_resubmissions_institution_idx
+  ON institute_resubmissions(institution_id, submitted_at DESC);
+CREATE OR REPLACE FUNCTION reject_institute_resubmission_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'institute resubmissions are append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS institute_resubmissions_append_only ON institute_resubmissions;
+CREATE TRIGGER institute_resubmissions_append_only
+  BEFORE UPDATE OR DELETE ON institute_resubmissions
+  FOR EACH ROW EXECUTE FUNCTION reject_institute_resubmission_mutation();
+DROP TRIGGER IF EXISTS institute_resubmissions_no_truncate ON institute_resubmissions;
+CREATE TRIGGER institute_resubmissions_no_truncate
+  BEFORE TRUNCATE ON institute_resubmissions
+  FOR EACH STATEMENT EXECUTE FUNCTION reject_institute_resubmission_mutation();
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
   token_hash text PRIMARY KEY,
@@ -94,6 +152,14 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS user_id text REFERENCES users(
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS father_name text NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS gender text NOT NULL DEFAULT 'Other';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'General';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS ownership_verified_at timestamptz;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS ownership_verified_by text REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS ownership_verification_method text
+  CHECK (ownership_verification_method IN (
+    'identity_document_review',
+    'registered_contact_confirmation',
+    'institution_confirmation'
+  ));
 CREATE INDEX IF NOT EXISTS applications_exam_code_idx ON applications(exam_code);
 CREATE INDEX IF NOT EXISTS applications_created_at_idx ON applications(created_at DESC);
 CREATE INDEX IF NOT EXISTS applications_user_id_idx ON applications(user_id, created_at DESC);
@@ -310,82 +376,3 @@ BEGIN
       FOREIGN KEY (withdrawal_id) REFERENCES institute_withdrawals(id) ON DELETE CASCADE;
   END IF;
 END $$;
-
--- Uploaded files (candidate photo/signature, objection evidence). Stored in the
--- database so uploads survive redeploys on hosts without a persistent disk.
-CREATE TABLE IF NOT EXISTS uploaded_files (
-  id text PRIMARY KEY,
-  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind text NOT NULL CHECK (kind IN ('photo', 'signature', 'objection_document')),
-  mime_type text NOT NULL CHECK (mime_type IN ('image/jpeg', 'image/png', 'application/pdf')),
-  original_name text,
-  size_bytes integer NOT NULL CHECK (size_bytes > 0),
-  data bytea NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS uploaded_files_user_idx ON uploaded_files(user_id, created_at DESC);
-
-ALTER TABLE applications ADD COLUMN IF NOT EXISTS photo_file_id text REFERENCES uploaded_files(id) ON DELETE SET NULL;
-ALTER TABLE applications ADD COLUMN IF NOT EXISTS signature_file_id text REFERENCES uploaded_files(id) ON DELETE SET NULL;
-
--- Answer-key objection windows and candidate objections.
-CREATE TABLE IF NOT EXISTS answer_key_objection_windows (
-  exam_code text PRIMARY KEY,
-  is_open boolean NOT NULL DEFAULT false,
-  closes_at timestamptz,
-  updated_by text REFERENCES users(id) ON DELETE SET NULL,
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-ALTER TABLE answer_key_questions ADD COLUMN IF NOT EXISTS original_key text
-  CHECK (original_key IS NULL OR original_key IN ('A', 'B', 'C', 'D'));
-ALTER TABLE answer_key_questions ADD COLUMN IF NOT EXISTS is_dropped boolean NOT NULL DEFAULT false;
-
-CREATE TABLE IF NOT EXISTS answer_key_objections (
-  id text PRIMARY KEY,
-  reference_number text NOT NULL UNIQUE,
-  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  exam_code text NOT NULL,
-  question_number integer NOT NULL CHECK (question_number > 0),
-  official_key text NOT NULL CHECK (official_key IN ('A', 'B', 'C', 'D')),
-  proposed_key text NOT NULL CHECK (proposed_key IN ('A', 'B', 'C', 'D', 'NONE')),
-  category text NOT NULL CHECK (category IN (
-    'Incorrect Key', 'Ambiguous Question', 'Multiple Answers', 'Out of Syllabus', 'Typographical Discrepancy'
-  )),
-  justification text NOT NULL CHECK (char_length(justification) BETWEEN 15 AND 3000),
-  reference_source text NOT NULL CHECK (char_length(reference_source) BETWEEN 5 AND 500),
-  document_file_id text REFERENCES uploaded_files(id) ON DELETE SET NULL,
-  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
-  resolution text CHECK (resolution IS NULL OR resolution IN ('key_changed', 'question_dropped', 'no_change')),
-  reviewer_remarks text,
-  reviewed_by text REFERENCES users(id) ON DELETE SET NULL,
-  reviewed_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (user_id, exam_code, question_number)
-);
-CREATE INDEX IF NOT EXISTS answer_key_objections_exam_idx
-  ON answer_key_objections(exam_code, question_number, status);
-CREATE INDEX IF NOT EXISTS answer_key_objections_user_idx
-  ON answer_key_objections(user_id, created_at DESC);
-
--- Email verification and password reset.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at timestamptz;
-
-CREATE TABLE IF NOT EXISTS auth_tokens (
-  token_hash text PRIMARY KEY,
-  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  purpose text NOT NULL CHECK (purpose IN ('password_reset', 'email_verification')),
-  email text NOT NULL,
-  expires_at timestamptz NOT NULL,
-  used_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS auth_tokens_user_idx ON auth_tokens(user_id, purpose, created_at DESC);
-
--- Sign in with Google: the Google account (stable "sub" ID) connected to a student or institute.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub text;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS google_email text;
--- false for accounts created through Google until the user sets a password.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS has_password boolean NOT NULL DEFAULT true;
-CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;
-CREATE INDEX IF NOT EXISTS users_role_email_idx ON users (role, lower(contact_email));

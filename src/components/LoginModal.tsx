@@ -29,12 +29,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
     setError(null);
     setIsSubmitting(true);
     try {
-      const { user } = await apiRequest<{
-        user: { id: string; loginId: string; name: string; role: 'candidate' | 'center' | 'official' };
-      }>('/api/auth/login', {
+      await apiRequest('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ loginId: username.trim(), password, role }),
       });
+      // Verify the session was durably persisted before updating UI state.
+      const { user } = await apiRequest<{
+        user: { id: string; loginId: string; name: string; role: 'candidate' | 'center' | 'official' };
+      }>('/api/auth/me');
       const roleLabels = {
         candidate: 'Registered Candidate',
         center: 'Test Center Admin',

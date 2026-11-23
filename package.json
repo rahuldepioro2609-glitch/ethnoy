@@ -7,19 +7,26 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "vite --port=3000 --host=127.0.0.1",
     "dev:api": "tsx watch server/index.ts",
+    "dev:api:local": "ELTNOY_SURFACE_MODE=development ELTNOY_API_LISTENERS=public,admin ELTNOY_PUBLIC_PROXY_CIDRS=127.0.0.1/32 ELTNOY_ADMIN_PROXY_CIDRS=::1/128 ELTNOY_MARKETING_HOSTNAME=marketing.127.0.0.1.nip.io ELTNOY_EXAM_HOSTNAME=exam.127.0.0.1.nip.io ELTNOY_INSTITUTION_HOSTNAME=institution.127.0.0.1.nip.io ELTNOY_ADMIN_HOSTNAME=admin.127.0.0.1.nip.io ELTNOY_DEV_ORIGIN_SCHEME=http ELTNOY_DEV_ORIGIN_PORT=3000 PORT=4000 ADMIN_PORT=4001 tsx watch server/index.ts",
     "start": "tsx server/index.ts",
     "db:migrate": "tsx server/migrate.ts",
     "user:create": "tsx server/createUser.ts",
-    "test": "node --import tsx --test src/data/*.test.ts src/utils/*.test.ts src/i18n/*.test.ts server/*.test.ts",
+    "user:reset-superadmin-password": "tsx server/resetSuperAdminPassword.ts",
+    "admin-mfa:bootstrap-local": "NODE_ENV=development tsx server/adminMfaLocalBootstrap.ts",
+    "test:institution-submission-integration": "node --import tsx --test server/institutionSubmission.http.integration.test.ts",
+    "test:verifier": "node --import tsx --test server/verifier/*.test.ts",
+    "test:official-auth-foundation": "node --import tsx --test server/officialAuthFoundation.test.ts",
+    "test:official-auth-foundation:postgres": "node --import tsx --test server/officialAuthFoundation.postgres.integration.test.ts",
+    "start:verifier": "tsx server/verifier/main.ts",
+    "test": "node --import tsx --test src/data/*.test.ts src/utils/*.test.ts src/components/ui/*.test.tsx server/*.test.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "bcryptjs": "^3.0.3",
@@ -28,10 +35,8 @@
     "express": "^4.21.2",
     "express-rate-limit": "^8.7.2",
     "helmet": "^8.3.0",
-    "jose": "^6.2.17",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
-    "nodemailer": "^10.3.1",
     "pg": "^8.23.1",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
@@ -39,10 +44,14 @@
     "vite": "^8.3.0",
     "zod": "^4.6.7"
   },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
-    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

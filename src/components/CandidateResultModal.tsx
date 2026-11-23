@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
-import { useEscapeKey } from './useEscapeKey';
+import React, { useState } from 'react';
 import {
   X,
   Award,
@@ -22,53 +21,49 @@ import {
   Sparkles,
 } from 'lucide-react';
 import {
-  performanceBand,
   formatRankDisplay,
   getCutoffComparison,
   CandidateScorecard,
 } from '../utils/resultLogic';
-import { apiRequest } from '../api';
+import { ApiError, apiRequest } from '../api';
+import type { ExamItem } from '../data/portalData';
 
-import { useTranslation } from '../i18n';
 interface CandidateResultModalProps {
   isOpen: boolean;
   onClose: () => void;
   defaultRollNumber?: string;
+  /** Published exams from GET /api/exams (loaded by App). Empty when none are published or loading failed. */
+  publishedExams: ExamItem[];
 }
 
 export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
   isOpen,
   onClose,
   defaultRollNumber = '',
+  publishedExams,
 }) => {
-  useEscapeKey(isOpen, onClose);
   const [rollInput, setRollInput] = useState(defaultRollNumber);
   const [dobInput, setDobInput] = useState('');
-  const { t } = useTranslation();
+  // No default exam: the candidate must choose one of the API-provided published exams.
   const [selectedExam, setSelectedExam] = useState('');
-  const [publishedExams, setPublishedExams] = useState<Array<{ code: string; name: string }>>([]);
+  const examsAvailable = publishedExams.length > 0;
+  const examSelected = publishedExams.some((exam) => exam.code === selectedExam);
   const [activeScorecard, setActiveScorecard] = useState<CandidateScorecard | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    apiRequest<{ exams: Array<{ code: string; name: string }> }>('/api/exams')
-      .then(({ exams }) => {
-        setPublishedExams(exams);
-        setSelectedExam((current) => current || exams[0]?.code || '');
-      })
-      .catch(() => setPublishedExams([]));
-  }, [isOpen]);
-
   if (!isOpen) return null;
 
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!rollInput.trim() || !dobInput || !selectedExam.trim()) {
-      setLookupError(t('result.fillAll'));
+    if (!examSelected) {
+      setLookupError(examsAvailable ? 'Select an examination.' : 'Result lookup is unavailable: no published examination is available right now.');
+      return;
+    }
+    if (!rollInput.trim() || !dobInput) {
+      setLookupError('Enter your roll/application number and date of birth.');
       return;
     }
     setLookupError(null);
@@ -76,17 +71,19 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
     setActiveScorecard(null);
     setHasSearched(true);
     try {
-      const { scorecard } = await apiRequest<{ scorecard: CandidateScorecard }>('/api/results/lookup', {
+      const { scorecard } = await apiRequest<{ scorecard: CandidateScorecard }>('/api/candidate/results/lookup', {
         method: 'POST',
         body: JSON.stringify({
           identifier: rollInput.trim(),
           dateOfBirth: dobInput,
-          examCode: selectedExam.trim(),
+          examCode: selectedExam,
         }),
       });
       setActiveScorecard(scorecard);
     } catch (error) {
-      setLookupError(error instanceof Error ? error.message : t('result.loadError'));
+      setLookupError(error instanceof ApiError && error.status === 401
+        ? 'Your session has expired. Sign in with your candidate account to view your result.'
+        : error instanceof Error ? error.message : 'Could not load the result.');
     } finally {
       setIsSearching(false);
     }
@@ -118,17 +115,17 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
             </div>
             <div>
               <h2 id="result-modal-title" className="text-lg font-bold tracking-tight">
-                {t('result.title')}
+                Candidate Result &amp; All-India Rank Card Portal
               </h2>
               <p className="text-xs text-sky-200">
-                {t('result.subtitle')}
+                Official National Examination Results &amp; Merit Certification · ELTNOY Directorate
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors"
-            aria-label={t('result.close')}
+            aria-label="Close Result Portal"
           >
             <X className="w-5 h-5" />
           </button>
@@ -139,21 +136,21 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
           <form onSubmit={handleSearch} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
             <div className="sm:col-span-4">
               <label htmlFor="res-roll" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                {t('result.idLabel')}
+                Roll No / Application No
               </label>
               <input
                 id="res-roll"
                 type="text"
                 value={rollInput}
                 onChange={(e) => setRollInput(e.target.value)}
-                placeholder={t('result.idPlaceholder')}
+                placeholder="Roll number or application number"
                 className="w-full text-xs font-semibold px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] focus:border-transparent uppercase"
               />
             </div>
 
             <div className="sm:col-span-3">
               <label htmlFor="res-dob" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                {t('result.dob')}
+                Date of Birth
               </label>
               <input
                 id="res-dob"
@@ -166,38 +163,46 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
 
             <div className="sm:col-span-3">
               <label htmlFor="res-exam" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                {t('result.exam')}
+                Examination
               </label>
-              <input
+              <select
                 id="res-exam"
-                list="res-exam-options"
-                value={selectedExam}
-                onChange={(e) => setSelectedExam(e.target.value.toUpperCase())}
-                placeholder={t('admit.examPlaceholder')}
-                className="w-full text-xs font-mono font-semibold uppercase px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] focus:border-transparent"
-              />
-              <datalist id="res-exam-options">
-                {publishedExams.map((exam) => <option key={exam.code} value={exam.code}>{exam.name}</option>)}
-              </datalist>
+                value={examSelected ? selectedExam : ''}
+                onChange={(e) => setSelectedExam(e.target.value)}
+                disabled={!examsAvailable}
+                required
+                className="w-full text-xs font-medium px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#16A34A] focus:border-transparent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="" disabled>{examsAvailable ? 'Select an examination' : 'No published examination available'}</option>
+                {publishedExams.map((exam) => (
+                  <option key={exam.id} value={exam.code}>{exam.name} ({exam.code})</option>
+                ))}
+              </select>
             </div>
 
             <div className="sm:col-span-2">
               <button
                 type="submit"
-                disabled={isSearching}
+                disabled={isSearching || !examSelected}
                 className="w-full py-2 px-3 bg-[#16A34A] hover:bg-[#15803D] disabled:opacity-60 text-white text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-xs"
               >
                 <Search className="w-3.5 h-3.5" />
-                <span>{isSearching ? t('result.searching') : t('result.search')}</span>
+                <span>{isSearching ? 'Searching…' : 'Search'}</span>
               </button>
             </div>
+
+            {!examsAvailable && (
+              <p role="status" className="sm:col-span-12 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
+                Result lookup is unavailable right now: no published examination is available, or the examination list could not be loaded. Please try again later.
+              </p>
+            )}
           </form>
 
           <div className="mt-3 text-xs">
             {lookupError ? (
               <p role="alert" className="text-rose-700">{lookupError}</p>
             ) : (
-              <p className="text-slate-500">{t('result.hint')}</p>
+              <p className="text-slate-500">Scorecards are shown here after an official publishes them.</p>
             )}
           </div>
         </div>
@@ -214,22 +219,22 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-black uppercase tracking-wider text-slate-500">{t('result.scorecard')}</span>
+                      <span className="text-xs font-black uppercase tracking-wider text-slate-500">Official Scorecard</span>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
                         <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                        {t('result.publishedBadge')}
+                        Verified Digital Certificate
                       </span>
                     </div>
                     <h3 className="text-lg font-black text-[#0B254E] tracking-tight">{activeScorecard.examName}</h3>
                     <div className="text-xs text-slate-500">
-                      {t('result.dates', { examDate: activeScorecard.examDate, issueDate: activeScorecard.issueDate })}
+                      Conducted on: {activeScorecard.examDate} · Issue Date: {activeScorecard.issueDate}
                     </div>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3 self-end sm:self-auto">
                   <div className="text-right hidden sm:block">
-                    <div className="text-[11px] font-mono text-slate-400">{t('result.verificationCode')}</div>
+                    <div className="text-[11px] font-mono text-slate-400">Security Ref:</div>
                     <div className="text-xs font-bold font-mono text-slate-700">{activeScorecard.digitalVerificationCode}</div>
                   </div>
                   <div className="p-1.5 border border-slate-300 rounded-lg bg-slate-50">
@@ -241,36 +246,36 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
               {/* Candidate Info Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 py-4 border-b border-slate-200 text-xs">
                 <div>
-                  <span className="text-slate-400 font-medium block">{t('result.candidateName')}</span>
+                  <span className="text-slate-400 font-medium block">Candidate Name</span>
                   <span className="font-bold text-slate-900 text-sm">{activeScorecard.candidateName}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-medium block">{t('result.rollNumber')}</span>
+                  <span className="text-slate-400 font-medium block">Roll Number</span>
                   <span className="font-bold font-mono text-slate-900">{activeScorecard.rollNumber}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-medium block">{t('result.applicationNo')}</span>
+                  <span className="text-slate-400 font-medium block">Application No</span>
                   <span className="font-bold font-mono text-slate-900">{activeScorecard.applicationNumber}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-medium block">{t('result.categoryPwd')}</span>
-                  <span className="font-bold text-slate-900">{activeScorecard.category} {activeScorecard.pwdStatus ? t('result.pwd') : ''}</span>
+                  <span className="text-slate-400 font-medium block">Category &amp; PwD</span>
+                  <span className="font-bold text-slate-900">{activeScorecard.category} {activeScorecard.pwdStatus ? '(PwD)' : ''}</span>
                 </div>
 
                 <div>
-                  <span className="text-slate-400 font-medium block">{t('result.fatherName')}</span>
+                  <span className="text-slate-400 font-medium block">Father's Name</span>
                   <span className="font-semibold text-slate-800">{activeScorecard.fatherName}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-medium block">{t('result.motherName')}</span>
+                  <span className="text-slate-400 font-medium block">Mother's Name</span>
                   <span className="font-semibold text-slate-800">{activeScorecard.motherName}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-medium block">{t('result.dob')}</span>
+                  <span className="text-slate-400 font-medium block">Date of Birth</span>
                   <span className="font-semibold text-slate-800">{activeScorecard.dob}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-medium block">{t('result.center')}</span>
+                  <span className="text-slate-400 font-medium block">Exam Center</span>
                   <span className="font-semibold text-slate-800 truncate block" title={activeScorecard.centerName}>
                     {activeScorecard.centerName}
                   </span>
@@ -280,48 +285,44 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
               {/* High Impact Highlights: AIR, Category Rank, Percentile, Qualification Status */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-4">
                 <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-center">
-                  <div className="text-[11px] font-bold text-sky-700 uppercase tracking-wider">{t('result.air')}</div>
+                  <div className="text-[11px] font-bold text-sky-700 uppercase tracking-wider">All-India Rank (AIR)</div>
                   <div className="text-2xl font-black text-[#0B254E] mt-0.5">
                     {formatRankDisplay(activeScorecard.allIndiaRank, '')}
                   </div>
                   <div className="text-[10px] text-sky-600 font-semibold mt-1 flex items-center justify-center gap-1">
-                    <TrendingUp className="w-3 h-3" /> {t('result.percentileOf', { value: activeScorecard.aggregatePercentile })}
+                    <TrendingUp className="w-3 h-3" /> Top 0.1% National
                   </div>
                 </div>
 
                 <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 text-center">
-                  <div className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">{t('result.categoryRank')}</div>
+                  <div className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">Category Rank</div>
                   <div className="text-2xl font-black text-emerald-700 mt-0.5">
                     {formatRankDisplay(activeScorecard.categoryRank, '')}
                   </div>
                   <div className="text-[10px] text-emerald-600 font-medium mt-1">
-                    {t('result.categoryValue', { category: activeScorecard.category })}
+                    Category: {activeScorecard.category}
                   </div>
                 </div>
 
                 <div className="bg-purple-50 border border-purple-100 rounded-xl p-3 text-center">
-                  <div className="text-[11px] font-bold text-purple-800 uppercase tracking-wider">{t('result.percentile')}</div>
+                  <div className="text-[11px] font-bold text-purple-800 uppercase tracking-wider">National Percentile</div>
                   <div className="text-2xl font-black text-purple-700 mt-0.5">
                     {activeScorecard.aggregatePercentile}%
                   </div>
                   <div className="text-[10px] text-purple-600 font-medium mt-1">
-                    {t('result.aggregate')}
+                    NTA/ELT Normalised Score
                   </div>
                 </div>
 
                 <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 text-center">
-                  <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">{t('result.status')}</div>
-                  {activeScorecard.qualifyingStatus === 'QUALIFIED' ? (
-                    <div className="text-sm font-black text-emerald-700 mt-1 flex items-center justify-center gap-1">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>{t('result.qualified')}</span>
-                    </div>
-                  ) : (
-                    <div className="text-sm font-black text-rose-700 mt-1 flex items-center justify-center gap-1">
-                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                      <span>{t('result.notQualified')}</span>
-                    </div>
-                  )}
+                  <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">Status</div>
+                  <div className="text-sm font-black text-emerald-700 mt-1 flex items-center justify-center gap-1">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>QUALIFIED</span>
+                  </div>
+                  <div className="text-[10px] text-amber-700 font-medium mt-1">
+                    Seat Allocation Eligible
+                  </div>
                 </div>
               </div>
 
@@ -330,19 +331,20 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                     <FileText className="w-4 h-4 text-emerald-600" />
-                    {t('result.sections')}
+                    Sectional Score Breakdown &amp; Sub-Subject Percentiles
                   </h4>
+                  <span className="text-[11px] text-slate-500">Marking Scheme: +4 Correct / -1 Incorrect</span>
                 </div>
 
                 <div className="overflow-x-auto rounded-lg border border-slate-200">
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-100 text-slate-700 font-bold uppercase tracking-wider text-[11px]">
                       <tr>
-                        <th className="py-2.5 px-3">{t('result.section')}</th>
-                        <th className="py-2.5 px-3 text-center">{t('result.maxMarks')}</th>
-                        <th className="py-2.5 px-3 text-center">{t('result.marksObtained')}</th>
-                        <th className="py-2.5 px-3 text-center">{t('result.sectionPercentile')}</th>
-                        <th className="py-2.5 px-3 text-center">{t('result.performance')}</th>
+                        <th className="py-2.5 px-3">Subject / Paper Section</th>
+                        <th className="py-2.5 px-3 text-center">Max Marks</th>
+                        <th className="py-2.5 px-3 text-center">Marks Obtained</th>
+                        <th className="py-2.5 px-3 text-center">Section Percentile</th>
+                        <th className="py-2.5 px-3 text-center">Performance Indicator</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -353,19 +355,14 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
                           <td className="py-2.5 px-3 text-center font-mono font-bold text-[#16A34A]">{sec.marksObtained}</td>
                           <td className="py-2.5 px-3 text-center font-mono font-semibold text-slate-700">{sec.percentile}%</td>
                           <td className="py-2.5 px-3 text-center">
-                            <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${{
-                              excellent: 'bg-emerald-100 text-emerald-800',
-                              good: 'bg-sky-100 text-sky-800',
-                              average: 'bg-amber-100 text-amber-800',
-                              needsImprovement: 'bg-rose-100 text-rose-800',
-                            }[performanceBand(sec.marksObtained, sec.maxMarks)]}`}>
-                              {t(`result.band.${performanceBand(sec.marksObtained, sec.maxMarks)}`)}
+                            <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                              Excellent (Band A+)
                             </span>
                           </td>
                         </tr>
                       ))}
                       <tr className="bg-slate-100 font-bold text-slate-900">
-                        <td className="py-3 px-3">{t('result.total')}</td>
+                        <td className="py-3 px-3">Grand Aggregate Total</td>
                         <td className="py-3 px-3 text-center font-mono">{activeScorecard.totalMaxMarks}</td>
                         <td className="py-3 px-3 text-center font-mono text-base text-[#15803D]">
                           {activeScorecard.totalMarksObtained}
@@ -373,7 +370,7 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
                         <td className="py-3 px-3 text-center font-mono text-base text-[#0B254E]">
                           {activeScorecard.aggregatePercentile}%
                         </td>
-                        <td className="py-3 px-3 text-center text-xs text-slate-600">{t(`result.band.${performanceBand(activeScorecard.totalMarksObtained, activeScorecard.totalMaxMarks)}`)}</td>
+                        <td className="py-3 px-3 text-center text-xs text-emerald-700">All India Merit Valid</td>
                       </tr>
                     </tbody>
                   </table>
@@ -384,9 +381,9 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
               <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 text-xs space-y-2">
                   <div className="font-bold text-slate-800 flex items-center justify-between">
-                    <span>{t('result.cutoffTitle')}</span>
+                    <span>Category Cut-off Verification</span>
                     <span className="text-emerald-700 font-bold">
-                      {t('result.cutoff', { marks: cutoffComp?.categoryCutoff ?? '' })}
+                      Cut-off: {cutoffComp?.categoryCutoff} Marks
                     </span>
                   </div>
                   <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
@@ -401,11 +398,9 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
                     />
                   </div>
                   <div className="flex justify-between text-[11px] text-slate-500">
-                    <span>{t('result.yourMarks', { marks: activeScorecard.totalMarksObtained })}</span>
-                    <span className={`font-semibold ${cutoffComp?.hasCleared ? 'text-emerald-700' : 'text-rose-700'}`}>
-                      {cutoffComp?.hasCleared
-                        ? t('result.aboveCutoff', { margin: cutoffComp.margin, category: activeScorecard.category })
-                        : t('result.belowCutoff', { margin: Math.abs(cutoffComp?.margin ?? 0), category: activeScorecard.category })}
+                    <span>Your Marks: {activeScorecard.totalMarksObtained}</span>
+                    <span className="text-emerald-700 font-semibold">
+                      +{cutoffComp?.margin} above {activeScorecard.category} cutoff
                     </span>
                   </div>
                 </div>
@@ -413,20 +408,20 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
                 <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/60 text-xs space-y-1.5">
                   <div className="font-bold text-emerald-900 flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4 text-emerald-600" />
-                    <span>{t('result.counseling')}</span>
+                    <span>Counseling Stream &amp; Recommendation</span>
                   </div>
                   <p className="text-emerald-800 font-medium">
                     {activeScorecard.counselingStream}
                   </p>
                   <p className="text-[11px] text-slate-600">
-                    {t('result.counselingHint')}
+                    Follow official ELTNOY notices for counseling dates and next steps.
                   </p>
                 </div>
               </div>
             </div>
           ) : (
             <div className="py-12 text-center text-slate-500 text-sm">
-              {t('result.empty')}
+              Enter your Roll Number and Date of Birth to view your scorecard.
             </div>
           )}
         </div>
@@ -435,14 +430,14 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
         <div className="bg-slate-50 border-t border-slate-200 px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
           <div className="text-[11px] text-slate-500 flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-[#16A34A]" />
-            <span>{t('result.footer')}</span>
+            <span>Result information is provided by portal officials. Verify it with the issuing authority.</span>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
               className="px-4 py-2 border border-slate-300 hover:bg-slate-100 rounded-lg text-xs font-semibold text-slate-700 transition-colors"
             >
-              {t('common.closeButton')}
+              Close
             </button>
             <button
               onClick={handlePrint}
@@ -450,7 +445,7 @@ export const CandidateResultModal: React.FC<CandidateResultModalProps> = ({
               className="px-4 py-2 bg-[#0B254E] hover:bg-[#071933] text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-2 shadow-xs disabled:opacity-50"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>{isPrinting ? t('result.preparingPrint') : t('result.print')}</span>
+              <span>{isPrinting ? 'Preparing Print...' : 'Download / Print Scorecard'}</span>
             </button>
           </div>
         </div>

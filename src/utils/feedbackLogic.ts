@@ -108,7 +108,6 @@ export function saveFeedbackEntries(entries: FeedbackEntry[]): void {
 /**
  * Validates candidate feedback input before submission.
  */
-/** Error messages are translation keys (feedback.err.*). */
 export function validateFeedback(data: {
   title?: string;
   description?: string;
@@ -118,21 +117,21 @@ export function validateFeedback(data: {
   const errors: Record<string, string> = {};
 
   if (!data.title || data.title.trim().length < 4) {
-    errors.title = 'feedback.err.titleShort';
+    errors.title = 'Title must be at least 4 characters long.';
   } else if (data.title.trim().length > 100) {
-    errors.title = 'feedback.err.titleLong';
+    errors.title = 'Title cannot exceed 100 characters.';
   }
 
   if (!data.description || data.description.trim().length < 10) {
-    errors.description = 'feedback.err.descriptionShort';
+    errors.description = 'Please provide at least 10 characters describing the issue or suggestion.';
   } else if (data.description.trim().length > 1000) {
-    errors.description = 'feedback.err.descriptionLong';
+    errors.description = 'Description cannot exceed 1000 characters.';
   }
 
   if (data.email && data.email.trim() !== '') {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(data.email.trim())) {
-      errors.email = 'feedback.err.email';
+      errors.email = 'Please provide a valid email address.';
     }
   }
 
