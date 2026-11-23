@@ -15,6 +15,7 @@ import {
   Award,
   CalendarDays,
   LayoutDashboard,
+  LogOut,
 } from 'lucide-react';
 import { ExamItem } from '../data/portalData';
 import { BrandLogo } from './BrandLogo';
@@ -23,7 +24,9 @@ import { useLanguage } from '../utils/languageContext';
 interface StickyNavbarProps {
   onOpenSearch: () => void;
   onOpenLogin: () => void;
-  isAuthenticated: boolean;
+  account: { name: string; role: 'candidate' | 'center' | 'official' } | null;
+  authLoading: boolean;
+  onSignOut: () => void;
   onOpenAdmitCard: () => void;
   onOpenMockExam: () => void;
   onOpenCenterLocator: () => void;
@@ -36,7 +39,7 @@ interface StickyNavbarProps {
    * Shown under the logo when this browser is signed in on the Institute site (display-only hint,
    * utils/portalHint.ts). `href` always points at the Institute site's dashboard.
    */
-  instituteReturn?: { name: string; href: string } | null;
+  instituteReturn?: { name: string; href: string; signOutHref: string } | null;
   examinations: ExamItem[];
   activeNavTab: string;
   setActiveNavTab: (tab: string) => void;
@@ -45,7 +48,9 @@ interface StickyNavbarProps {
 export const StickyNavbar: React.FC<StickyNavbarProps> = ({
   onOpenSearch,
   onOpenLogin,
-  isAuthenticated,
+  account,
+  authLoading,
+  onSignOut,
   onOpenAdmitCard,
   onOpenMockExam,
   onOpenCenterLocator,
@@ -128,18 +133,35 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               >
                 <BrandLogo />
               </button>
-              {instituteReturn && (
+              {account ? (
+                <button
+                  type="button"
+                  onClick={onOpenLogin}
+                  title={`${account.name} · ${account.role === 'center' ? 'Institute' : account.role === 'candidate' ? 'Student' : 'Admin'}`}
+                  aria-label={`${account.name}, open dashboard`}
+                  className="inline-flex max-w-[130px] items-center gap-1.5 overflow-hidden rounded-full border border-emerald-200 bg-emerald-50 py-1 pl-1.5 pr-2.5 text-[11px] font-bold text-emerald-950 transition hover:bg-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 sm:max-w-[260px]"
+                >
+                  <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-white ${account.role === 'center' ? 'bg-sky-700' : account.role === 'candidate' ? 'bg-emerald-700' : 'bg-blue-800'}`}>
+                    {account.role === 'center' ? <Building2 className="h-3 w-3" /> : <User className="h-3 w-3" />}
+                  </span>
+                  <span className="truncate">{account.name}</span>
+                  <span className="shrink-0 text-[9px] font-extrabold uppercase tracking-wide text-slate-500">
+                    {account.role === 'center' ? 'Institute' : account.role === 'candidate' ? 'Student' : 'Admin'}
+                  </span>
+                  <LayoutDashboard className="h-3.5 w-3.5 shrink-0 text-emerald-700" />
+                </button>
+              ) : instituteReturn ? (
                 <a
                   href={instituteReturn.href}
                   title={`${t('Return to the institute dashboard')}: ${instituteReturn.name}`}
                   aria-label={`${t('Return to the institute dashboard')}: ${instituteReturn.name}`}
-                  className="inline-flex max-w-[240px] items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 py-1 pl-1.5 pr-2.5 text-[11px] font-bold text-sky-900 transition hover:bg-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+                  className="inline-flex max-w-[130px] items-center gap-1.5 overflow-hidden rounded-full border border-sky-200 bg-sky-50 py-1 pl-1.5 pr-2.5 text-[11px] font-bold text-sky-900 transition hover:bg-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700 sm:max-w-[260px]"
                 >
                   <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-sky-700 text-white"><Building2 className="h-3 w-3" /></span>
                   <span className="truncate">{instituteReturn.name}</span>
                   <LayoutDashboard className="h-3.5 w-3.5 shrink-0 text-sky-700" />
                 </a>
-              )}
+              ) : null}
             </div>
             <div className="hidden items-center gap-1 border-l border-slate-200 pl-3 lg:flex xl:gap-2 xl:pl-4">
               <button
@@ -180,15 +202,38 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
               <span className="hidden truncate text-xs text-slate-500 sm:inline">{t('Search exams and services')}</span>
               <span className="ml-auto hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-400 md:inline">Ctrl K</span>
             </button>
-            <button
-              type="button"
-              onClick={onOpenLogin}
-              className="flex items-center gap-1.5 rounded-lg bg-[#16A34A] px-3 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-[#15803D] sm:px-4 sm:text-sm"
-              aria-label={t(isAuthenticated ? 'Open dashboard' : 'Login')}
-            >
-              <User className="h-4 w-4 stroke-[2.2]" />
-              <span className="hidden sm:inline">{t(isAuthenticated ? 'My Dashboard' : 'Login')}</span>
-            </button>
+            {authLoading ? (
+              <span role="status" aria-label={t('Checking sign-in')} className="h-10 w-10 animate-pulse rounded-lg bg-slate-100" />
+            ) : account ? (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-slate-700 sm:px-4 sm:text-sm"
+                aria-label={t('Sign out')}
+              >
+                <LogOut className="h-4 w-4" />
+                <span>{t('Sign out')}</span>
+              </button>
+            ) : instituteReturn ? (
+              <a
+                href={instituteReturn.signOutHref}
+                className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-slate-700 sm:px-4 sm:text-sm"
+                aria-label={t('Sign out of institute account')}
+              >
+                <LogOut className="h-4 w-4" />
+                <span>{t('Sign out')}</span>
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={onOpenLogin}
+                className="flex items-center gap-1.5 rounded-lg bg-[#16A34A] px-3 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-[#15803D] sm:px-4 sm:text-sm"
+                aria-label={t('Login')}
+              >
+                <User className="h-4 w-4 stroke-[2.2]" />
+                <span>{t('Login')}</span>
+              </button>
+            )}
           </div>
         </div>
 

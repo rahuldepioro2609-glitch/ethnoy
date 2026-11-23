@@ -21,7 +21,7 @@ import { CandidateResultModal } from './components/CandidateResultModal';
 import { AnswerKeyObjectionModal } from './components/AnswerKeyObjectionModal';
 import { FeedbackSlideOut } from './components/FeedbackSlideOut';
 import { ExamItem, NoticeItem } from './data/portalData';
-import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
+import { Building2, CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
 import { ApiError, apiRequest, apiRequestWithMeta } from './api';
 import { PortalRole, RoleDashboard, RoleLoginPage } from './components/RolePortal';
 import { PlatformStaffPortal } from './components/staff/PlatformStaffPortal';
@@ -29,7 +29,7 @@ import { isPlatformStaffPath } from './utils/staffAccess';
 import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './utils/examSchedule';
 import { LANGUAGE_LOCALES, Language } from './utils/languageLogic';
 import { useLanguage } from './utils/languageContext';
-import { ADMIN_HOME_PATH, planSurfaceNavigation, requiredSurfaceForPath, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
+import { ADMIN_HOME_PATH, planSurfaceNavigation, requiredSurfaceForPath, urlForSurface, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
 import { clearPortalHintInBrowser, readPortalHintFromBrowser, type PortalHint } from './utils/portalHint';
 
 function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
@@ -242,12 +242,19 @@ export default function App() {
       .finally(() => setAuthLoading(false));
   }, []);
 
-  const handleLogout = async () => {
+  const handleLogout = async (returnToMarketing = false) => {
     try {
       await apiRequest<void>('/api/auth/logout', { method: 'POST' });
       clearPortalHintInBrowser();
       setPortalHint(null);
       setLoggedInUser(null);
+      if (returnToMarketing && surfaceHostnames) {
+        const marketingHome = urlForSurface(`${window.location.origin}/`, 'marketing', surfaceHostnames);
+        if (marketingHome) {
+          window.location.assign(marketingHome);
+          return;
+        }
+      }
       navigate('/');
     } catch (error) {
       setSystemAlert(error instanceof Error ? error.message : 'Could not sign out. Please try again.');
@@ -425,7 +432,11 @@ export default function App() {
   // address taken from the cookie). Not shown when someone is signed in on this site itself.
   const instituteReturn = !loggedInUser && portalHint && surfaceHostnames?.institution
     && window.location.hostname !== surfaceHostnames.institution
-    ? { name: portalHint.name, href: `${window.location.protocol}//${surfaceHostnames.institution}/dashboard/center` }
+    ? (() => {
+      const dashboardHref = urlForSurface(`${window.location.origin}/dashboard/center`, 'institution', surfaceHostnames);
+      const signOutHref = urlForSurface(`${window.location.origin}/sign-out/institute`, 'institution', surfaceHostnames);
+      return dashboardHref && signOutHref ? { name: portalHint.name, href: dashboardHref, signOutHref } : null;
+    })()
     : null;
 
   const handlePortalLogin = (user: { name: string; id: string; role: PortalRole; isSuperAdmin: boolean }) => {
@@ -463,6 +474,52 @@ export default function App() {
     return <PlatformStaffPortal pathname={pathname} navigate={navigate} onHome={() => navigate('/')} />;
   }
 
+  if (pathname === '/sign-out/institute') {
+    if (authLoading || !surfaceHostnames) {
+      return <main className="grid min-h-screen place-items-center bg-[#F5F7FB] p-6 text-sm text-slate-600">Checking Institute session…</main>;
+    }
+    if (surfaceHostnames.institution?.toLowerCase() !== window.location.hostname.toLowerCase()) {
+      return (
+        <main className="grid min-h-screen place-items-center bg-[#F5F7FB] p-6">
+          <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-sm">
+            <h1 className="text-xl font-black text-[#0B2E59]">Institute sign-out unavailable</h1>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Open this sign-out link on the Institute website.</p>
+            <a href="/" className="mt-5 inline-flex rounded-lg bg-blue-900 px-4 py-2.5 text-sm font-bold text-white">Return to website</a>
+          </section>
+        </main>
+      );
+    }
+    if (loggedInUser?.accountRole !== 'center') {
+      const marketingHome = urlForSurface(`${window.location.origin}/`, 'marketing', surfaceHostnames) ?? '/';
+      return (
+        <main className="grid min-h-screen place-items-center bg-[#F5F7FB] p-6">
+          <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-sm">
+            <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-sky-100 text-sky-800"><Building2 className="h-6 w-6" /></span>
+            <h1 className="mt-4 text-xl font-black text-[#0B2E59]">No active Institute session</h1>
+            <p className="mt-2 text-sm leading-6 text-slate-600">This browser is not signed in to an Institute account. Sign in again if you need to open the dashboard.</p>
+            <div className="mt-5 flex justify-center gap-3">
+              <a href="/login/center" className="rounded-lg bg-blue-900 px-4 py-2.5 text-sm font-bold text-white">Institute sign in</a>
+              <a href={marketingHome} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700">Public website</a>
+            </div>
+          </section>
+        </main>
+      );
+    }
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#F5F7FB] p-6">
+        <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-sm">
+          <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-sky-100 text-sky-800"><Building2 className="h-6 w-6" /></span>
+          <h1 className="mt-4 text-xl font-black text-[#0B2E59]">Sign out of the Institute portal?</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-600">You are signed in as <strong>{loggedInUser.name}</strong>. Confirm to end this Institute session and return to the public website.</p>
+          <div className="mt-6 flex justify-center gap-3">
+            <button type="button" onClick={() => void handleLogout(true)} className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-700">Sign out</button>
+            <button type="button" onClick={() => navigate('/dashboard/center')} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancel</button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   if (pathname.startsWith('/login')) {
     if (authLoading) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure session…</main>;
     if (loggedInUser) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Opening your dashboard…</main>;
@@ -498,7 +555,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen flex flex-col transition-all ${loggedInUser ? 'pb-24' : ''} ${getFontSizeClass()} ${
+      className={`min-h-screen flex flex-col transition-all ${getFontSizeClass()} ${
         highContrast ? 'bg-black text-amber-300' : 'bg-[#F5F7FB] text-slate-900'
       }`}
     >
@@ -515,7 +572,9 @@ export default function App() {
       <StickyNavbar
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenLogin={() => navigate(loggedInUser ? `/dashboard/${loggedInUser.accountRole}` : '/login')}
-        isAuthenticated={Boolean(loggedInUser)}
+        account={loggedInUser ? { name: loggedInUser.name, role: loggedInUser.accountRole } : null}
+        authLoading={authLoading}
+        onSignOut={() => void handleLogout()}
         onOpenAdmitCard={handleOpenAdmitCard}
         onOpenMockExam={handleOpenMockExam}
         onOpenCenterLocator={handleOpenCenterLocator}
@@ -564,42 +623,6 @@ export default function App() {
           </button>
         </div>
       </section>
-
-      {/* Signed-in account bar */}
-      {loggedInUser && (
-        <div className="fixed inset-x-0 bottom-3 z-40 flex justify-center px-3 sm:bottom-5">
-          <div className="flex w-full max-w-xl items-center gap-3 rounded-full border border-slate-200 bg-white/95 p-2 pl-2.5 shadow-[0_12px_36px_-14px_rgba(15,23,42,0.4)] backdrop-blur-md">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-              loggedInUser.accountRole === 'official' ? 'bg-blue-100 text-blue-800'
-                : loggedInUser.accountRole === 'center' ? 'bg-sky-100 text-sky-800'
-                  : 'bg-emerald-100 text-emerald-800'
-            }`}>
-              <UserCheck className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1 leading-tight">
-              <p className="truncate text-sm font-bold text-slate-900">{loggedInUser.name}</p>
-              <p className="truncate text-[11px] font-medium text-slate-500">
-                {loggedInUser.role} <span className="px-1 text-slate-300">·</span> ID: {loggedInUser.id}
-              </p>
-            </div>
-            <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide sm:inline-flex ${
-              loggedInUser.accountRole === 'official' ? 'bg-blue-50 text-blue-800'
-                : loggedInUser.accountRole === 'center' ? 'bg-sky-50 text-sky-800'
-                  : 'bg-emerald-50 text-emerald-800'
-            }`}>
-              {loggedInUser.accountRole === 'official' ? 'Admin' : loggedInUser.accountRole === 'center' ? 'Institute' : 'Student'}
-            </span>
-            <button
-              onClick={() => void handleLogout()}
-              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full bg-slate-900 px-4 text-xs font-bold text-white transition hover:bg-slate-700"
-              aria-label="Sign out"
-            >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">{t('Sign out')}</span>
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* System Toast Alert */}
       {systemAlert && (
