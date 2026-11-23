@@ -693,7 +693,8 @@ export const SPA_FALLBACK_ROUTE = Object.freeze({ method: 'GET' as const, path: 
 export const SPA_SHELL_PATHS: Readonly<Record<Surface, readonly string[]>> = Object.freeze({
   marketing: Object.freeze(['/', '/login']),
   exam: Object.freeze(['/', '/login', '/login/candidate', '/dashboard/candidate']),
-  institution: Object.freeze(['/', '/login', '/login/center', '/dashboard/center']),
+  // /sign-out/institute: the Institute sign-out confirmation linked from the public site's Institute pill.
+  institution: Object.freeze(['/', '/login', '/login/center', '/dashboard/center', '/sign-out/institute']),
   admin: Object.freeze(['/', '/login/official', '/dashboard/official', '/login/platform-staff', '/dashboard/platform-staff']),
 });
 
