@@ -126,6 +126,10 @@ const CONFIGS = {
 type ConfigName = keyof typeof CONFIGS;
 
 const EXPECTED_HOSTS: Record<ConfigName, string[]> = {
+  public: [PINNED_SURFACE_HOSTNAMES.marketing, PINNED_SURFACE_HOSTNAMES.exam, PINNED_SURFACE_HOSTNAMES.institution, 'www.eltnoy.com'],
+  admin: [PINNED_SURFACE_HOSTNAMES.admin],
+};
+const EXPECTED_PROXIED_HOSTS: Record<ConfigName, string[]> = {
   public: [PINNED_SURFACE_HOSTNAMES.marketing, PINNED_SURFACE_HOSTNAMES.exam, PINNED_SURFACE_HOSTNAMES.institution],
   admin: [PINNED_SURFACE_HOSTNAMES.admin],
 };
@@ -237,7 +241,7 @@ test('upstreams: public proxies only to the public listener; Admin only to the A
 test('headers: every proxied location carries the full trusted forwarding set after inheritance', () => {
   for (const name of ['public', 'admin'] as const) {
     const locations = proxiedLocations(name);
-    assert.equal(locations.length, EXPECTED_HOSTS[name].length, `${name}: one proxied location per HTTPS hostname server`);
+    assert.equal(locations.length, EXPECTED_PROXIED_HOSTS[name].length, name + ': one proxied location per application hostname; www only redirects');
     for (const { directive, ancestors } of locations) {
       const headers = effectiveProxyHeaders(CONFIGS[name].tree, ancestors, directive);
       const label = `${name} ${directive.file}:${directive.line}`;
@@ -281,13 +285,15 @@ test('hosts: the original-host map is an exact, case-insensitive, port-free allo
       assert.equal(evaluateMap(name, host), host);
       assert.equal(evaluateMap(name, host.toUpperCase()), host, 'case-insensitive, normalised');
       // Agrees with the P1-B gate's host parser.
-      assert.deepEqual(parseOriginalHost(evaluateMap(name, host)), { ok: true, hostname: host });
+      if (!(name === 'public' && host === 'www.eltnoy.com')) assert.deepEqual(parseOriginalHost(evaluateMap(name, host)), { ok: true, hostname: host });
       for (const bad of [`${host}:443`, `${host}:8443`, `${host}.`, ` ${host}`, `${host},${host}`, `x.${host}`, `${host}.evil.com`, `${host}x`]) {
-        assert.equal(evaluateMap(name, bad), '', `${name}: ${JSON.stringify(bad)} rejected`);
+        if (name === 'public' && bad === 'www.eltnoy.com') continue;
+      assert.equal(evaluateMap(name, bad), '', `${name}: ${JSON.stringify(bad)} rejected`);
       }
     }
     // The legacy admin.eltnoy.com is served by neither configuration (Admin moved to the private eltnoy.in).
     for (const bad of ['', 'evil.com', 'localhost', '127.0.0.1', 'www.eltnoy.com', 'admin.eltnoy.com', 'eltnoy.in', 'www.eltnoy.in', name === 'public' ? 'admin.eltnoy.in' : 'exam.eltnoy.com']) {
+      if (name === 'public' && bad === 'www.eltnoy.com') continue;
       assert.equal(evaluateMap(name, bad), '', `${name}: ${JSON.stringify(bad)} rejected`);
     }
   }
@@ -306,7 +312,8 @@ test('hosts: every hostname server rejects a Host that is not its own before any
       assert.ok(guardIndex < firstLocation, `${name} ${host}: guard precedes locations`);
       if (!isTls(server)) {
         // HTTP servers only redirect, to a literal URL of their own hostname.
-        assert.deepEqual(children(server, 'location').map((location) => [location.args.join(' '), ...children(location, 'return').flatMap((ret) => ret.args)]), [['/', '301', `https://${host}$request_uri`]]);
+        const redirectHost = host === 'www.eltnoy.com' ? 'eltnoy.com' : host;
+        assert.deepEqual(children(server, 'location').map((location) => [location.args.join(' '), ...children(location, 'return').flatMap((ret) => ret.args)]), [['/', '301', 'https://' + redirectHost + '$request_uri']]);
       }
     }
   }

@@ -597,7 +597,7 @@ test('SPA fallback serves the shell only for the surface\'s own client routes', 
     ['/login/official', { marketing: false, exam: false, institution: false, admin: true }],
     ['/Dashboard/Official', { marketing: false, exam: false, institution: false, admin: true }],
     ['/dashboard/official/settings', { marketing: false, exam: false, institution: false, admin: false }],
-    ['/login', { marketing: false, exam: false, institution: false, admin: false }],
+    ['/login', { marketing: true, exam: true, institution: true, admin: false }],
     ['/admin', { marketing: false, exam: false, institution: false, admin: false }],
   ];
   for (const [target, expected] of expectations) {

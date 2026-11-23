@@ -16,14 +16,16 @@
 --   the manifest exactly. No data, ownership or role attributes are changed.
 --
 -- Manifest rules (checked by server/databaseGrants.test.ts)
--- - Every table in schema public appears exactly once in the table manifest.
+-- - Every existing table in schema public appears exactly once in the table manifest. The four
+--   legacy Render entries below are optional: if present they stay inaccessible to the app; if absent
+--   they are skipped.
 -- - Allowed table privileges are SELECT, INSERT and UPDATE only. Never TRUNCATE, REFERENCES or
 --   TRIGGER: the API never truncates or runs DDL. DELETE is refused on every table except exactly
 --   one, student_registration_claims (AUTH C1, approved): the API deletes only expired, unconsumed
 --   registration claims there. No other table may ever be granted DELETE (enforced below).
 -- - A table with an empty privilege string is deliberately retained but inaccessible to the API.
---   This is for legacy production tables with no references in the current source; their data stays
---   preserved and they can be reviewed separately before any future feature is allowed to use them.
+--   The four legacy production tables have no references in current source; when present their data
+--   stays preserved, and they can be reviewed separately before any future feature uses them.
 -- - update_columns lists column-level UPDATE grants. Since OD-P4 no table has table-wide UPDATE:
 --   each list is exactly the columns the server code assigns (UPDATE ... SET and
 --   INSERT ... ON CONFLICT DO UPDATE SET). SELECT ... FOR UPDATE / FOR SHARE needs UPDATE on at
@@ -53,8 +55,12 @@ DECLARE
   col text;
   cols text;
   i int;
-  tbls text[] := ARRAY[]::text[];        -- manifest, as parallel arrays (no temporary objects:
-  privs text[] := ARRAY[]::text[];       -- TEMPORARY is revoked on the database by the bootstrap)
+  manifested text[] := ARRAY[]::text[]; -- all manifest rows, including optional legacy entries
+  legacy_optional text[] := ARRAY[
+    'answer_key_objection_windows', 'answer_key_objections', 'auth_tokens', 'uploaded_files'
+  ]::text[];
+  tbls text[] := ARRAY[]::text[];        -- existing tables to receive manifest privileges
+  privs text[] := ARRAY[]::text[];       -- parallel arrays (no temporary objects: TEMPORARY is revoked)
   colsets text[] := ARRAY[]::text[];
 BEGIN
   SELECT count(*) = 6 INTO roles_ready
@@ -180,8 +186,12 @@ BEGIN
     ('auth_tokens',                         '',                       NULL),
     ('uploaded_files',                      '',                       NULL)
   ) AS m(tbl, privileges, update_columns) LOOP
-    IF r.tbl = ANY (tbls) THEN
+    IF r.tbl = ANY (manifested) THEN
       RAISE EXCEPTION 'grant manifest lists % twice', r.tbl;
+    END IF;
+    manifested := manifested || r.tbl::text;
+    IF r.tbl = ANY (legacy_optional) AND to_regclass(format('public.%I', r.tbl)) IS NULL THEN
+      CONTINUE;
     END IF;
     tbls := tbls || r.tbl::text;
     privs := privs || r.privileges::text;

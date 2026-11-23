@@ -691,9 +691,9 @@ export const SPA_FALLBACK_ROUTE = Object.freeze({ method: 'GET' as const, path: 
 
 /** Client routes that may receive the SPA shell on each surface (exact, after normalisation). */
 export const SPA_SHELL_PATHS: Readonly<Record<Surface, readonly string[]>> = Object.freeze({
-  marketing: Object.freeze(['/']),
-  exam: Object.freeze(['/', '/login/candidate', '/dashboard/candidate']),
-  institution: Object.freeze(['/', '/login/center', '/dashboard/center']),
+  marketing: Object.freeze(['/', '/login']),
+  exam: Object.freeze(['/', '/login', '/login/candidate', '/dashboard/candidate']),
+  institution: Object.freeze(['/', '/login', '/login/center', '/dashboard/center']),
   admin: Object.freeze(['/', '/login/official', '/dashboard/official', '/login/platform-staff', '/dashboard/platform-staff']),
 });
 

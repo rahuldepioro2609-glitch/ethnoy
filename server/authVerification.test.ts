@@ -50,6 +50,7 @@ class MemoryRegistrationStore implements StudentRegistrationStore {
   claims = new Map<string, StudentRegistrationClaim & { consumedAt: Date | null }>();
   constructor(private readonly auth: InstanceType<typeof MemoryAuthVerificationStore>, private readonly onUserCreated: (user: { id: string; loginId: string; displayName: string; passwordHash: string }) => void) {}
   async createClaim(claim: StudentRegistrationClaim) { this.claims.set(claim.id, { ...claim, consumedAt: null }); }
+  async getClaimMobile(claimId: string) { return this.claims.get(claimId)?.mobile ?? null; }
   /** Simulates a transient database failure (thrown before any change, i.e. a full rollback). */
   failNext = false;
   async completeRegistration(input: Parameters<StudentRegistrationStore['completeRegistration']>[0]) {
@@ -63,7 +64,7 @@ class MemoryRegistrationStore implements StudentRegistrationStore {
       this.auth.events.push({ action: 'student.registration_refused', userId: null, details: { reason: 'claim_expired' } });
       return 'expired' as const;
     }
-    const owned = [...this.auth.contacts.entries()].some(([key, destination]) => key.endsWith(':sms') && destination === input.destination && this.auth.users.get(key.slice(0, -4))?.role === 'candidate');
+    const owned = [...this.auth.contacts.entries()].some(([key, destination]) => key.endsWith(':sms') && destination === claim.mobile && this.auth.users.get(key.slice(0, -4))?.role === 'candidate');
     if (owned || [...this.auth.users.values()].some((user) => user.loginId === input.loginId)) {
       claim.consumedAt ??= input.now; // AUTH C1.1: a refused claim is dead
       this.auth.events.push({ action: 'student.registration_refused', userId: null, details: { reason: owned ? 'mobile_in_use' : 'login_id_taken' } });

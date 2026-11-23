@@ -219,7 +219,7 @@ const SESSION_WITH_VERIFICATION_SQL = `SELECT u.id, u.login_id, u.display_name, 
             iv.suspended_at AS iv_suspended_at
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
-       LEFT JOIN auth_session_verifications v ON v.token_hash = s.token_hash
+       LEFT JOIN auth_session_verifications v ON v.token_hash = s.token_hash AND v.method = 'sms_otp'
        LEFT JOIN institute_verifications iv ON iv.institution_id = u.id
        WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`;
 

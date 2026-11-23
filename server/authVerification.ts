@@ -1,4 +1,4 @@
-// AUTH-1: Student and Institute verification flows (mobile OTP, email codes) and Google sign-in.
+// AUTH-1: Student mobile OTP and Institute mobile/email verification flows, plus Google sign-in.
 //
 // A pending verification is identified by an opaque token in the elt_verification cookie (HttpOnly,
 // SameSite=Strict, Path=/api/auth/verification); the server stores only its SHA-256 as the
@@ -275,8 +275,9 @@ async function deliverCode(challenge: VerificationChallenge, now: Date, deadline
   // AUTH C1.4-A: one correlation id per delivery attempt, fixed before the code exists: the send
   // reservation's id (SMS and, since C1.4-B-1, email). It names exactly this code, destination and attempt.
   const correlationId = reservationId!; // every SMS and email attempt has a reservation (above)
-  const code = generateOtp();
-  const recorded = await store.recordSend(challenge.id, hashOtp(services.otpKey!, challenge.id, code), new Date(now.getTime() + OTP_POLICY.ttlMs), now, { sendCount: challenge.sendCount, destination: challenge.destination });
+  const providerManaged = challenge.channel === 'sms' && services.sms!.verificationMode === 'provider';
+  const code = providerManaged ? '' : generateOtp();
+  const recorded = await store.recordSend(challenge.id, providerManaged ? null : hashOtp(services.otpKey!, challenge.id, code), new Date(now.getTime() + OTP_POLICY.ttlMs), now, { sendCount: challenge.sendCount, destination: challenge.destination });
   // A concurrent request changed the challenge after it was checked: send nothing.
   if (!recorded) throw new VerificationFlowError(409, 'VERIFICATION_CONFLICT', 'This verification changed while the request was processed. Please try again.');
   // Bounded delivery: the deadline aborts the adapter's signal and rejects on its own, so an adapter
@@ -323,7 +324,7 @@ export async function startVerification(
   if (!channelAvailable(verificationServices(), input.channel)) throw providerUnavailable(input.channel);
   const userId = input.userId ?? null;
   const registrationClaimId = input.registrationClaimId ?? null;
-  // AUTH C1: a claim-backed challenge exists only for Student registration over SMS.
+  // AUTH C1: registration claims are completed only by the Student's SMS OTP.
   if (registrationClaimId && (input.purpose !== 'student_registration' || input.channel !== 'sms')) {
     throw new Error('registration claims are used only for Student registration over SMS');
   }
@@ -452,10 +453,7 @@ export async function smsProtectionGate(scope: 'config' | 'any' | 'unverified', 
 
 /**
  * AUTH C1: Student registration. Creates a temporary, non-exclusive claim (no users row, no login ID
- * reserved) and starts the existing OTP lifecycle against it. The answer is the same 202 challenge
- * for a new, an already registered and an already claimed number. The permanent account is created
- * only by a verified code (completeRegistration). Fails closed, before any write, while the claim
- * lifetime or the SMS limits are not configured.
+ * reserved) and verifies the mobile before creating the permanent account.
  */
 export async function startStudentRegistration(
   response: Response,
@@ -468,9 +466,11 @@ export async function startStudentRegistration(
   if (protection.registrationClaimTtlMs === null) {
     throw new VerificationFlowError(503, 'REGISTRATION_NOT_CONFIGURED', 'Student registration is unavailable: the registration lifetime is not configured.');
   }
-  // AUTH C1.1-b: registration SMS is unverified; closed (advisory) before any write when exhausted.
-  const gate = await smsProtectionGate('unverified');
-  if (gate) throw gate;
+  // Check only the shared daily budgets before creating a temporary claim. The destination is
+  // deliberately omitted: per-number limits are authoritatively reserved in deliverCode. This
+  // advisory check avoids unnecessary claims when the daily service budget is already exhausted.
+  const dailyGate = await smsProtectionGate('unverified');
+  if (dailyGate) throw dailyGate;
   // Bounded, idempotent cleanup of expired claims. Best effort: a failure never blocks registration
   // and removes nothing it should not (the store selects only expired, unconsumed, dead claims).
   await registrationStore.deleteExpiredClaims(now, EXPIRED_CLAIM_CLEANUP_BATCH).catch(() => 0);
@@ -491,18 +491,20 @@ async function currentChallenge(request: Request, now: Date): Promise<Verificati
   return challenge;
 }
 
-/** Next step for an approved Institute: which channel still needs verification, if any. */
+/** Institute contact verification is mobile first, then email. */
 export function nextInstituteChannel(state: InstituteVerificationState | null): ContactChannel | null {
   if (!state?.mobileVerifiedAt) return 'sms';
   if (!state.emailVerifiedAt) return 'email';
   return null;
 }
 
-/** Starts the next Institute contact verification (mobile first, then email). */
+/** Starts the next Institute contact verification. */
 export async function startInstituteVerification(response: Response, institutionId: string, contactEmail: string | null, state: InstituteVerificationState | null, now?: Date) {
   const channel = nextInstituteChannel(state);
   if (!channel) return null;
-  const destination = channel === 'sms' ? state?.mobileDestination ?? null : normaliseEmail(state?.emailDestination ?? contactEmail);
+  const destination = channel === 'sms'
+    ? state?.mobileDestination ?? null
+    : normaliseEmail(state?.emailDestination ?? contactEmail);
   return startVerification(response, { purpose: channel === 'sms' ? 'institute_mobile' : 'institute_email', userId: institutionId, channel, destination, now });
 }
 
@@ -601,7 +603,8 @@ export function createAuthVerificationRouter(options: AuthVerificationRouterOpti
       clearVerificationCookie(response);
       throw new VerificationFlowError(429, 'TOO_MANY_ATTEMPTS', 'Too many incorrect codes. Sign in again to restart verification.');
     }
-    if (!challenge.codeHash || !challenge.codeExpiresAt || !challenge.destination) throw new VerificationFlowError(409, 'NO_CODE_SENT', 'Request a code first.');
+    const providerManaged = challenge.channel === 'sms' && services.sms!.verificationMode === 'provider';
+    if ((!providerManaged && !challenge.codeHash) || (providerManaged && challenge.codeHash !== null) || !challenge.codeExpiresAt || !challenge.destination) throw new VerificationFlowError(409, 'NO_CODE_SENT', 'Request a code first.');
     if (challenge.codeExpiresAt <= now()) throw new VerificationFlowError(410, 'CODE_EXPIRED', 'This code has expired. Request a new code.');
     // The attempt is used atomically BEFORE comparing, so parallel guesses cannot exceed the limit.
     const attempts = await store.reserveAttempt(challenge.id, OTP_POLICY.maxAttempts);
@@ -610,7 +613,28 @@ export function createAuthVerificationRouter(options: AuthVerificationRouterOpti
       clearVerificationCookie(response);
       throw new VerificationFlowError(429, 'TOO_MANY_ATTEMPTS', 'Too many incorrect codes. Sign in again to restart verification.');
     }
-    if (!parsed.success || !otpMatches(services.otpKey!, challenge.id, parsed.data.code, challenge.codeHash)) {
+    let validCode = false;
+    if (parsed.success) {
+      if (providerManaged) {
+        if (!services.sms!.verifyOtp) throw new VerificationFlowError(503, 'PROVIDER_CHECK_FAILED', 'Code verification is temporarily unavailable. Please try again.');
+        const controller = new AbortController();
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const deadline = new Promise<never>((_resolve, reject) => {
+            deadlineTimer = setTimeout(() => { controller.abort(); reject(new Error('provider verification deadline exceeded')); }, boundedDeliveryTimeout(deliveryDeadlineMs));
+          });
+          const check = services.sms!.verifyOtp(Object.freeze({ destination: challenge.destination, code: parsed.data.code, signal: controller.signal }));
+          void Promise.resolve(check).catch(() => undefined);
+          validCode = await Promise.race([check, deadline]);
+        } catch {
+          await store.recordEvent({ action: 'verification.provider_check_failed', userId: challenge.userId, details: { channel: 'sms' } });
+          throw new VerificationFlowError(503, 'PROVIDER_CHECK_FAILED', 'Code verification is temporarily unavailable. Please try again.');
+        } finally { if (deadlineTimer) clearTimeout(deadlineTimer); }
+      } else {
+        validCode = otpMatches(services.otpKey!, challenge.id, parsed.data.code, challenge.codeHash!);
+      }
+    }
+    if (!validCode) {
       await store.recordEvent({ action: 'verification.code_rejected', userId: challenge.userId, details: { channel: challenge.channel } });
       const remaining = Math.max(0, OTP_POLICY.maxAttempts - attempts);
       if (remaining === 0) {
@@ -624,9 +648,14 @@ export function createAuthVerificationRouter(options: AuthVerificationRouterOpti
     // AUTH C1: a verified registration claim becomes a permanent Student account, atomically.
     if (challenge.registrationClaimId) {
       const token = newSessionToken();
+      const mobile = await registrationStore.getClaimMobile(challenge.registrationClaimId);
+      if (!mobile) {
+        clearVerificationCookie(response);
+        throw new VerificationFlowError(410, 'VERIFICATION_EXPIRED', 'This registration has expired. Please register again.');
+      }
       const result = await registrationStore.completeRegistration({
         challengeId: challenge.id, claimId: challenge.registrationClaimId, destination: challenge.destination,
-        userId: randomUUID(), loginId: studentLoginIdForMobile(services.otpKey!, challenge.destination),
+        userId: randomUUID(), loginId: studentLoginIdForMobile(services.otpKey!, mobile),
         sessionTokenHash: hashSessionToken(token), sessionExpiresAt: new Date(now().getTime() + SESSION_TTL_MS), now: now(),
       });
       if (result !== 'completed') {
@@ -656,7 +685,7 @@ export function createAuthVerificationRouter(options: AuthVerificationRouterOpti
       return;
     }
 
-    if (challenge.purpose.startsWith('student_')) {
+    if (challenge.purpose === 'student_login' || challenge.purpose === 'student_mobile_capture') {
       if (!user || user.role !== 'candidate' || user.accountStatus !== 'approved') throw new VerificationFlowError(403, 'ACCOUNT_NOT_ELIGIBLE', 'This account cannot sign in.');
       const token = newSessionToken();
       const done = await store.completeStudentVerification({

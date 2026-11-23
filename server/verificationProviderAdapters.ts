@@ -7,6 +7,7 @@ import {
   type ProviderAdapterConfig,
   type ProviderAdapterRegistration,
   type SmsDeliveryRequest,
+  type SmsOtpCheckRequest,
 } from './verificationProviders.js';
 
 function requiredSetting(config: ProviderAdapterConfig, name: string): string {
@@ -100,4 +101,50 @@ const twilioRegistration: ProviderAdapterRegistration<import('./verificationProv
 
 registerEmailProviderAdapter('resend', resendRegistration);
 registerSmsProviderAdapter('twilio', twilioRegistration);
+
+// Twilio Verify creates and validates its own OTP. Trial accounts can use this flow with
+// Twilio's fixed trial template and verified recipient numbers; no locally generated OTP is stored.
+const twilioVerifyRegistration: ProviderAdapterRegistration<import('./verificationProviders.js').SmsOtpProvider> = {
+  settings: ['TWILIO_VERIFY_SERVICE_SID', 'TWILIO_VERIFY_API_KEY_SID'],
+  secretFiles: { apiKeySecret: { env: 'TWILIO_VERIFY_API_KEY_SECRET_FILE', minBytes: 16 } },
+  create(config) {
+    const serviceSid = requiredSetting(config, 'TWILIO_VERIFY_SERVICE_SID');
+    const apiKeySid = requiredSetting(config, 'TWILIO_VERIFY_API_KEY_SID');
+    const apiKeySecret = requiredSecret(config, 'apiKeySecret');
+    if (!/^VA[a-f0-9]{32}$/i.test(serviceSid) || !/^SK[a-f0-9]{32}$/i.test(apiKeySid)) throw new Error('invalid provider configuration');
+    const authorization = Buffer.from(`${apiKeySid}:${apiKeySecret}`).toString('base64');
+    const endpoint = `https://verify.twilio.com/v2/Services/${serviceSid}`;
+    return {
+      name: 'twilio-verify',
+      verificationMode: 'provider',
+      async sendOtp(request: SmsDeliveryRequest): Promise<void> {
+        if (request.signal.aborted) throw new ProviderDeliveryError('provider_unavailable');
+        const response = await fetch(`${endpoint}/Verifications`, {
+          method: 'POST',
+          headers: { Authorization: `Basic ${authorization}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ To: request.destination, Channel: 'sms' }),
+          signal: request.signal,
+        });
+        if (!response.ok) throw classifyHttpFailure(response.status);
+      },
+      async verifyOtp(request: SmsOtpCheckRequest): Promise<boolean> {
+        if (request.signal.aborted) throw new ProviderDeliveryError('provider_unavailable');
+        const response = await fetch(`${endpoint}/VerificationCheck`, {
+          method: 'POST',
+          headers: { Authorization: `Basic ${authorization}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ To: request.destination, Code: request.code }),
+          signal: request.signal,
+        });
+        // Twilio returns 404 when the verification is expired/missing; that is an invalid code,
+        // while auth, throttling and service failures must remain operational errors.
+        if (response.status === 404 || response.status === 400 || response.status === 422) return false;
+        if (!response.ok) throw classifyHttpFailure(response.status);
+        const result: unknown = await response.json();
+        return typeof result === 'object' && result !== null && 'status' in result && result.status === 'approved';
+      },
+    };
+  },
+};
+
+registerSmsProviderAdapter('twilio-verify', twilioVerifyRegistration);
 

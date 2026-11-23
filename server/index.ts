@@ -53,8 +53,8 @@ import {
   emailProtectionGate,
   emailProtectionReadiness,
   initializeAbuseProtection,
-  sendFlowError,
   smsProtectionGate,
+  sendFlowError,
   startInstituteVerification,
   startStudentRegistration,
   startVerification,
@@ -63,9 +63,9 @@ import {
 import {
   configureVerificationServices,
   EMAIL_PROVIDER_NOT_CONFIGURED,
+  OTP_PROVIDER_NOT_CONFIGURED,
   normaliseEmail,
   normaliseMobile,
-  OTP_PROVIDER_NOT_CONFIGURED,
   providerStatus,
   resolveVerificationServices,
   studentLoginIdForMobile,
@@ -1809,8 +1809,6 @@ app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response)
     response.status(503).json({ error: 'Student registration is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED });
     return;
   }
-  // Mobile-first Student accounts: no Student ID is chosen. Any `loginId` sent by an older client is
-  // ignored (stripped by the schema).
   const parsed = z.object({
     name: accountRegistrationSchema.shape.name,
     password: registrationPasswordSchema,
@@ -1826,10 +1824,7 @@ app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response)
     return;
   }
   const { name, password } = parsed.data;
-  // AUTH C1: no permanent account (and no login ID) exists until the mobile's owner verifies the code.
-  // A temporary, non-exclusive registration claim holds the details; the account, with the
-  // mobile-derived login ID, is created atomically at verification. The answer is the same 202 for a
-  // new, an already registered and an already claimed number. No session before verification.
+  // AUTH C1: the mobile owner creates the permanent account only after verifying their code.
   const passwordHash = await bcrypt.hash(password, 12);
   try {
     response.status(202).json(await startStudentRegistration(response, { mobile, displayName: name, passwordHash }));
@@ -1848,8 +1843,6 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     });
     return;
   }
-  // AUTH C1.1-b: Institute registration always sends an unverified-destination SMS. Closed before any
-  // write while the SMS limits are unset, or (advisory) while the unverified or total budget is used up.
   try {
     const gate = await smsProtectionGate('unverified');
     if (gate) throw gate;
@@ -1871,18 +1864,12 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
   const contactMobile = normaliseMobile(parsed.data.contactMobile);
   const normalisedEmail = normaliseEmail(parsed.data.contactEmail);
   if (!contactMobile || !normalisedEmail) {
-    response.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number and email address.', code: 'INVALID_CONTACT' });
+    response.status(400).json({ error: 'Enter a valid 10-digit Indian contact number and email address.', code: 'INVALID_CONTACT' });
     return;
   }
-  // AUTH C1.1-b C-2: the registration SMS to contactMobile is unverified; if that number's allowance is
-  // already used up (advisory), refuse with 429 BEFORE any account, cycle, capability or verification
-  // row is written. The reservation in deliverCode stays authoritative.
   try {
-    const destinationGate = await smsProtectionGate('unverified', contactMobile);
-    if (destinationGate) throw destinationGate;
-    // AUTH C1.4-B-1: the email code later goes to contactEmail (anonymous bucket). Refuse BEFORE any
-    // write while the email limits are unset, the email budgets are used up, or that address's
-    // anonymous allowance is used up (advisory; the reservation in deliverCode stays authoritative).
+    const mobileGate = await smsProtectionGate('unverified', contactMobile);
+    if (mobileGate) throw mobileGate;
     const emailGate = await emailProtectionGate('unverified', normalisedEmail);
     if (emailGate) throw emailGate;
   } catch (error) {
@@ -1938,7 +1925,7 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     client.release();
   }
   if (issue) setInstitutionSubmissionCookie(response, issue);
-  // AUTH-1: start mobile verification immediately (email follows). No portal session is created.
+  // Institute mobile is verified first; email follows. No portal session is created yet.
   let verification: Awaited<ReturnType<typeof startInstituteVerification>> | { error: string; code: string } | null = null;
   try {
     verification = await startInstituteVerification(response, createdInstitutionId!, normalisedEmail, {
@@ -2069,8 +2056,7 @@ app.post('/api/center/resubmit', authLimiter, asyncRoute(async (request, respons
 }));
 
 app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) => {
-  // Institutes and Officials sign in with loginId (unchanged). Students sign in with their mobile
-  // number (mobile-first) or, through the "Existing account?" link, with their legacy Student ID.
+  // Students use mobile + password, then SMS OTP. Institutes and Officials keep loginId + password.
   const schema = z.object({
     loginId: z.string().trim().min(1).max(100).optional(),
     mobile: z.string().trim().min(1).max(20).optional(),
@@ -2106,15 +2092,10 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
     });
     return;
   }
-  // AUTH C1.1-b: also BEFORE any lookup or password check, so the answer is the same for every
-  // credential. Every Student sign-in sends an SMS (either bucket): limits configured and (advisory)
-  // shared total not used up. An Institute sends an SMS only while its mobile is unverified, so only
-  // the configuration is checked here (exhaustion would otherwise lock out verified Institutes).
   if (role === 'candidate' || role === 'center') {
     try {
-      const gate = await smsProtectionGate(role === 'candidate' ? 'any' : 'config');
-      if (gate) throw gate;
-      // AUTH C1.4-B-1: an Institute may need an email code; its limits must be configured (before lookup).
+      const smsGate = await smsProtectionGate(role === 'candidate' ? 'any' : 'config');
+      if (smsGate) throw smsGate;
       if (role === 'center') {
         const emailGate = await emailProtectionGate('config');
         if (emailGate) throw emailGate;
@@ -2126,10 +2107,9 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
   }
   const USER_COLUMNS = 'id, login_id, display_name, role, password_hash, account_status, is_super_admin, contact_email';
   let user: Record<string, any> | undefined;
-  // Mobile-first Student sign-in (password, then OTP to that number). Candidates are the account whose
-  // login ID derives from this mobile plus any Student whose VERIFIED contact is this mobile. Exactly
-  // one match proceeds; none or several fail with the same generic answer (ambiguity is unresolved
-  // policy: there is no cross-account mobile uniqueness). One bcrypt comparison either way.
+  // For mobile input, candidates are the account whose login ID derives from that mobile plus any
+  // Student whose VERIFIED contact is that mobile. Exactly one match proceeds; none or several fail
+  // generically. One bcrypt comparison runs either way.
   let signInMobile: string | null = null;
   if (role === 'candidate' && mobileInput !== undefined) {
     const MOBILE_FAILURE = { error: 'Invalid mobile number or password. If you signed up earlier with a Student ID, use "Existing account?".', code: 'INVALID_MOBILE_CREDENTIALS' };
@@ -2177,12 +2157,10 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
     });
     return;
   }
-  // AUTH-1: a correct password never yields a Student session by itself (password + mobile OTP).
+  // A correct password never yields a Student session by itself; mobile OTP is required.
   if (user.role === 'candidate') {
     try {
       const verifiedMobile = await authVerificationStore().findVerifiedContact(String(user.id), 'sms');
-      // Mobile sign-in sends the code to the number entered (it identified this account); the legacy
-      // path uses the verified contact, or captures one when none exists (unchanged).
       const destination = signInMobile ?? verifiedMobile;
       const challenge = await startVerification(response, {
         purpose: verifiedMobile ? 'student_login' : 'student_mobile_capture', userId: String(user.id), channel: 'sms', destination,
@@ -2204,7 +2182,7 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
     }
     return;
   }
-  // AUTH-1: an Institute needs verified mobile AND email, institutional verification, Official approval
+  // Institute access needs verified mobile and email, institutional verification, Official approval
   // (above) and no suspension before any session.
   if (user.role === 'center') {
     try {

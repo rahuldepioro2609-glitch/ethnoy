@@ -143,6 +143,10 @@ const FINGERPRINT = `SELECT md5(string_agg(x, '|' ORDER BY x)) FROM (
   UNION ALL SELECT 'schema:' || pg_get_userbyid(nspowner) || ':' || coalesce(nspacl::text, '') FROM pg_namespace WHERE nspname = 'public') s`;
 
 /** The 24 tables granted before AUTH-1; all must stay in the manifest unchanged in membership. */
+const LEGACY_UNGRANTED_TABLES = [
+  'answer_key_objection_windows', 'answer_key_objections', 'auth_tokens', 'uploaded_files',
+];
+
 const PRE_AUTH1_TABLES = [
   'admit_cards', 'answer_key_questions', 'applications', 'auth_sessions', 'center_checkins', 'exams', 'feedback',
   'institute_forms', 'institute_profile_changes', 'institute_resubmissions', 'institute_status_history',
@@ -178,7 +182,7 @@ const AUTH1_GRANTS: Record<string, { privileges: string[]; updateColumns: string
 const MFA_GRANTS: Record<string, { privileges: string[]; updateColumns: string[] }> = {
   admin_mfa_challenges: { privileges: ['SELECT', 'INSERT'], updateColumns: ['attempts', 'consumed_at', 'consumed_reason', 'enrolment_ticket_id'] },
   admin_mfa_enrolment_tickets: { privileges: ['SELECT', 'INSERT'], updateColumns: ['revoked_at', 'used_at'] },
-  admin_mfa_factors: { privileges: ['SELECT', 'INSERT'], updateColumns: ['confirmed_at', 'disabled_at', 'disabled_by', 'disabled_via', 'last_used_step'] },
+  admin_mfa_factors: { privileges: ['SELECT', 'INSERT'], updateColumns: ['disabled_at', 'disabled_by', 'disabled_via', 'last_used_step'] },
   admin_mfa_recovery_codes: { privileges: ['SELECT', 'INSERT'], updateColumns: ['revoked_at', 'used_at'] },
   admin_mfa_reset_requests: { privileges: ['SELECT', 'INSERT'], updateColumns: ['decided_by', 'decided_verification_id', 'decision_reason', 'status', 'ticket_id'] },
   auth_session_mfa_verifications: { privileges: ['SELECT', 'INSERT'], updateColumns: [] },
@@ -233,11 +237,21 @@ test('bootstrap + every wired migration (one transaction, as the owner) + idempo
   const files = [...MIGRATION_FILES] as string[];
   assert.equal(files.at(-1), 'databaseGrantsMigration.sql');
   assert.equal(files.filter((name) => name === 'databaseGrantsMigration.sql').length, 1);
-  assert.equal(files.indexOf('authVerificationMigration.sql'), files.length - 6, 'AUTH-1 precedes claims, MFA and Staff migrations');
-  assert.equal(files.indexOf('studentRegistrationClaimsMigration.sql'), files.length - 5, 'AUTH C1 runs before the MFA migration');
-  assert.equal(files.indexOf('adminMfaMigration.sql'), files.length - 4, 'AUTH C1.8 precedes the Staff migrations');
-  assert.equal(files.indexOf('platformStaffMigration.sql'), files.length - 3);
-  assert.equal(files.indexOf('organizationStaffMigration.sql'), files.length - 2);
+  const orderedAuthMigrations = [
+    'authVerificationMigration.sql',
+    'studentEmailVerificationMigration.sql',
+    'studentRegistrationClaimsMigration.sql',
+    'adminMfaMigration.sql',
+    'platformStaffMigration.sql',
+    'organizationStaffMigration.sql',
+    'databaseGrantsMigration.sql',
+  ];
+  for (const name of orderedAuthMigrations) {
+    assert.equal(files.filter((file) => file === name).length, 1, `${name} is wired exactly once`);
+  }
+  const orderedAuthPositions = orderedAuthMigrations.map((name) => files.indexOf(name));
+  assert.ok(orderedAuthPositions.every((position, index) => index === 0 || position > orderedAuthPositions[index - 1]),
+    'AUTH-1, Student verification, claims, MFA and Staff migrations stay in dependency order before grants');
   await migrateAsOwner(files);
   const first = await one(FINGERPRINT);
   await migrateAsOwner(files);
@@ -260,9 +274,18 @@ test('catalog privileges for eltnoy_app equal the manifest exactly', { skip }, a
   assert.equal(new Set(manifestTables).size, manifestTables.length, 'no table is listed twice');
   assert.deepEqual(manifestTables, [...PRE_AUTH1_TABLES, ...Object.keys(AUTH1_GRANTS), C1_CLAIMS_TABLE, ...Object.keys(MFA_GRANTS), ...Object.keys(STAFF_GRANTS)].sort(), 'manifest = 24 existing + 7 AUTH-1 + 1 AUTH C1 + 6 MFA + 14 Staff tables');
   // Sorted in JS on both sides: the database collation may order underscores differently.
+  // Legacy Render tables may be absent from a fresh database; if present, each remains manifest-listed.
   const catalogTables = (await q("SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')")).map((r) => String(r.relname)).sort();
-  assert.deepEqual(catalogTables, manifestTables, 'every table created by the wired migrations has exactly one manifest row');
+  const catalogSet = new Set(catalogTables);
+  const expectedCatalogTables = manifestTables.filter((table) =>
+    !LEGACY_UNGRANTED_TABLES.includes(table) || catalogSet.has(table));
+  assert.deepEqual(catalogTables, expectedCatalogTables, 'every current table has one manifest row; optional legacy rows may be absent');
   for (const [, table, privileges, , columns] of rows) {
+    if (LEGACY_UNGRANTED_TABLES.includes(table) && !catalogSet.has(table)) {
+      assert.equal(privileges, '', `${table} remains ungranted when absent`);
+      assert.equal(columns, undefined, `${table} has no column grants`);
+      continue;
+    }
     const expected = privileges.split(',').map((p) => p.trim());
     for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
       const actual = await one(`SELECT has_table_privilege('eltnoy_app', 'public.${table}', '${privilege}')`);
@@ -276,7 +299,8 @@ test('catalog privileges for eltnoy_app equal the manifest exactly', { skip }, a
     assert.equal(await one(`SELECT count(*)::int FROM information_schema.role_table_grants WHERE grantee = '${role === 'public' ? 'PUBLIC' : role}' AND table_schema = 'public'`), 0, `${role} has no table grants`);
   }
   assert.equal(await one("SELECT has_schema_privilege('eltnoy_app', 'public', 'CREATE')"), false);
-  assert.equal(await one("SELECT count(*)::int FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND has_function_privilege('eltnoy_app', p.oid, 'EXECUTE')"), 0);
+  assert.equal(await one("SELECT has_function_privilege('eltnoy_app', 'public.confirm_admin_mfa_enrolment_factor(text,text,text,text,bigint)', 'EXECUTE')"), true);
+  assert.equal(await one("SELECT count(*)::int FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.oid <> 'public.confirm_admin_mfa_enrolment_factor(text,text,text,text,bigint)'::regprocedure AND has_function_privilege('eltnoy_app', p.oid, 'EXECUTE')"), 0);
   assert.equal(await one('SELECT has_database_privilege(\'eltnoy_app\', current_database(), \'TEMPORARY\')'), false);
 });
 
@@ -807,9 +831,16 @@ test('AUTH C1: real completion, concurrency, legacy-capture race, expiry/cleanup
       const registered = b === 'completed';
       assert.ok(captured !== registered, `round ${round}: exactly one wins (capture=${String(a)}, registration=${b})`);
       const owners = await c1Owners(mobile);
-      assert.equal(owners.length, 1, `round ${round}: exactly one verified owner`);
       const derived = (await q('SELECT id FROM users WHERE login_id = $1', [loginId])).map((r) => String(r.id));
-      assert.ok(derived.length === 0 || derived[0] === owners[0], `round ${round}: no mobile-first account beside another owner`);
+      if (captured) {
+        assert.equal(owners.length, 1, `round ${round}: capture winner owns the verified mobile`);
+        assert.deepEqual(derived, [], `round ${round}: a mobile capture does not create a second derived account`);
+      } else {
+        assert.equal(owners.length, 1, 'registration completion records the verified mobile');
+        assert.equal(registered, true, `round ${round}: registration winner has the derived account`);
+        assert.equal(derived.length, 1);
+        assert.equal((await c1Owners(mobile)).length, 1, `round ${round}: registration winner owns the verified email`);
+      }
     }
 
     // 5. Expiry vs cleanup: an expired claim with a live challenge is kept and cannot complete; once its
@@ -860,7 +891,7 @@ test('AUTH C1: real completion, concurrency, legacy-capture race, expiry/cleanup
       assert.equal(await one(`SELECT count(*)::int FROM users WHERE login_id = 'IT-C1-CL-${round}'`), 1);
       assert.equal(await one(`SELECT count(*)::int FROM student_registration_claims WHERE id = '${claim.claimId}'`), 0);
       assert.equal(await one(`SELECT count(*)::int FROM verification_challenges WHERE id = '${claim.challengeId}'`), 0);
-      assert.equal((await c1Owners(mobile)).length, 1);
+      assert.equal((await c1Owners(mobile)).length, 1, 'successful registration records its verified mobile');
     }
 
     // 6. SMS reservations (AUTH C1.1-b): per-bucket destination limits, the unverified 24-hour cap and the
@@ -1083,12 +1114,38 @@ const mfaSeed = (p: string) => `
     ('${p}nsa', upper('${p}nsa'), 'IT MFA', 'official', '!synthetic', true),
     ('${p}cand', upper('${p}cand'), 'IT MFA', 'candidate', '!synthetic', false);
   INSERT INTO auth_sessions (token_hash, user_id, expires_at) SELECT 's-' || id, id, now() + interval '1 hour' FROM users WHERE id LIKE '${p}%';
-  INSERT INTO admin_mfa_factors (id, user_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version)
-    SELECT 'f-' || id, id, 'totp', decode(repeat('11', 20), 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1
-      FROM users WHERE id IN (${MFA_ENROLLED.map((x) => `'${p}${x}'`).join(', ')});
+  SET LOCAL session_replication_role = 'replica';
+  WITH enrolled AS (
+    SELECT id FROM users WHERE id IN (${MFA_ENROLLED.map((x) => `'${p}${x}'`).join(', ')})
+  ), tickets AS (
+    INSERT INTO admin_mfa_enrolment_tickets (id, user_id, issued_by, issued_via, expires_at)
+    SELECT md5('seed-ticket-a:' || id) || md5('seed-ticket-b:' || id), id, NULL, 'bootstrap_cli', now() + interval '1 hour'
+      FROM enrolled RETURNING id, user_id
+  ), challenges AS (
+    INSERT INTO admin_mfa_challenges (id, user_id, purpose, enrolment_ticket_id, expires_at)
+    SELECT md5('seed-challenge-a:' || user_id) || md5('seed-challenge-b:' || user_id), user_id, 'enrol', id, now() + interval '5 minutes'
+      FROM tickets RETURNING id, user_id
+  )
+  INSERT INTO admin_mfa_factors (id, user_id, enrolment_challenge_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version)
+    SELECT 'f-' || c.user_id, c.user_id, c.id, 'totp', decode(repeat('11', 20), 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1
+      FROM challenges c;
   UPDATE admin_mfa_factors SET confirmed_at = now() WHERE user_id LIKE '${p}%';
+  UPDATE admin_mfa_enrolment_tickets SET used_at = now() WHERE user_id LIKE '${p}%';
+  UPDATE admin_mfa_challenges SET consumed_at = now(), consumed_reason = 'verified' WHERE user_id LIKE '${p}%' AND purpose = 'enrol';
+  SET LOCAL session_replication_role = 'origin';
   INSERT INTO auth_session_mfa_verifications (id, token_hash, user_id, purpose, method, factor_id)
     SELECT 'v-' || id, 's-' || id, id, 'login', 'totp', 'f-' || id FROM users WHERE id IN (${MFA_ENROLLED.map((x) => `'${p}${x}'`).join(', ')});`;
+
+async function seedCommittedMfa(prefix: string): Promise<void> {
+  await q('BEGIN');
+  try {
+    await q(mfaSeed(prefix));
+    await q('COMMIT');
+  } catch (error) {
+    await q('ROLLBACK');
+    throw error;
+  }
+}
 const P = 'it-mfa-';
 const hex = (c: string) => c.repeat(64);
 
@@ -1103,6 +1160,15 @@ interface MfaStep {
  * back. Deferred (commit-time) checks never fire on their own here, because nothing commits: a test that needs
  * them runs `SET CONSTRAINTS ALL IMMEDIATE` (see `atCommit`), which fires every queued check of the transaction.
  */
+async function seedEnrolmentFixture(su: MfaStep['su'], userId: string, ticketId: string, challengeId: string): Promise<void> {
+  await su("SET LOCAL session_replication_role = 'replica'");
+  await su(`INSERT INTO admin_mfa_enrolment_tickets (id, user_id, issued_by, issued_via, expires_at)
+    VALUES ('${ticketId}', '${userId}', NULL, 'bootstrap_cli', now() + interval '30 minutes')`);
+  await su(`INSERT INTO admin_mfa_challenges (id, user_id, purpose, enrolment_ticket_id, expires_at)
+    VALUES ('${challengeId}', '${userId}', 'enrol', '${ticketId}', now() + interval '5 minutes')`);
+  await su("SET LOCAL session_replication_role = 'origin'");
+}
+
 async function mfaScenario(extra: string, body: (step: MfaStep) => Promise<void>, options: { seed?: boolean } = {}): Promise<void> {
   let n = 0;
   await q('BEGIN');
@@ -1176,14 +1242,18 @@ test('AUTH C1.8: the six MFA tables carry exactly the manifest grants; no DELETE
 });
 
 test('AUTH C1.8: factors: one active per user and kind, Officials only, encrypted envelope shape, atomic replay guard, terminal disable', { skip }, async () => {
-  const factor = (id: string, user: string, extra = '') => `INSERT INTO admin_mfa_factors (id, user_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version${extra ? ', confirmed_at' : ''})
-    VALUES ('${id}', '${user}', 'totp', decode(repeat('11', 20), 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1${extra})`;
-  await mfaScenario('', async ({ ok, fails }) => {
-    await fails(factor('it-f-dup', `${P}sa1`), /admin_mfa_factors_one_active_idx/);
-    await fails(factor('it-f-cand', `${P}cand`), /for Officials only/);
-    await fails(factor('it-f-conf', `${P}sa1`, ', now()'), /starts unconfirmed/);
-    await fails(`INSERT INTO admin_mfa_factors (id, user_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version)
-      VALUES ('it-f-shape', '${P}off', 'totp', decode('aa', 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1)`, /admin_mfa_factors_secret_shape_check|admin_mfa_factors_one_active_idx/);
+  const factor = (id: string, user: string, challengeId: string, confirmedAt = '') => `INSERT INTO admin_mfa_factors (id, user_id, enrolment_challenge_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version${confirmedAt ? ', confirmed_at' : ''})
+    VALUES ('${id}', '${user}', '${challengeId}', 'totp', decode(repeat('11', 20), 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1${confirmedAt ? `, ${confirmedAt}` : ''})`;
+  await mfaScenario('', async ({ ok, fails, su }) => {
+    await seedEnrolmentFixture(su, `${P}sa1`, hex('a'), hex('b'));
+    await seedEnrolmentFixture(su, `${P}cand`, hex('c'), hex('d'));
+    await seedEnrolmentFixture(su, `${P}sa2`, hex('e'), hex('f'));
+    await seedEnrolmentFixture(su, `${P}off`, hex('1'), hex('2'));
+    await fails(factor('it-f-dup', `${P}sa1`, hex('b')), /admin_mfa_factors_one_active_idx/);
+    await fails(factor('it-f-cand', `${P}cand`, hex('d')), /for Officials only/);
+    await fails(factor('it-f-conf', `${P}sa2`, hex('f'), 'now()'), /starts unconfirmed/);
+    await fails(`INSERT INTO admin_mfa_factors (id, user_id, enrolment_challenge_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version)
+      VALUES ('it-f-shape', '${P}off', '${hex('2')}', 'totp', decode('aa', 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1)`, /admin_mfa_factors_secret_shape_check|admin_mfa_factors_one_active_idx/);
 
     // Replay guard: the conditional update succeeds once per step and never for an older step.
     const guard = (step: number) => `UPDATE admin_mfa_factors SET last_used_step = ${step} WHERE id = 'f-${P}sa1' AND disabled_at IS NULL AND confirmed_at IS NOT NULL AND last_used_step < ${step} RETURNING id`;
@@ -1199,7 +1269,7 @@ test('AUTH C1.8: factors: one active per user and kind, Officials only, encrypte
     await ok(`UPDATE admin_mfa_factors SET disabled_at = now(), disabled_by = '${P}sa2', disabled_via = 'two_person_reset' WHERE id = 'f-${P}sa3'`);
     await fails(`UPDATE admin_mfa_factors SET last_used_step = 99999 WHERE id = 'f-${P}sa3'`, /disabled admin MFA factor cannot change/);
     await fails(`UPDATE admin_mfa_factors SET disabled_at = NULL, disabled_via = NULL, disabled_by = NULL WHERE id = 'f-${P}sa3'`, /disabled admin MFA factor cannot change/, 'eltnoy_owner');
-    await ok(factor('it-f-new', `${P}sa3`));
+    await ok(factor('it-f-new', `${P}sa3`, hex('b')));
     assert.equal((await ok(`UPDATE admin_mfa_factors SET last_used_step = 1 WHERE id = 'f-${P}sa3' AND disabled_at IS NULL AND last_used_step < 1 RETURNING id`)).length, 0, 'the disabled factor no longer verifies');
   });
 });
@@ -1458,7 +1528,7 @@ test('AUTH C1.8: ordinary Official reset: one Super Admin other than the target,
 
 test('AUTH C1.8: concurrency as eltnoy_app: replay guard, recovery code, step-up challenge, duplicate initiation and duplicate approval each succeed once', { skip }, async () => {
   const C = 'it-mfc-';
-  await q(mfaSeed(C)); // committed: separate connections must see it
+  await seedCommittedMfa(C); // committed: separate connections must see it
   const { db, end } = appDatabase();
   /** Runs `statements` in one transaction on its own connection, holding locks briefly before COMMIT. */
   const tx = async (statements: string[]): Promise<{ rows: number; error: string | null }> => {
@@ -1511,7 +1581,7 @@ test('AUTH C1.8: concurrency as eltnoy_app: replay guard, recovery code, step-up
     const approvals = await race(approve(approvers[0], '3'), approve(approvers[1], '4'));
     assert.equal(approvals.filter((r) => r.error === null).length, 1, `approval: ${JSON.stringify(approvals)}`);
     assert.equal(await one(`SELECT count(*)::int FROM admin_mfa_reset_requests WHERE target_user_id = '${C}sa3' AND status = 'executed'`), 1);
-    assert.equal(await one(`SELECT count(*)::int FROM admin_mfa_enrolment_tickets WHERE user_id = '${C}sa3'`), 1, 'one ticket issued');
+    assert.equal(await one(`SELECT count(*)::int FROM admin_mfa_enrolment_tickets WHERE reset_request_id = '${pending}'`), 1, 'the winning reset issued one replacement ticket');
     assert.equal(await one(`SELECT count(*)::int FROM admin_mfa_enrolment_tickets WHERE user_id = '${C}sa3' AND used_at IS NULL AND revoked_at IS NULL`), 1, 'the replacement ticket is open');
     assert.equal(await one(`SELECT count(*)::int FROM admin_mfa_factors WHERE user_id = '${C}sa3' AND disabled_at IS NULL`), 0, 'factor disabled');
     assert.equal(await one(`SELECT count(*)::int FROM auth_sessions WHERE user_id = '${C}sa3' AND revoked_at IS NULL`), 0, 'sessions revoked');
@@ -1736,12 +1806,13 @@ test('AUTH C1.8.4 O-3: a factor is disabled only by its reset, by break-glass, o
     });
   }
   // Immediate rules.
-  await mfaScenario('', async ({ ok, fails }) => {
+  await mfaScenario('', async ({ ok, fails, su }) => {
+    await seedEnrolmentFixture(su, `${P}new1`, hex('9'), hex('a'));
     await fails(`UPDATE admin_mfa_factors SET disabled_at = now(), disabled_via = 'enrolment_superseded' WHERE id = 'f-${sa3}'`, /only an unconfirmed factor can be superseded/);
     await fails(`UPDATE admin_mfa_factors SET disabled_at = now(), disabled_via = 'two_person_reset' WHERE id = 'f-${sa3}'`, /must name the deciding Super Admin/);
     await fails(`UPDATE admin_mfa_factors SET disabled_at = now(), disabled_by = '${sa2}', disabled_via = 'break_glass' WHERE id = 'f-${sa3}'`, /names no user/);
-    await ok(`INSERT INTO admin_mfa_factors (id, user_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version)
-      VALUES ('it-o3-new', '${P}new1', 'totp', decode(repeat('11', 20), 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1)`);
+    await ok(`INSERT INTO admin_mfa_factors (id, user_id, enrolment_challenge_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version)
+      VALUES ('it-o3-new', '${P}new1', '${hex('a')}', 'totp', decode(repeat('11', 20), 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1)`);
     await ok(`UPDATE admin_mfa_factors SET disabled_at = now(), disabled_via = 'enrolment_superseded' WHERE id = 'it-o3-new'`);
     await ok(AT_COMMIT);
   });
@@ -1791,10 +1862,13 @@ test('AUTH C1.8.4: bootstrap tickets only for an approved Super Admin while none
     await fails(bootstrap(hex('2'), `${B}off`), /only for an approved Super Admin/);
     await ok(bootstrap(hex('2'), `${B}sa1`));
     await fails(bootstrap(hex('3'), `${B}sa2`), /an open bootstrap ticket already exists/);
-    await ok(`INSERT INTO admin_mfa_factors (id, user_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version)
-      VALUES ('f-${B}sa1', '${B}sa1', 'totp', decode(repeat('11', 20), 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1)`);
-    await ok(`UPDATE admin_mfa_factors SET confirmed_at = now() WHERE id = 'f-${B}sa1'`);
-    await ok(`UPDATE admin_mfa_enrolment_tickets SET used_at = now() WHERE id = '${hex('2')}'`);
+    const bootstrapChallengeId = hex('7');
+    await ok(`INSERT INTO admin_mfa_challenges (id, user_id, purpose, enrolment_ticket_id, expires_at)
+      VALUES ('${bootstrapChallengeId}', '${B}sa1', 'enrol', '${hex('2')}', now() + interval '5 minutes')`);
+    await ok(`INSERT INTO admin_mfa_factors (id, user_id, enrolment_challenge_id, kind, secret_ciphertext, secret_nonce, secret_tag, key_version)
+      VALUES ('f-${B}sa1', '${B}sa1', '${bootstrapChallengeId}', 'totp', decode(repeat('11', 20), 'hex'), decode(repeat('22', 12), 'hex'), decode(repeat('33', 16), 'hex'), 1)`);
+    await ok(`SELECT public.confirm_admin_mfa_enrolment_factor('${B}sa1', '${bootstrapChallengeId}', '${hex('2')}', 'f-${B}sa1', 1000)`);
+    await ok(`UPDATE admin_mfa_challenges SET consumed_at = now(), consumed_reason = 'verified' WHERE id = '${bootstrapChallengeId}'`);
     await fails(bootstrap(hex('3'), `${B}sa2`), /a Super Admin has already enrolled: bootstrap is closed/);
   }, { seed: false });
   // Two bootstrap commands at once (real commits, separate connections): exactly one passes.
@@ -1841,7 +1915,7 @@ test('AUTH C1.9.1: real sign-in store as eltnoy_app: completion, single use, rol
   const Q = 'it-mfp-';
   const { createPostgresAdminMfaStore, ADMIN_MFA_LOGIN_POLICY } = await import('./adminMfaStore.js');
   const { OFFICIAL_MFA_SQL } = await import('./auth.js');
-  await q(mfaSeed(Q)); // committed: the store uses its own connections
+  await seedCommittedMfa(Q); // committed: the store uses its own connections
   const { db, end } = appDatabase();
   const mfaStore = createPostgresAdminMfaStore(db as never);
   const accept = (step: number) => () => ({ outcome: 'accept' as const, step });

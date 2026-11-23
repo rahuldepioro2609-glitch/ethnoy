@@ -93,6 +93,9 @@ services:
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
       TWILIO_AUTH_TOKEN_FILE: /run/secrets/twilio_auth_token
+      TWILIO_VERIFY_SERVICE_SID: ${TWILIO_VERIFY_SERVICE_SID:-}
+      TWILIO_VERIFY_API_KEY_SID: ${TWILIO_VERIFY_API_KEY_SID:-}
+      TWILIO_VERIFY_API_KEY_SECRET_FILE: /run/secrets/twilio_verify_api_key_secret
       # AUTH C1.4-B-2: email abuse-protection limits (runbook §3.10). api_public ONLY. Values are PENDING
       # OWNER APPROVAL and have NO defaults: empty keeps every email refused. The preflight accepts all
       # six empty or all six valid, nothing between. Limits alone never enable email; Resend config is
@@ -118,6 +121,7 @@ services:
       # Host paths are optional until a provider is activated. Missing/empty sources use /dev/null,
       # which cannot satisfy the adapters' minimum secret lengths and therefore keeps delivery shut.
       - ${TWILIO_AUTH_TOKEN_FILE:-/dev/null}:/run/secrets/twilio_auth_token:ro
+      - ${TWILIO_VERIFY_API_KEY_SECRET_FILE:-/dev/null}:/run/secrets/twilio_verify_api_key_secret:ro
       - ${RESEND_API_KEY_FILE:-/dev/null}:/run/secrets/resend_api_key:ro
       - ${AUTH_OTP_HMAC_KEY_FILE:-/dev/null}:/run/secrets/auth_otp_hmac_key:ro
       - institution_documents:/var/lib/eltnoy/documents
@@ -293,6 +297,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Use the exact image already built by `build api_public`; otherwise an old implicitly tagged
+    # one-off migration image can be reused after the API image has been updated.
+    image: ${ELTNOY_API_IMAGE:?Set ELTNOY_API_IMAGE to the local tag for the API image built from this Dockerfile}
+    pull_policy: never
     profiles:
       - ops
     restart: "no"

@@ -120,7 +120,7 @@ export class MemoryAuthVerificationStore implements AuthVerificationStore {
   }
   async getChallenge(id: string) { const c = this.challenges.get(id); return c ? { ...c } : null; }
   async setChallengeDestination(id: string, destination: string) { const c = this.challenges.get(id); if (c && !c.consumedAt && !c.destination) c.destination = destination; }
-  async recordSend(id: string, codeHash: string, codeExpiresAt: Date, now: Date, expected: { sendCount: number; destination: string }) {
+  async recordSend(id: string, codeHash: string | null, codeExpiresAt: Date, now: Date, expected: { sendCount: number; destination: string }) {
     const c = this.challenges.get(id);
     if (!c || c.consumedAt || c.sendCount !== expected.sendCount || c.destination !== expected.destination) return false;
     Object.assign(c, { codeHash, codeExpiresAt, sendCount: c.sendCount + 1, lastSentAt: now });

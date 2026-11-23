@@ -126,7 +126,7 @@ export interface AuthVerificationStore {
    * checked (compare-and-set), so concurrent sends cannot exceed the cap or target another number.
    * False when it did not apply; the caller must then NOT deliver the code.
    */
-  recordSend(id: string, codeHash: string, codeExpiresAt: Date, now: Date, expected: { sendCount: number; destination: string }): Promise<boolean>;
+  recordSend(id: string, codeHash: string | null, codeExpiresAt: Date, now: Date, expected: { sendCount: number; destination: string }): Promise<boolean>;
   /**
    * Atomically uses one verification attempt BEFORE the code is compared (attempts < maxAttempts and
    * unconsumed). Returns the new attempt count, or null when none is left, so concurrent guesses
@@ -204,6 +204,8 @@ export type StudentRegistrationResult = 'completed' | 'refused' | 'expired' | 'n
 export interface StudentRegistrationStore {
   /** Inserts a pending claim. Claims are NOT exclusive: any number may exist for one mobile. */
   createClaim(claim: StudentRegistrationClaim): Promise<void>;
+  /** Returns the immutable mobile used to preserve the existing mobile-derived login ID. */
+  getClaimMobile(claimId: string): Promise<string | null>;
   /**
    * Completes a verified registration in ONE transaction: locks the claim, consumes the challenge,
    * serializes on the mobile (studentMobileLockKey), refuses generically if a Student already owns the
@@ -608,6 +610,10 @@ export function createPostgresStudentRegistrationStore(pool: QueryablePool): Stu
         [claim.id, claim.mobile, claim.displayName, claim.passwordHash, claim.createdAt, claim.expiresAt],
       );
     }),
+    getClaimMobile: async (claimId) => {
+      const { rows } = await pool.query('SELECT mobile FROM student_registration_claims WHERE id = $1', [claimId]);
+      return rows[0] ? String(rows[0].mobile) : null;
+    },
     completeRegistration: (input) => inTransaction(pool, async (client) => {
       // Lock order: claim, then challenge, then the mobile. Cleanup locks the claim first too (and its
       // challenges only through the cascade), so the two can never deadlock.
@@ -626,11 +632,11 @@ export function createPostgresStudentRegistrationStore(pool: QueryablePool): Stu
         await appendEvent(client, { action: 'student.registration_refused', userId: null, details: { reason: claim.consumed_at !== null ? 'claim_consumed' : 'claim_expired' } });
         return 'expired' as const;
       }
-      await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [studentMobileLockKey(input.destination)]);
+      await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [studentMobileLockKey(String(claim.mobile))]);
       const owned = await client.query(
         `SELECT ac.user_id FROM account_contacts ac JOIN users u ON u.id = ac.user_id
           WHERE ac.channel = 'sms' AND ac.destination = $1 AND ac.verified_at IS NOT NULL AND u.role = 'candidate' LIMIT 1`,
-        [input.destination],
+        [String(claim.mobile)],
       );
       // AUTH C1.1: a permanent business refusal marks the claim consumed (dead) in the same transaction
       // that consumed its only challenge, so it can never be replayed; cleanup then removes it.
@@ -641,8 +647,8 @@ export function createPostgresStudentRegistrationStore(pool: QueryablePool): Stu
       };
       if (owned.rows.length > 0) return refuse('mobile_in_use');
       const inserted = await client.query(
-        `INSERT INTO users (id, login_id, display_name, role, password_hash, account_status)
-         VALUES ($1, $2, $3, 'candidate', $4, 'approved')
+        `INSERT INTO users (id, login_id, display_name, role, password_hash, contact_email, account_status)
+         VALUES ($1, $2, $3, 'candidate', $4, NULL, 'approved')
          ON CONFLICT (login_id) DO NOTHING
          RETURNING id`,
         [input.userId, input.loginId, String(claim.display_name), String(claim.password_hash)],
@@ -650,7 +656,7 @@ export function createPostgresStudentRegistrationStore(pool: QueryablePool): Stu
       if (inserted.rowCount !== 1) return refuse('login_id_taken');
       await client.query(
         "INSERT INTO account_contacts (id, user_id, channel, destination, verified_at) VALUES ($1, $2, 'sms', $3, $4)",
-        [randomUUID(), input.userId, input.destination, input.now],
+        [randomUUID(), input.userId, String(claim.mobile), input.now],
       );
       await client.query('INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', [input.sessionTokenHash, input.userId, input.sessionExpiresAt]);
       await client.query("INSERT INTO auth_session_verifications (token_hash, method, verified_at) VALUES ($1, 'sms_otp', $2)", [input.sessionTokenHash, input.now]);

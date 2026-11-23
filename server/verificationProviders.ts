@@ -33,10 +33,22 @@ export interface ProviderDeliveryRequest {
 export type SmsDeliveryRequest = ProviderDeliveryRequest;
 export type EmailDeliveryRequest = ProviderDeliveryRequest;
 
+export interface SmsOtpCheckRequest {
+  /** E.164 number attached to the pending challenge. */
+  readonly destination: string;
+  /** Six-digit code entered by the user. */
+  readonly code: string;
+  readonly signal: AbortSignal;
+}
+
 export interface SmsOtpProvider {
   readonly name: string;
+  /** `provider` means the vendor generates and checks the code; local codeHash stays null. */
+  readonly verificationMode?: 'local' | 'provider';
   /** Delivers one code to an E.164 number (see the ProviderDeliveryRequest contract). */
   sendOtp(request: SmsDeliveryRequest): Promise<void>;
+  /** Required only when verificationMode is `provider`. Returns true only after vendor approval. */
+  verifyOtp?(request: SmsOtpCheckRequest): Promise<boolean>;
 }
 
 export interface EmailVerificationProvider {
