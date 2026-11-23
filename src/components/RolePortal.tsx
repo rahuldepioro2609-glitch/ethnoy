@@ -9,6 +9,7 @@ import {
   ArrowRight,
   Award,
   Building2,
+  CalendarDays,
   CheckCircle2,
   ClipboardCheck,
   Download,
@@ -52,6 +53,7 @@ import { PlatformStaffAdminPanel } from './staff/PlatformStaffAdminPanel';
 import { OrganizationStaffOwnerPanel } from './staff/OrganizationStaffOwnerPanel';
 import { InstituteVerificationPanel } from './admin/InstituteVerificationPanel';
 import { InstituteDashboardOverview } from './InstituteDashboardOverview';
+import { InstituteAdvancedSection, type InstituteAdvancedSectionId } from './InstituteAdvancedSection';
 import { ErrorState, LoadingState } from './ui';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
@@ -1141,23 +1143,60 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const theme = dashboardTheme[user.role];
   const instituteNavItems = [
     { id: 'institute-overview', label: 'Overview', icon: LayoutDashboard },
-    { id: 'institute-checkins', label: 'Applicants & verification', icon: ClipboardCheck },
-    { id: 'institute-forms', label: 'Examination forms', icon: FileText },
     { id: 'institute-profile', label: 'My Institute', icon: Building2 },
+    { id: 'institute-forms', label: 'Create Examination', icon: PlusCircle },
+    { id: 'institute-exam-management', label: 'Exam Management', icon: ClipboardCheck },
+    { id: 'institute-applications', label: 'Online Applications', icon: FolderOpen },
+    { id: 'institute-checkins', label: 'Applicants & verification', icon: ClipboardCheck },
     { id: 'institute-wallet', label: 'Payments & fees', icon: Wallet },
-    { id: 'institute-documents', label: 'Institution documents', icon: FolderOpen },
+    { id: 'institute-admit-cards', label: 'Admit Cards', icon: Award },
+    { id: 'institute-question-bank', label: 'Question Bank', icon: FileText },
+    { id: 'institute-cbt-center', label: 'CBT Exam Center', icon: LayoutDashboard },
+    { id: 'institute-results', label: 'Results & Merit List', icon: Award },
+    { id: 'institute-reports', label: 'Reports & Analytics', icon: Download },
     { id: 'institute-staff', label: 'Staff & roles', icon: UserRound },
+    { id: 'institute-attendance', label: 'Exam Attendance Management', icon: CalendarDays },
+    { id: 'institute-interviews', label: 'Online Interview', icon: UserRound },
+    { id: 'institute-training', label: 'Online Training', icon: Award },
+    { id: 'institute-settings', label: 'Settings & Support', icon: LockKeyhole },
   ];
   const selectedInstituteSection = instituteNavItems.find((item) => item.id === activeInstituteSection) ?? instituteNavItems[0];
   const instituteSectionDescriptions: Record<string, string> = {
     'institute-overview': 'Manage examinations, applicants and institute activity in one place.',
+    'institute-profile': 'Manage your institute profile and view institutional verification details.',
+    'institute-forms': 'Prepare exam and recruitment listings for ELTNOY review.',
+    'institute-exam-management': 'Track the approval status of institute examination listings.',
+    'institute-applications': 'Review the public application links attached to approved institute listings.',
     'institute-checkins': 'Verify candidates assigned to your examination center and review recent check-ins.',
-    'institute-forms': 'Create institute form listings and review the forms you have submitted.',
-    'institute-profile': 'Request changes to your institute details and track their review status.',
     'institute-wallet': 'View institute funds, wallet activity and withdrawal requests.',
-    'institute-documents': 'View and manage institution documents for verification.',
+    'institute-admit-cards': 'View guidance for admit-card access and exam-center coordination.',
+    'institute-question-bank': 'Question authoring and answer keys are restricted to the ELTNOY examination team.',
+    'institute-cbt-center': 'Use your assigned center code to verify and check in candidates.',
+    'institute-results': 'ELTNOY publishes results for candidates through the public portal.',
+    'institute-reports': 'Review live institute listing and assigned-center check-in counts.',
     'institute-staff': 'Manage staff invitations and institute roles.',
+    'institute-attendance': 'Review candidate check-ins recorded at your assigned center.',
+    'institute-interviews': 'Interview scheduling is not connected to institute accounts in this release.',
+    'institute-training': 'Training courses and learner progress are not connected to institute accounts in this release.',
+    'institute-settings': 'Manage institution documents and find support details.',
   };
+  const renderInstituteNavItems = (variant: 'desktop' | 'mobile') => instituteNavItems.map((item) => {
+    const Icon = item.icon;
+    const active = activeInstituteSection === item.id;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        aria-current={active ? 'page' : undefined}
+        onClick={() => jumpToInstituteSection(item.id)}
+        className={`flex w-full items-center gap-3 rounded-lg px-3 text-left text-sm transition ${variant === 'desktop' ? 'py-2.5' : 'py-3'} ${active ? 'bg-emerald-600 font-bold text-white shadow-sm' : variant === 'desktop' ? 'font-semibold text-slate-200 hover:bg-white/10' : 'font-semibold text-slate-200 hover:bg-white/10'}`}
+      >
+        <Icon className="h-4 w-4 shrink-0" />
+        <span className="min-w-0 flex-1">{t(item.label)}</span>
+        {!active && variant === 'mobile' && <ArrowRight className="h-4 w-4 shrink-0" />}
+      </button>
+    );
+  });
   const navTabs: { id: DashboardTab; label: string }[] = user.role === 'official'
     ? [{ id: 'overview', label: 'Overview' }, { id: 'institutes', label: 'Institute approvals & wallet' }, { id: 'institution-documents', label: 'Institution documents' }, { id: 'exams', label: 'Exam forms' }, { id: 'notices', label: 'Latest updates' }, { id: 'admit-cards', label: 'Admit cards' }, { id: 'online-exams', label: 'Online exams' }, { id: 'answer-keys', label: 'Answer keys' }, { id: 'applications', label: 'Applications' }, { id: 'feedback', label: 'Helpdesk' }, { id: 'attempts', label: 'Mock tests' }, { id: 'results', label: 'Results' }, { id: 'data-export', label: 'Excel data' }, { id: 'platform-staff', label: 'Staff management' }, { id: 'institute-verification', label: 'Institutional verification' }]
     : [{ id: 'overview', label: 'Overview' }];
@@ -1185,6 +1224,8 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const jumpToInstituteSection = (sectionId: string) => {
     setActiveInstituteSection(sectionId);
     setIsInstituteMenuOpen(false);
+    setError(null);
+    setNotice(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const isLoading = Object.entries(sectionStatuses).some(
@@ -1257,8 +1298,22 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     'center:checkins': 'Candidate check-ins could not be loaded',
     'center:workspace': 'Institute forms, profile and wallet could not be loaded',
   };
+  const instituteSectionsByData: Record<string, string[]> = {
+    'institute-overview': ['center:workspace', 'center:checkins'],
+    'institute-profile': ['center:workspace'],
+    'institute-forms': ['center:workspace'],
+    'institute-exam-management': ['center:workspace'],
+    'institute-applications': ['center:workspace'],
+    'institute-checkins': ['center:checkins'],
+    'institute-wallet': ['center:workspace'],
+    'institute-cbt-center': ['center:checkins'],
+    'institute-reports': ['center:workspace', 'center:checkins'],
+    'institute-attendance': ['center:checkins'],
+    'institute-settings': ['center:workspace'],
+  };
+  const relevantInstituteData = new Set(instituteSectionsByData[activeInstituteSection] ?? []);
   const failedInstituteSections = user.role === 'center'
-    ? currentSectionStatuses.filter(([key, status]) => status.state === 'error' && instituteSectionErrors[key])
+    ? currentSectionStatuses.filter(([key, status]) => relevantInstituteData.has(key) && status.state === 'error' && instituteSectionErrors[key])
     : [];
 
   return (
@@ -1287,7 +1342,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 aria-controls="institute-section-menu"
                 aria-expanded={isInstituteMenuOpen}
                 onClick={() => setIsInstituteMenuOpen((isOpen) => !isOpen)}
-                className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 lg:hidden"
               >
                 {isInstituteMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
               </button>
@@ -1322,27 +1377,11 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               ref={instituteMenuRef}
               id="institute-section-menu"
               aria-label={t('Institute sections')}
-              className={`${isInstituteMenuOpen ? 'block' : 'hidden'} absolute left-0 top-full z-50 mt-2 w-[min(90vw,320px)] rounded-2xl border border-slate-200 bg-[#071E49] p-3 text-white shadow-2xl`}
+              className={`${isInstituteMenuOpen ? 'block' : 'hidden'} absolute left-0 top-full z-50 mt-2 max-h-[calc(100vh-8rem)] w-[min(90vw,360px)] overflow-y-auto rounded-2xl border border-slate-200 bg-[#071E49] p-3 text-white shadow-2xl`}
             >
               <p className="px-3 pb-2 pt-1 text-xs font-black uppercase tracking-[0.16em] text-blue-200">{t('Institute workspace')}</p>
               <div className="space-y-1">
-                {instituteNavItems.map((item) => {
-                  const Icon = item.icon;
-                  const active = activeInstituteSection === item.id;
-                  return (
-                    <a
-                      key={item.id}
-                      href={`#${item.id}`}
-                      aria-current={active ? 'page' : undefined}
-                      onClick={(event) => { event.preventDefault(); jumpToInstituteSection(item.id); }}
-                      className={`flex items-center gap-3 rounded-lg px-3 py-3 text-sm ${active ? 'bg-emerald-600 font-bold text-white' : 'font-semibold text-slate-200 hover:bg-white/10'}`}
-                    >
-                      <Icon className="h-5 w-5 shrink-0" />
-                      <span>{t(item.label)}</span>
-                      {!active && <ArrowRight className="ml-auto h-4 w-4" />}
-                    </a>
-                  );
-                })}
+                {renderInstituteNavItems('mobile')}
               </div>
               {/* The header hides this link below the md breakpoint, so phones reach it here. */}
               <div className="mt-2 border-t border-white/15 pt-2 md:hidden">
@@ -1355,7 +1394,23 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
           )}
         </div>
       </header>
-      <div className={`mx-auto w-full px-4 py-7 sm:px-6 ${user.role === 'center' ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
+      <div className={`mx-auto flex w-full gap-5 px-4 py-7 sm:px-6 ${user.role === 'center' ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
+        {user.role === 'center' && (
+          <aside aria-label={t('Institute sections')} className="sticky top-[112px] hidden h-[calc(100vh-128px)] w-[252px] shrink-0 self-start flex-col overflow-hidden rounded-2xl bg-[#071E49] text-white shadow-lg lg:flex">
+            <div className="border-b border-white/10 px-4 py-4">
+              <p className="text-xs font-black uppercase tracking-[0.16em] text-blue-200">{t('Institute workspace')}</p>
+              <p className="mt-1 text-[11px] text-blue-100/70">17 operational sections</p>
+            </div>
+            <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2" aria-label={t('Institute navigation')}>
+              {renderInstituteNavItems('desktop')}
+            </nav>
+            <div className="border-t border-white/10 px-4 py-3">
+              <p className="truncate text-xs font-bold">{instituteDisplayName}</p>
+              <p className="mt-0.5 text-[10px] text-blue-100/70">{t('Center code')}: {user.id}</p>
+            </div>
+          </aside>
+        )}
+        <div className="min-w-0 flex-1">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className={`text-xs font-bold uppercase tracking-[0.16em] ${
@@ -1888,6 +1943,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                   {activeInstituteSection === 'institute-forms' && (
                   <form onSubmit={(event) => void submitInstituteForm(event)} id="institute-forms" className="scroll-mt-28 space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                     <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-800">{t('Examination forms')}</p>
                       <h2 className="text-lg font-extrabold text-[#0B2E59]">Submit an institute form</h2>
                       <p className="mt-1 text-sm text-slate-500">Super Admin must approve it before it appears on the public website.</p>
                     </div>
@@ -1969,6 +2025,42 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
 
             {user.role === 'center' && activeInstituteSection === 'institute-staff' && <div id="institute-staff" className="scroll-mt-28"><OrganizationStaffOwnerPanel /></div>}
 
+            {user.role === 'center' && activeInstituteSection === 'institute-settings' && (
+              <div className="space-y-5">
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                  <h2 className="text-lg font-extrabold text-[#0B2E59]">Settings &amp; Support</h2>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">Manage your institute verification documents and contact ELTNOY support if your access or center assignment needs review.</p>
+                </section>
+                <section aria-label={t('Institution documents')}>
+                  <h2 className="sr-only">{t('Institution documents')}</h2>
+                  <InstitutionDocumentManagement role="center" />
+                </section>
+                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <h2 className="font-extrabold text-[#0B2E59]">ELTNOY Support</h2>
+                  <p className="mt-1 text-sm text-slate-600">For sign-in, institute verification, or assigned-center questions, contact the portal support team.</p>
+                  <a href="mailto:support@eltnoy.com" className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-blue-800 hover:underline">support@eltnoy.com <ArrowRight className="h-4 w-4" /></a>
+                </section>
+              </div>
+            )}
+
+            {user.role === 'center' && [
+              'institute-exam-management', 'institute-applications', 'institute-admit-cards',
+              'institute-question-bank', 'institute-cbt-center', 'institute-results',
+              'institute-reports', 'institute-attendance', 'institute-interviews', 'institute-training',
+            ].includes(activeInstituteSection) && (
+              <InstituteAdvancedSection
+                sectionId={activeInstituteSection as InstituteAdvancedSectionId}
+                centerCode={user.id}
+                forms={list('forms')}
+                checkins={list('checkins')}
+                summary={data.dashboardSummary}
+                workspaceState={getDashboardSectionContentState(sectionStatuses['center:workspace'])}
+                checkinsState={getDashboardSectionContentState(sectionStatuses['center:checkins'])}
+                onCreateForm={() => jumpToInstituteSection('institute-forms')}
+                onOpenCheckins={() => jumpToInstituteSection('institute-checkins')}
+              />
+            )}
+
             {user.role === 'official' && tab === 'applications' && <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Candidate / exam</th><th className="p-4">Submitted</th><th className="p-4">Status</th><th className="p-4">Admit card</th></tr></thead><tbody className="divide-y divide-slate-100">{list('applications').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono font-bold">{String(item.application_number)}</td><td className="p-4">{String(item.candidate_name)}<span className="block text-xs text-slate-500">{String(item.exam_code)}</span></td><td className="p-4 text-slate-500">{new Date(String(item.created_at)).toLocaleDateString()}</td><td className="p-4"><select aria-label={`Status for ${String(item.application_number)}`} value={String(item.status)} onChange={(event) => void updateApplication(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1"><option value="submitted">Submitted</option><option value="under_review">Under review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></td><td className="p-4 text-xs">{item.admit_card_published ? 'Published' : 'Not published'}</td></tr>)}</tbody></table></section>}
 
             {user.role === 'official' && tab === 'feedback' && permissions.canAccessHelpdesk && <section className="space-y-3">{list('feedback').length ? list('feedback').map((item) => <article key={String(item.id)} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-bold text-[#0B2E59]">{String(item.title)}</p><p className="mt-1 text-xs text-slate-500">{String(item.id)} · {String(item.type)} · {String(item.priority)}</p></div><select aria-label={`Status for ${String(item.id)}`} value={String(item.status)} onChange={(event) => void updateFeedback(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1 text-sm"><option value="under_review">Under review</option><option value="in_progress">In progress</option><option value="resolved">Resolved</option></select></div><p className="mt-3 text-sm text-slate-700">{String(item.description)}</p></article>) : <p className="rounded-xl bg-white p-6 text-sm text-slate-500">No helpdesk tickets have been submitted.</p>}</section>}
@@ -1992,6 +2084,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Roll number</th><th className="p-4">Exam</th><th className="p-4">Status</th><th className="p-4">Published</th><th className="p-4">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{list('results').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono">{String(item.application_number)}</td><td className="p-4">{String(item.roll_number)}</td><td className="p-4">{String(item.exam_code)}</td><td className="p-4">{item.is_published ? 'Published' : 'Draft'}</td><td className="p-4">{new Date(String(item.published_at)).toLocaleString()}</td><td className="p-4">{permissions.canPublishResults ? <button type="button" onClick={() => void publishAdminRecord(`/api/admin/results/${encodeURIComponent(String(item.id))}`, !Boolean(item.is_published), 'Result')} className="rounded-lg bg-blue-900 px-3 py-2 text-xs font-bold text-white">{item.is_published ? 'Unpublish' : 'Publish result'}</button> : <span className="text-xs text-slate-500">Super Admin only</span>}</td></tr>)}</tbody></table></section>
               </section>
             )}
+        </div>
       </div>
       {activeOnlineExam && (
         <OnlineExamRunner
