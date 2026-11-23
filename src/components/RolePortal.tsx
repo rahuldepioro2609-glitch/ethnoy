@@ -54,6 +54,7 @@ import { OrganizationStaffOwnerPanel } from './staff/OrganizationStaffOwnerPanel
 import { InstituteVerificationPanel } from './admin/InstituteVerificationPanel';
 import { InstituteDashboardOverview } from './InstituteDashboardOverview';
 import { InstituteAdvancedSection, type InstituteAdvancedSectionId } from './InstituteAdvancedSection';
+import { savePortalHintInBrowser } from '../utils/portalHint';
 import { ErrorState, LoadingState } from './ui';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
@@ -1271,6 +1272,13 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
       });
     }
   }, [data.profile]);
+
+  // Display-only hint for the public site ("signed in as <Institute>, back to the dashboard"). It holds
+  // only the display name; the real session stays host-only on the Institute site (utils/portalHint.ts).
+  useEffect(() => {
+    if (user.role !== 'center') return;
+    savePortalHintInBrowser({ role: 'center', name: instituteDisplayName });
+  }, [user.role, instituteDisplayName]);
 
   // The institute menu closes on Escape (from anywhere) and on a click or tap outside it.
   useEffect(() => {

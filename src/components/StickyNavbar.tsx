@@ -14,6 +14,7 @@ import {
   Phone,
   Award,
   CalendarDays,
+  LayoutDashboard,
 } from 'lucide-react';
 import { ExamItem } from '../data/portalData';
 import { BrandLogo } from './BrandLogo';
@@ -31,6 +32,11 @@ interface StickyNavbarProps {
   onOpenResultsPortal: () => void;
   onOpenAnswerKeyPortal: () => void;
   onOpenInstituteDashboard: () => void;
+  /**
+   * Shown under the logo when this browser is signed in on the Institute site (display-only hint,
+   * utils/portalHint.ts). `href` always points at the Institute site's dashboard.
+   */
+  instituteReturn?: { name: string; href: string } | null;
   examinations: ExamItem[];
   activeNavTab: string;
   setActiveNavTab: (tab: string) => void;
@@ -48,6 +54,7 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
   onOpenResultsPortal,
   onOpenAnswerKeyPortal,
   onOpenInstituteDashboard,
+  instituteReturn,
   examinations,
   activeNavTab,
   setActiveNavTab,
@@ -109,17 +116,31 @@ export const StickyNavbar: React.FC<StickyNavbarProps> = ({
       <div className="max-w-[1440px] mx-auto px-4 md:px-8">
         <div className="flex min-h-[72px] items-center justify-between gap-4 py-2 sm:min-h-[78px] sm:px-2">
           <div className="flex min-w-0 items-center gap-3 sm:gap-5">
-            <button
-              onClick={() => {
-                setActiveNavTab('Home');
-                onSelectExamFilter(undefined);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="flex shrink-0 items-center rounded-lg p-0.5 text-left focus-visible:outline-emerald-600"
-              aria-label={`ELTNOY ${t('Examination Portal Home')}`}
-            >
-              <BrandLogo />
-            </button>
+            <div className="flex min-w-0 shrink-0 flex-col items-start gap-1">
+              <button
+                onClick={() => {
+                  setActiveNavTab('Home');
+                  onSelectExamFilter(undefined);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="flex shrink-0 items-center rounded-lg p-0.5 text-left focus-visible:outline-emerald-600"
+                aria-label={`ELTNOY ${t('Examination Portal Home')}`}
+              >
+                <BrandLogo />
+              </button>
+              {instituteReturn && (
+                <a
+                  href={instituteReturn.href}
+                  title={`${t('Return to the institute dashboard')}: ${instituteReturn.name}`}
+                  aria-label={`${t('Return to the institute dashboard')}: ${instituteReturn.name}`}
+                  className="inline-flex max-w-[240px] items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 py-1 pl-1.5 pr-2.5 text-[11px] font-bold text-sky-900 transition hover:bg-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+                >
+                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-sky-700 text-white"><Building2 className="h-3 w-3" /></span>
+                  <span className="truncate">{instituteReturn.name}</span>
+                  <LayoutDashboard className="h-3.5 w-3.5 shrink-0 text-sky-700" />
+                </a>
+              )}
+            </div>
             <div className="hidden items-center gap-1 border-l border-slate-200 pl-3 lg:flex xl:gap-2 xl:pl-4">
               <button
                 type="button"
