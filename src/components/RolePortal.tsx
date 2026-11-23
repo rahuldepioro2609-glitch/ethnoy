@@ -15,15 +15,20 @@ import {
   Eye,
   EyeOff,
   FileText,
+  FolderOpen,
   GraduationCap,
+  Home,
+  LayoutDashboard,
   LockKeyhole,
   LogOut,
+  Menu,
   PlusCircle,
   RefreshCw,
   ShieldCheck,
   Upload,
   UserRound,
   Wallet,
+  X,
 } from 'lucide-react';
 import { ApiError, apiRequest, apiRequestWithMeta } from '../api';
 import { VerificationStep } from './VerificationStep';
@@ -45,6 +50,7 @@ import { PendingInstitutionSubmission } from './PendingInstitutionSubmission';
 import { PlatformStaffAdminPanel } from './staff/PlatformStaffAdminPanel';
 import { OrganizationStaffOwnerPanel } from './staff/OrganizationStaffOwnerPanel';
 import { InstituteVerificationPanel } from './admin/InstituteVerificationPanel';
+import { InstituteDashboardOverview } from './InstituteDashboardOverview';
 import { ErrorState, LoadingState } from './ui';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
@@ -88,7 +94,7 @@ const dashboardTheme: Record<PortalRole, { shell: string; header: string; eyebro
     description: 'Track your exam applications, admit card, results, and practice history.',
   },
   center: {
-    shell: 'bg-sky-50/60',
+    shell: 'bg-[#EEF3FA]',
     header: 'from-sky-950 via-sky-900 to-[#0B2E59]',
     eyebrow: 'Institute workspace',
     description: 'Manage candidate check-ins, submit public form listings, request profile changes, and track wallet activity.',
@@ -686,6 +692,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const { t } = useLanguage();
   const [data, setData] = useState<PortalData>({});
   const [tab, setTab] = useState<DashboardTab>('overview');
+  const [activeInstituteSection, setActiveInstituteSection] = useState('institute-overview');
+  const [isInstituteMenuOpen, setIsInstituteMenuOpen] = useState(false);
+  const instituteMenuRef = useRef<HTMLElement>(null);
+  const instituteMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [sectionStatuses, setSectionStatuses] = useState<DashboardSectionStatusMap>({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -1117,6 +1127,25 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
 
   const detail = roleDetails[user.role];
   const theme = dashboardTheme[user.role];
+  const instituteNavItems = [
+    { id: 'institute-overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'institute-checkins', label: 'Applicants & verification', icon: ClipboardCheck },
+    { id: 'institute-forms', label: 'Examination forms', icon: FileText },
+    { id: 'institute-profile', label: 'My Institute', icon: Building2 },
+    { id: 'institute-wallet', label: 'Payments & fees', icon: Wallet },
+    { id: 'institute-documents', label: 'Institution documents', icon: FolderOpen },
+    { id: 'institute-staff', label: 'Staff & roles', icon: UserRound },
+  ];
+  const selectedInstituteSection = instituteNavItems.find((item) => item.id === activeInstituteSection) ?? instituteNavItems[0];
+  const instituteSectionDescriptions: Record<string, string> = {
+    'institute-overview': 'Manage examinations, applicants and institute activity in one place.',
+    'institute-checkins': 'Verify candidates assigned to your examination center and review recent check-ins.',
+    'institute-forms': 'Create institute form listings and review the forms you have submitted.',
+    'institute-profile': 'Request changes to your institute details and track their review status.',
+    'institute-wallet': 'View institute funds, wallet activity and withdrawal requests.',
+    'institute-documents': 'View and manage institution documents for verification.',
+    'institute-staff': 'Manage staff invitations and institute roles.',
+  };
   const navTabs: { id: DashboardTab; label: string }[] = user.role === 'official'
     ? [{ id: 'overview', label: 'Overview' }, { id: 'institutes', label: 'Institute approvals & wallet' }, { id: 'institution-documents', label: 'Institution documents' }, { id: 'exams', label: 'Exam forms' }, { id: 'notices', label: 'Latest updates' }, { id: 'admit-cards', label: 'Admit cards' }, { id: 'online-exams', label: 'Online exams' }, { id: 'answer-keys', label: 'Answer keys' }, { id: 'applications', label: 'Applications' }, { id: 'feedback', label: 'Helpdesk' }, { id: 'attempts', label: 'Mock tests' }, { id: 'results', label: 'Results' }, { id: 'data-export', label: 'Excel data' }, { id: 'platform-staff', label: 'Staff management' }, { id: 'institute-verification', label: 'Institutional verification' }]
     : [{ id: 'overview', label: 'Overview' }];
@@ -1127,13 +1156,24 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const record = (key: string) => typeof data[key] === 'object' && data[key] !== null
     ? data[key] as Record<string, unknown>
     : {};
+  const instituteProfile = record('profile');
+  const instituteDisplayName = typeof instituteProfile.display_name === 'string' && instituteProfile.display_name.trim()
+    ? instituteProfile.display_name
+    : user.name;
   const openWallet = () => {
     if (user.role === 'official') {
       setTab('institutes');
       window.setTimeout(() => document.getElementById('admin-institute-wallet')?.scrollIntoView({ behavior: 'smooth' }), 100);
       return;
     }
-    document.getElementById('institute-wallet')?.scrollIntoView({ behavior: 'smooth' });
+    setActiveInstituteSection('institute-wallet');
+    setIsInstituteMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const jumpToInstituteSection = (sectionId: string) => {
+    setActiveInstituteSection(sectionId);
+    setIsInstituteMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const isLoading = Object.entries(sectionStatuses).some(
     ([key, status]) => key.startsWith(`${user.role}:`) && status.state === 'loading',
@@ -1179,39 +1219,165 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     }
   }, [data.profile]);
 
+  // The institute menu closes on Escape (from anywhere) and on a click or tap outside it.
+  useEffect(() => {
+    if (!isInstituteMenuOpen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setIsInstituteMenuOpen(false);
+      instituteMenuButtonRef.current?.focus();
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (instituteMenuRef.current?.contains(target) || instituteMenuButtonRef.current?.contains(target)) return;
+      setIsInstituteMenuOpen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [isInstituteMenuOpen]);
+
+  const instituteSectionErrors: Record<string, string> = {
+    'center:checkins': 'Candidate check-ins could not be loaded',
+    'center:workspace': 'Institute forms, profile and wallet could not be loaded',
+  };
+  const failedInstituteSections = user.role === 'center'
+    ? currentSectionStatuses.filter(([key, status]) => status.state === 'error' && instituteSectionErrors[key])
+    : [];
+
   return (
     <main className={`min-h-screen text-slate-900 ${theme.shell}`}>
-      <header className={`bg-gradient-to-r ${theme.header} text-white shadow-md`}>
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
-            <BrandLogo compact light />
-            <div className="min-w-0"><p className="font-black tracking-wide">{t(detail.label)} {t('Portal')}</p><p className="truncate text-xs text-slate-300">{user.name} · {user.id}</p></div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={onHome} className="rounded-lg px-3 py-2 text-sm text-slate-200 hover:bg-white/10">{t('Public website')}</button>
-            {(user.role === 'center' || user.role === 'official') && (
-              <button onClick={openWallet} className="inline-flex items-center gap-2 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
-                <Wallet className="h-4 w-4" /> {t('Wallet')}
-              </button>
-            )}
-            <button onClick={() => void onLogout()} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold hover:bg-emerald-500"><LogOut className="h-4 w-4" /> {t('Sign out')}</button>
+      {user.role === 'center' && (
+        <div className="bg-[#0B2E59] text-white">
+          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 py-2 text-[11px] font-bold tracking-[0.12em] sm:px-6">
+            <span className="uppercase">ELTNOY {t('Examination portal')}</span>
+            <span className="hidden text-blue-100 sm:inline"><span className="uppercase">{t('Institute workspace')}</span> · {instituteDisplayName}</span>
           </div>
         </div>
+      )}
+      <header className={`${user.role === 'center' ? 'sticky top-0 z-40 bg-white text-slate-900 border-b border-slate-200 shadow-sm' : 'bg-gradient-to-r ' + theme.header + ' text-white shadow-md'}`}>
+        {/* Institute: one row at every width (icon-only buttons on phones) and the same 1600px
+            width as the top bar and the page content. Other roles keep the original header. */}
+        <div className={user.role === 'center'
+          ? 'relative mx-auto flex max-w-[1600px] items-center justify-between gap-2 px-4 py-3 sm:gap-4 sm:px-6'
+          : 'mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6'}
+        >
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            {user.role === 'center' && (
+              <button
+                ref={instituteMenuButtonRef}
+                type="button"
+                aria-label={t(isInstituteMenuOpen ? 'Close institute workspace menu' : 'Open institute workspace menu')}
+                aria-controls="institute-section-menu"
+                aria-expanded={isInstituteMenuOpen}
+                onClick={() => setIsInstituteMenuOpen((isOpen) => !isOpen)}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"
+              >
+                {isInstituteMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+              </button>
+            )}
+            {user.role === 'center' ? <BrandLogo compact /> : <BrandLogo compact light />}
+            <div className={`min-w-0 ${user.role === 'center' ? 'hidden lg:block' : ''}`}><p className="truncate font-black tracking-wide">{user.role === 'center' ? t('Institute Dashboard') : `${t(detail.label)} ${t('Portal')}`}</p><p className={`truncate text-xs ${user.role === 'center' ? 'text-slate-500' : 'text-slate-300'}`}>{user.role === 'center' ? instituteDisplayName : user.name} · {user.id}</p></div>
+          </div>
+          {user.role === 'center' ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <button type="button" onClick={onHome} className="hidden whitespace-nowrap rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 md:inline-flex">{t('Public website')}</button>
+              <button type="button" aria-label={t('Open institute profile')} onClick={() => jumpToInstituteSection('institute-profile')} className="hidden h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 sm:grid"><UserRound className="h-5 w-5" /></button>
+              <button type="button" onClick={openWallet} className="inline-flex h-10 min-w-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 sm:px-3">
+                <Wallet className="h-4 w-4 shrink-0" /><span className="sr-only sm:not-sr-only">{t('Wallet')}</span>
+              </button>
+              <button type="button" onClick={() => void onLogout()} className="inline-flex h-10 min-w-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-600 px-2.5 text-sm font-bold text-white hover:bg-emerald-500 sm:px-3">
+                <LogOut className="h-4 w-4 shrink-0" /><span className="sr-only sm:not-sr-only">{t('Sign out')}</span>
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button onClick={onHome} className="rounded-lg px-3 py-2 text-sm text-slate-200 hover:bg-white/10">{t('Public website')}</button>
+              {user.role === 'official' && (
+                <button onClick={openWallet} className="inline-flex items-center gap-2 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
+                  <Wallet className="h-4 w-4" /> {t('Wallet')}
+                </button>
+              )}
+              <button onClick={() => void onLogout()} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold hover:bg-emerald-500"><LogOut className="h-4 w-4" /> {t('Sign out')}</button>
+            </div>
+          )}
+          {user.role === 'center' && (
+            <nav
+              ref={instituteMenuRef}
+              id="institute-section-menu"
+              aria-label={t('Institute sections')}
+              className={`${isInstituteMenuOpen ? 'block' : 'hidden'} absolute left-0 top-full z-50 mt-2 w-[min(90vw,320px)] rounded-2xl border border-slate-200 bg-[#071E49] p-3 text-white shadow-2xl`}
+            >
+              <p className="px-3 pb-2 pt-1 text-xs font-black uppercase tracking-[0.16em] text-blue-200">{t('Institute workspace')}</p>
+              <div className="space-y-1">
+                {instituteNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const active = activeInstituteSection === item.id;
+                  return (
+                    <a
+                      key={item.id}
+                      href={`#${item.id}`}
+                      aria-current={active ? 'page' : undefined}
+                      onClick={(event) => { event.preventDefault(); jumpToInstituteSection(item.id); }}
+                      className={`flex items-center gap-3 rounded-lg px-3 py-3 text-sm ${active ? 'bg-emerald-600 font-bold text-white' : 'font-semibold text-slate-200 hover:bg-white/10'}`}
+                    >
+                      <Icon className="h-5 w-5 shrink-0" />
+                      <span>{t(item.label)}</span>
+                      {!active && <ArrowRight className="ml-auto h-4 w-4" />}
+                    </a>
+                  );
+                })}
+              </div>
+              {/* The header hides this link below the md breakpoint, so phones reach it here. */}
+              <div className="mt-2 border-t border-white/15 pt-2 md:hidden">
+                <button type="button" onClick={() => { setIsInstituteMenuOpen(false); onHome(); }} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold text-slate-200 hover:bg-white/10">
+                  <Home className="h-5 w-5 shrink-0" />
+                  <span>{t('Public website')}</span>
+                </button>
+              </div>
+            </nav>
+          )}
+        </div>
       </header>
-      <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6">
+      <div className={`mx-auto w-full px-4 py-7 sm:px-6 ${user.role === 'center' ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className={`text-xs font-bold uppercase tracking-[0.16em] ${
               user.role === 'official' ? 'text-blue-800' : user.role === 'center' ? 'text-sky-800' : 'text-emerald-800'
             }`}>{t(theme.eyebrow)}</p>
-            <h1 className="mt-1 text-2xl font-black text-[#0B2E59] sm:text-3xl">{t(detail.title.replace('Login', '').trim())} {t('Dashboard')}</h1>
-            <p className="mt-1 text-sm text-slate-600">{t(theme.description)}</p>
+            <h1 className="mt-1 text-2xl font-black text-[#0B2E59] sm:text-3xl">{user.role === 'center' ? activeInstituteSection === 'institute-overview' ? t('Welcome back, {name}').replace('{name}', instituteDisplayName) : t(selectedInstituteSection.label) : `${t(detail.title.replace('Login', '').trim())} ${t('Dashboard')}`}</h1>
+            <p className="mt-1 text-sm text-slate-600">{user.role === 'center' ? t(instituteSectionDescriptions[activeInstituteSection]) : t(theme.description)}</p>
           </div>
-          <button onClick={() => void refresh()} disabled={isLoading} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} /> {t('Refresh')}</button>
+          <div className="flex flex-wrap items-center gap-2">
+            {user.role === 'center' && activeInstituteSection === 'institute-overview' && (
+              <>
+                <button type="button" onClick={() => jumpToInstituteSection('institute-forms')} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-bold text-emerald-800 shadow-sm hover:bg-emerald-50"><PlusCircle className="h-4 w-4" />{t('Create institute form')}</button>
+                <button type="button" onClick={() => jumpToInstituteSection('institute-checkins')} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-600"><ClipboardCheck className="h-4 w-4" />{t('Verify candidate')}</button>
+              </>
+            )}
+            <button onClick={() => void refresh()} disabled={isLoading} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} /> {t('Refresh')}</button>
+          </div>
         </div>
         {notice && <div role="status" className="mb-4 flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />{notice}</span><button onClick={() => setNotice(null)} aria-label="Dismiss message">×</button></div>}
         {error && <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800"><p>{error}</p></div>}
-        {currentSectionStatuses.length > 0 && (
+        {failedInstituteSections.length > 0 && (
+          <div className="mb-5 space-y-3">
+            {failedInstituteSections.map(([key]) => (
+              <ErrorState
+                key={key}
+                title={t(instituteSectionErrors[key])}
+                description={t('Figures that depend on this data show “—” until it loads. Please try again.')}
+                retryLabel={t('Try again')}
+                onRetry={() => { void retryLoadRef.current[key]?.(); }}
+              />
+            ))}
+          </div>
+        )}
+        {user.role !== 'center' && currentSectionStatuses.length > 0 && (
           <section aria-label="Dashboard data loading status" className="mb-5 rounded-xl border border-slate-200 bg-white p-4">
             <h2 className="font-bold text-slate-800">{t('Dashboard data status')}</h2>
             <ul className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -1605,15 +1771,27 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               </div>
             )}
 
-            {(user.role === 'candidate' || user.role === 'center' || tab === 'overview') && (
+            {user.role === 'center' && activeInstituteSection === 'institute-overview' && (
+              <InstituteDashboardOverview
+                centerCode={user.id}
+                forms={list('forms')}
+                checkins={list('checkins')}
+                summary={data.dashboardSummary}
+                workspaceState={getDashboardSectionContentState(sectionStatuses['center:workspace'])}
+                checkinsState={getDashboardSectionContentState(sectionStatuses['center:checkins'])}
+                availableBalance={data.availablePaise === undefined ? '—' : formatPaise(data.availablePaise)}
+                onOpenForms={() => jumpToInstituteSection('institute-forms')}
+                onVerifyCandidate={() => jumpToInstituteSection('institute-checkins')}
+                onOpenProfile={() => jumpToInstituteSection('institute-profile')}
+                onOpenWallet={openWallet}
+              />
+            )}
+            {(user.role === 'candidate' || (user.role === 'official' && tab === 'overview')) && (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {(user.role === 'candidate' ? [
                   { label: 'Applications', value: candidateSectionState('portal') === 'success' ? list('applications').length : '—', icon: FileText },
                   { label: 'Mock tests', value: candidateSectionState('attempts') === 'success' ? list('attempts').length : '—', icon: ClipboardCheck },
                   { label: 'Published results', value: candidateSectionState('portal') === 'success' ? list('results').length : '—', icon: Award },
-                ] : user.role === 'center' ? [
-                  { label: 'Recorded check-ins', value: list('checkins').length, icon: ClipboardCheck },
-                  { label: 'Center code', value: user.id, icon: Building2 },
                 ] : [
                   { label: 'Applications', value: count(dashboardStats.applications), icon: FileText },
                   ...(permissions.canSeeHelpdeskCount ? [{ label: 'Open helpdesk tickets', value: count(dashboardStats.openHelpdesk), icon: ClipboardCheck }] : []),
@@ -1625,7 +1803,6 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 })}
               </div>
             )}
-
             {user.role === 'candidate' && <div className="mt-5"><StudentGoogleLinkCard /></div>}
             {user.role === 'candidate' && <StudentEmailContactPanel />}
 
@@ -1678,8 +1855,8 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               </div>
             )}
 
-            {user.role === 'center' && (
-              <div className="mt-5 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+            {user.role === 'center' && activeInstituteSection === 'institute-checkins' && (
+              <div id="institute-checkins" className="scroll-mt-28 mt-5 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
                 <form onSubmit={(event) => void submitCheckin(event)} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">Verify a candidate</h2>
                   <p className="mt-1 text-sm text-slate-500">Only candidates assigned to center <strong>{user.id}</strong> can be checked in.</p>
@@ -1693,10 +1870,11 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               </div>
             )}
 
-            {user.role === 'center' && (
+            {user.role === 'center' && ['institute-forms', 'institute-profile', 'institute-wallet'].includes(activeInstituteSection) && (
               <div className="mt-5 space-y-5">
-                <div className="grid gap-5 lg:grid-cols-2">
-                  <form onSubmit={(event) => void submitInstituteForm(event)} className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                {['institute-forms', 'institute-profile'].includes(activeInstituteSection) && <div className="grid gap-5 lg:grid-cols-2">
+                  {activeInstituteSection === 'institute-forms' && (
+                  <form onSubmit={(event) => void submitInstituteForm(event)} id="institute-forms" className="scroll-mt-28 space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                     <div>
                       <h2 className="text-lg font-extrabold text-[#0B2E59]">Submit an institute form</h2>
                       <p className="mt-1 text-sm text-slate-500">Super Admin must approve it before it appears on the public website.</p>
@@ -1726,9 +1904,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                     <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Candidates apply through your external link or contact details. ELTNOY does not collect applications or payments for these forms.</p>
                     <button disabled={isSavingInstituteForm} type="submit" className="rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">{isSavingInstituteForm ? 'Submitting…' : 'Submit for approval'}</button>
                   </form>
+                  )}
 
-                  <div className="space-y-5">
-                    <form onSubmit={(event) => void submitInstituteProfile(event)} className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  {activeInstituteSection === 'institute-profile' && <div className="space-y-5">
+                    <form onSubmit={(event) => void submitInstituteProfile(event)} id="institute-profile" className="scroll-mt-28 space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                       <div>
                         <h2 className="text-lg font-extrabold text-[#0B2E59]">Request profile update</h2>
                         <p className="mt-1 text-sm text-slate-500">Your currently approved profile stays unchanged until Super Admin approves the request.</p>
@@ -1744,10 +1923,10 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                       <h2 className="text-lg font-extrabold text-[#0B2E59]">Profile requests</h2>
                       {list('profileChanges').length ? <div className="mt-3 space-y-2">{list('profileChanges').map((change) => <article key={String(change.id)} className="rounded-lg bg-slate-50 p-3"><div className="flex justify-between gap-2"><strong className="text-sm">{String(change.display_name)}</strong><span className="text-xs font-bold capitalize text-slate-600">{String(change.status)}</span></div><p className="mt-1 text-xs text-slate-500">Submitted {new Date(String(change.created_at)).toLocaleDateString()}</p></article>)}</div> : <p className="mt-3 text-sm text-slate-500">No profile change requests.</p>}
                     </section>
-                  </div>
-                </div>
+                  </div>}
+                </div>}
 
-                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                {activeInstituteSection === 'institute-wallet' && <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div><h2 id="institute-wallet" className="flex scroll-mt-24 items-center gap-2 text-lg font-extrabold text-[#0B2E59]"><Wallet className="h-5 w-5" /> Institute wallet</h2><p className="mt-1 text-sm text-slate-500">View your wallet balance, verified credits, and withdrawal requests.</p></div>
                     <div className="grid grid-cols-2 gap-3 text-right"><div><p className="text-xs text-slate-500">Balance</p><p className="font-bold text-slate-900">{formatPaise(data.balancePaise)}</p></div><div><p className="text-xs text-slate-500">Available</p><p className="font-bold text-emerald-800">{formatPaise(data.availablePaise)}</p></div></div>
@@ -1763,20 +1942,20 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                     <div><h3 className="font-bold text-slate-800">Wallet activity</h3>{list('entries').length ? <div className="mt-2 space-y-2">{list('entries').map((entry) => <article key={String(entry.id)} className="flex justify-between gap-3 rounded-lg bg-slate-50 p-3 text-sm"><div><strong>{String(entry.description)}</strong><p className="text-xs text-slate-500">{String(entry.payment_reference || entry.transfer_reference || '')} · {new Date(String(entry.created_at)).toLocaleDateString()}</p></div><span className={`font-bold ${entry.entry_type === 'credit' ? 'text-emerald-700' : 'text-rose-700'}`}>{entry.entry_type === 'credit' ? '+' : '−'}{formatPaise(entry.amount_paise)}</span></article>)}</div> : <p className="mt-2 text-sm text-slate-500">No wallet transactions recorded.</p>}</div>
                     <div><h3 className="font-bold text-slate-800">Withdrawal requests</h3>{list('withdrawals').length ? <div className="mt-2 space-y-2">{list('withdrawals').map((withdrawal) => <article key={String(withdrawal.id)} className="flex justify-between gap-3 rounded-lg bg-slate-50 p-3 text-sm"><div><strong>{formatPaise(withdrawal.amount_paise)}</strong><p className="text-xs capitalize text-slate-500">{String(withdrawal.status)}{withdrawal.transfer_reference ? ` · ${String(withdrawal.transfer_reference)}` : ''}</p></div><span className="text-xs text-slate-500">{new Date(String(withdrawal.created_at)).toLocaleDateString()}</span></article>)}</div> : <p className="mt-2 text-sm text-slate-500">No withdrawal requests.</p>}</div>
                   </div>
-                </section>
+                </section>}
 
-                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                {activeInstituteSection === 'institute-forms' && <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-extrabold text-[#0B2E59]">My submitted forms</h2>
                   {list('forms').length ? <div className="mt-3 grid gap-3 md:grid-cols-2">{list('forms').map((form) => <article key={String(form.id)} className="rounded-lg border border-slate-200 p-4"><div className="flex justify-between gap-2"><h3 className="font-bold text-slate-900">{String(form.title)}</h3><span className="text-xs font-bold capitalize text-slate-600">{String(form.status)}</span></div><p className="mt-1 text-xs text-slate-500">{form.form_type === 'teacher_recruitment' ? 'Teacher recruitment' : 'Exam application'} · Submitted {new Date(String(form.created_at)).toLocaleDateString()}</p><p className="mt-2 text-sm text-slate-600">{String(form.description)}</p></article>)}</div> : <p className="mt-3 text-sm text-slate-500">No institute forms submitted yet.</p>}
-                </section>
+                </section>}
               </div>
             )}
 
-            {user.role === 'center' && (
-              <InstitutionDocumentManagement role="center" />
+            {user.role === 'center' && activeInstituteSection === 'institute-documents' && (
+              <div id="institute-documents" className="scroll-mt-28"><InstitutionDocumentManagement role="center" /></div>
             )}
 
-            {user.role === 'center' && <OrganizationStaffOwnerPanel />}
+            {user.role === 'center' && activeInstituteSection === 'institute-staff' && <div id="institute-staff" className="scroll-mt-28"><OrganizationStaffOwnerPanel /></div>}
 
             {user.role === 'official' && tab === 'applications' && <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Application</th><th className="p-4">Candidate / exam</th><th className="p-4">Submitted</th><th className="p-4">Status</th><th className="p-4">Admit card</th></tr></thead><tbody className="divide-y divide-slate-100">{list('applications').map((item) => <tr key={String(item.id)}><td className="p-4 font-mono font-bold">{String(item.application_number)}</td><td className="p-4">{String(item.candidate_name)}<span className="block text-xs text-slate-500">{String(item.exam_code)}</span></td><td className="p-4 text-slate-500">{new Date(String(item.created_at)).toLocaleDateString()}</td><td className="p-4"><select aria-label={`Status for ${String(item.application_number)}`} value={String(item.status)} onChange={(event) => void updateApplication(String(item.id), event.target.value)} className="rounded-md border border-slate-300 px-2 py-1"><option value="submitted">Submitted</option><option value="under_review">Under review</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></td><td className="p-4 text-xs">{item.admit_card_published ? 'Published' : 'Not published'}</td></tr>)}</tbody></table></section>}
 

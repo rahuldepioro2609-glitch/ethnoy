@@ -1920,3 +1920,83 @@ test('AUTH C1.9.1: real sign-in store as eltnoy_app: completion, single use, rol
     await removeCommittedMfaRows(Q);
   }
 });
+
+
+// Institute dashboard aggregate query: run the actual SQL through the same restricted app role used
+// by the API, against only the disposable cluster guarded by this file's preflight.
+test('INSTITUTE DASHBOARD: center workspace aggregates stay scoped to the institute as eltnoy_app', { skip }, async () => {
+  const { centerWorkspaceQueries } = await import('./authorizationQueries.js');
+  const prefix = `it-cwd-${randomUUID().replaceAll('-', '')}-`;
+  const instituteId = `${prefix}institute`;
+  const centerCode = instituteId.toUpperCase();
+  const { db, end } = appDatabase();
+  const checkinCases = [
+    { status: 'verified', updatedAt: 'now()' },
+    { status: 'admitted', updatedAt: "now() - interval '1 hour'" },
+    { status: 'flagged', updatedAt: "((date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - interval '1 month' + interval '10 days') AT TIME ZONE 'Asia/Kolkata')" },
+    { status: 'rejected', updatedAt: "((date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - interval '6 months' + interval '10 days') AT TIME ZONE 'Asia/Kolkata')" },
+  ] as const;
+  try {
+    await q(
+      `INSERT INTO users (id, login_id, display_name, role, password_hash)
+       VALUES ($1, $2, 'Synthetic dashboard institute', 'center', '!integration-test-only')`,
+      [instituteId, centerCode],
+    );
+
+    for (const [index, checkin] of checkinCases.entries()) {
+      const applicationId = `${prefix}application-${index}`;
+      await q(
+        `INSERT INTO applications (
+           id, application_number, exam_code, candidate_name, father_name, date_of_birth, gender,
+           category, email, phone, first_city_preference, second_city_preference, language_medium
+         ) VALUES ($1, $2, 'IT-DASHBOARD', 'Synthetic Candidate', 'Synthetic Parent', '2000-01-01',
+                  'Other', 'General', 'candidate@example.test', '+910000000000', 'Test City', 'Test City 2', 'English')`,
+        [applicationId, `${prefix}${index}`],
+      );
+      await q(
+        `INSERT INTO center_checkins (id, application_id, center_code, status, updated_at)
+         VALUES ($1, $2, $3, $4, ${checkin.updatedAt})`,
+        [`${prefix}checkin-${index}`, applicationId, centerCode, checkin.status],
+      );
+    }
+
+    for (const [index, status] of ['approved', 'approved', 'pending', 'rejected'].entries()) {
+      await q(
+        `INSERT INTO institute_forms (id, institute_id, form_type, title, description, eligibility, status)
+         VALUES ($1, $2, 'exam_application', 'Synthetic form', 'Synthetic description for integration coverage', 'Open to test users', $3)`,
+        [`${prefix}form-${index}`, instituteId, status],
+      );
+    }
+
+    const queryList = centerWorkspaceQueries(instituteId);
+    assert.equal(queryList.length, 6, 'the dashboard aggregate remains part of the institute workspace query set');
+    const results = await Promise.all(queryList.map(({ text, values }) => db.query(text, values)));
+    assert.equal((await db.query('SELECT current_user AS role')).rows[0].role, 'eltnoy_app');
+
+    const summary = results[5].rows[0] as Record<string, unknown>;
+    assert.equal(summary.total_checkins, '4');
+    assert.equal(summary.verified_checkins, '1');
+    assert.equal(summary.admitted_checkins, '1');
+    assert.equal(summary.flagged_checkins, '1');
+    assert.equal(summary.rejected_checkins, '1');
+    assert.equal(summary.approved_forms, '2');
+    assert.equal(summary.pending_forms, '1');
+    assert.equal(summary.balance_paise, '0');
+    assert.equal(summary.reserved_paise, '0');
+
+    const expectedMonths = (await q(`
+      SELECT to_char(date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM') AS current_month,
+             to_char(date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - interval '1 month', 'YYYY-MM') AS previous_month
+    `))[0];
+    assert.deepEqual(summary.monthly_checkins, [
+      { month: expectedMonths.previous_month, count: '1' },
+      { month: expectedMonths.current_month, count: '2' },
+    ], 'the six-month chart groups in India time, oldest first, and excludes the older check-in');
+  } finally {
+    await end();
+    await q('DELETE FROM center_checkins WHERE id LIKE $1 || \'%\'', [prefix]);
+    await q('DELETE FROM applications WHERE id LIKE $1 || \'%\'', [prefix]);
+    await q('DELETE FROM institute_forms WHERE id LIKE $1 || \'%\'', [prefix]);
+    await q('DELETE FROM users WHERE id = $1', [instituteId]);
+  }
+});

@@ -1365,6 +1365,18 @@ app.get('/api/center/workspace', requireAuth, requireRoles('center'), asyncRoute
     withdrawals: withdrawals.rows,
     balancePaise: wallet.balance_paise,
     availablePaise: (BigInt(wallet.balance_paise) - BigInt(wallet.reserved_paise)).toString(),
+    dashboardSummary: {
+      totalCheckins: wallet.total_checkins,
+      checkinStatuses: {
+        verified: wallet.verified_checkins,
+        admitted: wallet.admitted_checkins,
+        flagged: wallet.flagged_checkins,
+        rejected: wallet.rejected_checkins,
+      },
+      approvedForms: wallet.approved_forms,
+      pendingForms: wallet.pending_forms,
+      monthlyCheckins: wallet.monthly_checkins,
+    },
   });
 }));
 

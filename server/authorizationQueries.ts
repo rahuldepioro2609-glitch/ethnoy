@@ -112,11 +112,39 @@ export function centerWorkspaceQueries(instituteId: string): ParameterizedQuery[
       values: [instituteId],
     },
     {
-      text: `SELECT
+      text: `WITH institute AS (
+               SELECT id, upper(login_id) AS center_code
+               FROM users WHERE id = $1 AND role = 'center'
+             ),
+             checkins AS (
+               SELECT c.status, c.updated_at
+               FROM center_checkins c
+               JOIN institute i ON c.center_code = i.center_code
+             )
+             SELECT
                COALESCE((SELECT SUM(CASE WHEN entry_type = 'credit' THEN amount_paise ELSE -amount_paise END)
                          FROM institute_wallet_entries WHERE institute_id = $1), 0)::text AS balance_paise,
                COALESCE((SELECT SUM(amount_paise) FROM institute_withdrawals
-                         WHERE institute_id = $1 AND status IN ('pending', 'approved')), 0)::text AS reserved_paise`,
+                         WHERE institute_id = $1 AND status IN ('pending', 'approved')), 0)::text AS reserved_paise,
+               (SELECT count(*)::text FROM checkins) AS total_checkins,
+               (SELECT count(*)::text FROM checkins WHERE status = 'verified') AS verified_checkins,
+               (SELECT count(*)::text FROM checkins WHERE status = 'admitted') AS admitted_checkins,
+               (SELECT count(*)::text FROM checkins WHERE status = 'flagged') AS flagged_checkins,
+               (SELECT count(*)::text FROM checkins WHERE status = 'rejected') AS rejected_checkins,
+               (SELECT count(*)::text FROM institute_forms WHERE institute_id = $1 AND status = 'approved') AS approved_forms,
+               (SELECT count(*)::text FROM institute_forms WHERE institute_id = $1 AND status = 'pending') AS pending_forms,
+               COALESCE((
+                 SELECT json_agg(json_build_object('month', monthly.month, 'count', monthly.checkins) ORDER BY monthly.month)
+                 FROM (
+                   SELECT to_char(date_trunc('month', updated_at AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM') AS month,
+                          count(*)::text AS checkins
+                   FROM checkins
+                   WHERE updated_at >= (
+                     date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - interval '5 months'
+                   ) AT TIME ZONE 'Asia/Kolkata'
+                   GROUP BY 1
+                 ) monthly
+               ), '[]'::json) AS monthly_checkins`,
       values: [instituteId],
     },
   ];

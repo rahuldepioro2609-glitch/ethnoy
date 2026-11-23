@@ -1,4 +1,5 @@
 import { Language } from './languageLogic';
+import { instituteDashboardTranslations } from './instituteDashboardTranslations';
 
 type TranslationSet = Partial<Record<Language, string>>;
 
@@ -301,6 +302,7 @@ const additionalTranslations: Record<string, TranslationSet> = {
 };
 
 const translations: Record<string, TranslationSet> = {
+  ...instituteDashboardTranslations,
   ...baseTranslations,
   ...additionalTranslations,
 };
