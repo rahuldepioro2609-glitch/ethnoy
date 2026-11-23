@@ -65,13 +65,13 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
   };
 
   return (
-    <section id="exam-list" className="py-8 bg-[#F7F6F1]" aria-label="ELTNOY Information Center">
+    <section id="exam-list" className="py-8 bg-[#EEF3FA]" aria-label="ELTNOY Information Center">
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           {/* COLUMN 1: Latest Notifications (approx 4 cols) */}
           <div id="public-notices" className="scroll-mt-56 lg:col-span-4 bg-white rounded-xl shadow-xs border border-slate-200/90 overflow-hidden flex flex-col">
             {/* Deep Navy Blue Header Bar */}
-            <div className="bg-[#0B254E] text-white px-5 py-3.5 flex items-center justify-between">
+            <div className="bg-[#0B2E59] text-white px-5 py-3.5 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <Bell className="w-4 h-4 text-sky-400" />
                 <h3 className="text-sm font-bold tracking-tight">
@@ -151,7 +151,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
                   {/* Left: Date block + Exam info */}
                   <div className="flex items-center gap-3 min-w-0">
                     {/* Date Block */}
-                    <div className="w-11 h-11 rounded-lg bg-teal-50 border border-teal-100 text-teal-700 flex flex-col items-center justify-center shrink-0">
+                    <div className="w-11 h-11 rounded-lg bg-blue-50 border border-blue-100 text-blue-700 flex flex-col items-center justify-center shrink-0">
                       <span className="text-sm font-black leading-none">{exam.day}</span>
                       <span className="text-[10px] font-bold uppercase tracking-wider">{exam.month}</span>
                     </div>
@@ -195,7 +195,7 @@ export const ThreeColumnDataGrid: React.FC<ThreeColumnDataGridProps> = ({
           {/* COLUMN 3: Quick Links (3 cols) */}
           <div className="lg:col-span-3 bg-white rounded-xl shadow-xs border border-slate-200/90 overflow-hidden flex flex-col">
             {/* Vibrant Cyan Header Bar */}
-            <div className="bg-[#0284C7] text-white px-5 py-3.5 flex items-center gap-2.5">
+            <div className="bg-[#0B2E59] text-white px-5 py-3.5 flex items-center gap-2.5">
               <Link2 className="w-4 h-4 text-sky-100" />
               <h3 className="text-sm font-bold tracking-tight">
                 Quick Links

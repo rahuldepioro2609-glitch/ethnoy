@@ -478,7 +478,7 @@ export default function App() {
   return (
     <div
       className={`min-h-screen flex flex-col transition-all ${loggedInUser ? 'pb-24' : ''} ${getFontSizeClass()} ${
-        highContrast ? 'bg-black text-amber-300' : 'bg-white text-slate-900'
+        highContrast ? 'bg-black text-amber-300' : 'bg-[#F5F7FB] text-slate-900'
       }`}
     >
       {/* Top Utility Bar (Dark Navy #0B2E59): Welcome | Helpdesk | Phone | Email | Language */}

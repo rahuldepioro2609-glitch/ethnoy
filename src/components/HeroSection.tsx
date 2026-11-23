@@ -93,11 +93,11 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
   };
 
   return (
-    <section className="relative overflow-hidden bg-gradient-to-r from-[#F7F6F1] via-[#F1F7F2] to-[#EAF6EF] border-b border-slate-200/80">
+    <section className="relative overflow-hidden bg-gradient-to-r from-[#EEF3FA] via-white to-[#EAF0F8] border-b border-slate-200">
       {/* Soft teal/cyan decorative diagonal shapes matching reference mockup */}
       <div className="absolute inset-0 pointer-events-none opacity-40">
-        <div className="absolute -right-20 -top-20 w-96 h-96 rounded-full bg-teal-200/40 blur-3xl" />
-        <div className="absolute right-1/4 top-0 w-80 h-full bg-gradient-to-b from-teal-100/30 via-transparent to-blue-100/30 transform -skew-x-12" />
+        <div className="absolute -right-20 -top-20 w-96 h-96 rounded-full bg-blue-200/40 blur-3xl" />
+        <div className="absolute right-1/4 top-0 w-80 h-full bg-gradient-to-b from-blue-100/40 via-transparent to-emerald-100/30 transform -skew-x-12" />
       </div>
 
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12 relative z-10">
@@ -105,7 +105,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           {/* Left Column: Heading, Subtitle, 4 Checkmarks, CTAs */}
           <div className="lg:col-span-4 space-y-5">
             {/* Tagline */}
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/80 border border-sky-200 shadow-2xs text-[#0284c7] text-xs font-semibold">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-blue-200 shadow-sm text-[#0B2E59] text-xs font-semibold">
               <Sparkles className="w-3.5 h-3.5 text-sky-500" />
               <span>{t('Online Examination Services')}</span>
             </div>
