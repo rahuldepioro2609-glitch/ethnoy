@@ -21,15 +21,16 @@ import { CandidateResultModal } from './components/CandidateResultModal';
 import { AnswerKeyObjectionModal } from './components/AnswerKeyObjectionModal';
 import { FeedbackSlideOut } from './components/FeedbackSlideOut';
 import { ExamItem, NoticeItem } from './data/portalData';
-import { UserCheck, LogOut, CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
+import { CheckCircle2, BellRing, CalendarDays } from 'lucide-react';
 import { ApiError, apiRequest, apiRequestWithMeta } from './api';
 import { PortalRole, RoleDashboard, RoleLoginPage } from './components/RolePortal';
+import { InstituteSignOutPage } from './components/InstituteSignOutPage';
 import { PlatformStaffPortal } from './components/staff/PlatformStaffPortal';
 import { isPlatformStaffPath } from './utils/staffAccess';
 import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './utils/examSchedule';
 import { LANGUAGE_LOCALES, Language } from './utils/languageLogic';
 import { useLanguage } from './utils/languageContext';
-import { ADMIN_HOME_PATH, planSurfaceNavigation, requiredSurfaceForPath, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
+import { ADMIN_HOME_PATH, instituteSignOutViewState, planSurfaceNavigation, requiredSurfaceForPath, urlForSurface, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
 import { clearPortalHintInBrowser, readPortalHintFromBrowser, type PortalHint } from './utils/portalHint';
 
 function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
@@ -242,12 +243,19 @@ export default function App() {
       .finally(() => setAuthLoading(false));
   }, []);
 
-  const handleLogout = async () => {
+  const handleLogout = async (returnToMarketing = false) => {
     try {
       await apiRequest<void>('/api/auth/logout', { method: 'POST' });
       clearPortalHintInBrowser();
       setPortalHint(null);
       setLoggedInUser(null);
+      if (returnToMarketing && surfaceHostnames) {
+        const marketingHome = urlForSurface(`${window.location.origin}/`, 'marketing', surfaceHostnames);
+        if (marketingHome) {
+          window.location.assign(marketingHome);
+          return;
+        }
+      }
       navigate('/');
     } catch (error) {
       setSystemAlert(error instanceof Error ? error.message : 'Could not sign out. Please try again.');
@@ -425,7 +433,11 @@ export default function App() {
   // address taken from the cookie). Not shown when someone is signed in on this site itself.
   const instituteReturn = !loggedInUser && portalHint && surfaceHostnames?.institution
     && window.location.hostname !== surfaceHostnames.institution
-    ? { name: portalHint.name, href: `${window.location.protocol}//${surfaceHostnames.institution}/dashboard/center` }
+    ? (() => {
+      const dashboardHref = urlForSurface(`${window.location.origin}/dashboard/center`, 'institution', surfaceHostnames);
+      const signOutHref = urlForSurface(`${window.location.origin}/sign-out/institute`, 'institution', surfaceHostnames);
+      return dashboardHref && signOutHref ? { name: portalHint.name, href: dashboardHref, signOutHref } : null;
+    })()
     : null;
 
   const handlePortalLogin = (user: { name: string; id: string; role: PortalRole; isSuperAdmin: boolean }) => {
@@ -463,6 +475,27 @@ export default function App() {
     return <PlatformStaffPortal pathname={pathname} navigate={navigate} onHome={() => navigate('/')} />;
   }
 
+  if (pathname === '/sign-out/institute') {
+    const instituteSignOutState = instituteSignOutViewState({
+      authLoading,
+      hostnames: surfaceHostnames,
+      currentHostname: window.location.hostname,
+      accountRole: loggedInUser?.accountRole,
+    });
+    const marketingHome = surfaceHostnames
+      ? urlForSurface(`${window.location.origin}/`, 'marketing', surfaceHostnames) ?? '/'
+      : '/';
+    return (
+      <InstituteSignOutPage
+        state={instituteSignOutState}
+        accountName={loggedInUser?.name}
+        marketingHome={marketingHome}
+        onSignOut={() => void handleLogout(true)}
+        onCancel={() => navigate('/dashboard/center')}
+      />
+    );
+  }
+
   if (pathname.startsWith('/login')) {
     if (authLoading) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Checking secure session…</main>;
     if (loggedInUser) return <main className="min-h-screen bg-[#EEF6F1] p-10 text-center text-slate-600">Opening your dashboard…</main>;
@@ -498,7 +531,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen flex flex-col transition-all ${loggedInUser ? 'pb-24' : ''} ${getFontSizeClass()} ${
+      className={`min-h-screen flex flex-col transition-all ${getFontSizeClass()} ${
         highContrast ? 'bg-black text-amber-300' : 'bg-[#F5F7FB] text-slate-900'
       }`}
     >
@@ -515,7 +548,9 @@ export default function App() {
       <StickyNavbar
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenLogin={() => navigate(loggedInUser ? `/dashboard/${loggedInUser.accountRole}` : '/login')}
-        isAuthenticated={Boolean(loggedInUser)}
+        account={loggedInUser ? { name: loggedInUser.name, role: loggedInUser.accountRole } : null}
+        authLoading={authLoading}
+        onSignOut={() => void handleLogout()}
         onOpenAdmitCard={handleOpenAdmitCard}
         onOpenMockExam={handleOpenMockExam}
         onOpenCenterLocator={handleOpenCenterLocator}
@@ -564,42 +599,6 @@ export default function App() {
           </button>
         </div>
       </section>
-
-      {/* Signed-in account bar */}
-      {loggedInUser && (
-        <div className="fixed inset-x-0 bottom-3 z-40 flex justify-center px-3 sm:bottom-5">
-          <div className="flex w-full max-w-xl items-center gap-3 rounded-full border border-slate-200 bg-white/95 p-2 pl-2.5 shadow-[0_12px_36px_-14px_rgba(15,23,42,0.4)] backdrop-blur-md">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-              loggedInUser.accountRole === 'official' ? 'bg-blue-100 text-blue-800'
-                : loggedInUser.accountRole === 'center' ? 'bg-sky-100 text-sky-800'
-                  : 'bg-emerald-100 text-emerald-800'
-            }`}>
-              <UserCheck className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1 leading-tight">
-              <p className="truncate text-sm font-bold text-slate-900">{loggedInUser.name}</p>
-              <p className="truncate text-[11px] font-medium text-slate-500">
-                {loggedInUser.role} <span className="px-1 text-slate-300">·</span> ID: {loggedInUser.id}
-              </p>
-            </div>
-            <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide sm:inline-flex ${
-              loggedInUser.accountRole === 'official' ? 'bg-blue-50 text-blue-800'
-                : loggedInUser.accountRole === 'center' ? 'bg-sky-50 text-sky-800'
-                  : 'bg-emerald-50 text-emerald-800'
-            }`}>
-              {loggedInUser.accountRole === 'official' ? 'Admin' : loggedInUser.accountRole === 'center' ? 'Institute' : 'Student'}
-            </span>
-            <button
-              onClick={() => void handleLogout()}
-              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full bg-slate-900 px-4 text-xs font-bold text-white transition hover:bg-slate-700"
-              aria-label="Sign out"
-            >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">{t('Sign out')}</span>
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* System Toast Alert */}
       {systemAlert && (

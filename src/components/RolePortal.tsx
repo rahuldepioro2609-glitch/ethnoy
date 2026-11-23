@@ -8,10 +8,14 @@ import {
   ArrowLeft,
   ArrowRight,
   Award,
+  BookOpen,
   Building2,
   CalendarDays,
+  CalendarCheck,
   CheckCircle2,
   ClipboardCheck,
+  ClipboardList,
+  CreditCard,
   Download,
   Eye,
   EyeOff,
@@ -19,12 +23,15 @@ import {
   FolderOpen,
   GraduationCap,
   Home,
+  LifeBuoy,
   LayoutDashboard,
   LockKeyhole,
   LogOut,
   Menu,
   PlusCircle,
   RefreshCw,
+  Search,
+  Settings,
   ShieldCheck,
   Upload,
   UserRound,
@@ -40,6 +47,8 @@ import { StudentAuthPanel } from './StudentAuthPanel';
 import { StudentGoogleLinkCard } from './StudentGoogleLinkCard';
 import { emailOnlyVerification, googleNotice, isChallenge, signInAvailable, unavailableMessage, verificationMessage, type ProviderStatus, type VerificationChallengeView } from '../utils/authVerification';
 import { OnlineExamRunner } from './OnlineExamRunner';
+import { ExamApplyModal } from './ExamApplyModal';
+import type { ExamItem } from '../data/portalData';
 import { BrandLogo } from './BrandLogo';
 import { useLanguage } from '../utils/languageContext';
 import { NO_LINKED_APPLICATIONS_MESSAGE } from '../utils/candidateDashboard';
@@ -56,6 +65,7 @@ import { InstituteDashboardOverview } from './InstituteDashboardOverview';
 import { InstituteAdvancedSection, type InstituteAdvancedSectionId } from './InstituteAdvancedSection';
 import { savePortalHintInBrowser } from '../utils/portalHint';
 import { ErrorState, LoadingState } from './ui';
+import { currentDateInTimeZone, DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from '../utils/examSchedule';
 
 export type PortalRole = 'candidate' | 'center' | 'official';
 
@@ -92,8 +102,8 @@ const roleDetails: Record<PortalRole, { title: string; subtitle: string; label: 
 
 const dashboardTheme: Record<PortalRole, { shell: string; header: string; eyebrow: string; description: string }> = {
   candidate: {
-    shell: 'bg-emerald-50/60',
-    header: 'from-emerald-950 via-emerald-900 to-[#0B2E59]',
+    shell: 'bg-[#F5F7FB]',
+    header: 'from-[#173B70] via-[#173B70] to-[#2563EB]',
     eyebrow: 'Student workspace',
     description: 'Track your exam applications, admit card, results, and practice history.',
   },
@@ -707,10 +717,24 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
   const { t } = useLanguage();
   const [data, setData] = useState<PortalData>({});
   const [tab, setTab] = useState<DashboardTab>('overview');
+  const [activeCandidateSection, setActiveCandidateSection] = useState('dashboard');
+  const [isCandidateMenuOpen, setIsCandidateMenuOpen] = useState(false);
+  const [candidateExamSearch, setCandidateExamSearch] = useState('');
+  const [candidateExamCategory, setCandidateExamCategory] = useState('all');
+  const [candidateApplyExam, setCandidateApplyExam] = useState<ExamItem | null>(null);
+  const [candidateTicketType, setCandidateTicketType] = useState('other');
+  const [candidateTicketTitle, setCandidateTicketTitle] = useState('');
+  const [candidateTicketDescription, setCandidateTicketDescription] = useState('');
+  const [candidateTicketEmail, setCandidateTicketEmail] = useState('');
+  const [candidateTicketApplication, setCandidateTicketApplication] = useState('');
+  const [candidateTicketId, setCandidateTicketId] = useState<string | null>(null);
+  const [isSubmittingCandidateTicket, setIsSubmittingCandidateTicket] = useState(false);
   const [activeInstituteSection, setActiveInstituteSection] = useState('institute-overview');
   const [isInstituteMenuOpen, setIsInstituteMenuOpen] = useState(false);
   const instituteMenuRef = useRef<HTMLElement>(null);
   const instituteMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const candidateMenuRef = useRef<HTMLElement>(null);
+  const candidateMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [sectionStatuses, setSectionStatuses] = useState<DashboardSectionStatusMap>({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -778,6 +802,9 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
       }));
       loadSection('online-exams', '/api/online-exams', (onlineExams) => ({
         onlineExams: onlineExams.exams,
+      }));
+      loadSection('exams', '/api/exams', (exams) => ({
+        candidateExams: exams.exams,
       }));
     } else if (user.role === 'center') {
       loadSection('checkins', '/api/center/checkins', (checkins) => ({
@@ -1162,6 +1189,41 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     { id: 'institute-settings', label: 'Settings & Support', icon: LockKeyhole },
   ];
   const selectedInstituteSection = instituteNavItems.find((item) => item.id === activeInstituteSection) ?? instituteNavItems[0];
+  const candidateNavItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'profile', label: 'My Profile', icon: UserRound },
+    { id: 'browse-exams', label: 'Browse Examinations', icon: Search },
+    { id: 'apply-exam', label: 'Apply for Examination', icon: PlusCircle },
+    { id: 'applications', label: 'My Applications', icon: FileText },
+    { id: 'payments', label: 'Payments & Fees', icon: CreditCard },
+    { id: 'admit-cards', label: 'Admit Cards', icon: Award },
+    { id: 'my-exams', label: 'My Examinations', icon: ClipboardList },
+    { id: 'instructions', label: 'Exam Instructions', icon: BookOpen },
+    { id: 'results', label: 'Results & Merit List', icon: CheckCircle2 },
+    { id: 'attendance', label: 'Exam Attendance', icon: CalendarCheck },
+    { id: 'interview', label: 'Online Interview', icon: UserRound },
+    { id: 'training', label: 'Online Training', icon: GraduationCap },
+    { id: 'helpdesk', label: 'Helpdesk & Support', icon: LifeBuoy },
+    { id: 'settings', label: 'Settings', icon: Settings },
+  ];
+  const candidateSectionDescriptions: Record<string, string> = {
+    dashboard: 'Your applications, upcoming exam dates, admit cards and published results at a glance.',
+    profile: 'Your student account details and verified sign-in options.',
+    'browse-exams': 'Search published examinations and check eligibility, dates, mode and fee details.',
+    'apply-exam': 'Start an application for an examination whose registration window is open.',
+    applications: 'Track the status of applications linked to your student account.',
+    payments: 'Review fee information shown for your applications.',
+    'admit-cards': 'Check your application status and open the secure admit-card lookup.',
+    'my-exams': 'Open eligible online exams and review your completed practice tests.',
+    instructions: 'Review published exam details and the instructions available for your exams.',
+    results: 'View which results are published and open your secure scorecard lookup.',
+    attendance: 'See attendance information when it is published for your account.',
+    interview: 'Interview schedules will appear here when they are provided by the exam team.',
+    training: 'Training courses will appear here when they are provided by the exam team.',
+    helpdesk: 'Send a support request to the ELTNOY team and save its ticket reference.',
+    settings: 'Manage linked sign-in options or securely sign out.',
+  };
+  const selectedCandidateSection = candidateNavItems.find((item) => item.id === activeCandidateSection) ?? candidateNavItems[0];
   const instituteSectionDescriptions: Record<string, string> = {
     'institute-overview': 'Manage examinations, applicants and institute activity in one place.',
     'institute-profile': 'Manage your institute profile and view institutional verification details.',
@@ -1191,6 +1253,30 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
         aria-current={active ? 'page' : undefined}
         onClick={() => jumpToInstituteSection(item.id)}
         className={`flex w-full items-center gap-3 rounded-lg px-3 text-left text-sm transition ${variant === 'desktop' ? 'py-2.5' : 'py-3'} ${active ? 'bg-emerald-600 font-bold text-white shadow-sm' : variant === 'desktop' ? 'font-semibold text-slate-200 hover:bg-white/10' : 'font-semibold text-slate-200 hover:bg-white/10'}`}
+      >
+        <Icon className="h-4 w-4 shrink-0" />
+        <span className="min-w-0 flex-1">{t(item.label)}</span>
+        {!active && variant === 'mobile' && <ArrowRight className="h-4 w-4 shrink-0" />}
+      </button>
+    );
+  });
+  const openCandidateSection = (sectionId: string) => {
+    setActiveCandidateSection(sectionId);
+    setIsCandidateMenuOpen(false);
+    setError(null);
+    setNotice(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const renderCandidateNavItems = (variant: 'desktop' | 'mobile') => candidateNavItems.map((item) => {
+    const Icon = item.icon;
+    const active = activeCandidateSection === item.id;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        aria-current={active ? 'page' : undefined}
+        onClick={() => openCandidateSection(item.id)}
+        className={`flex w-full items-center gap-3 rounded-lg px-3 text-left text-sm transition ${variant === 'desktop' ? 'py-2.5' : 'py-3'} ${active ? 'bg-blue-600 font-bold text-white shadow-sm' : 'font-semibold text-slate-200 hover:bg-white/10'}`}
       >
         <Icon className="h-4 w-4 shrink-0" />
         <span className="min-w-0 flex-1">{t(item.label)}</span>
@@ -1259,6 +1345,135 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     }
     return null;
   };
+  const candidateExamItems: ExamItem[] = list('candidateExams').flatMap((row) => {
+    const examDate = String(row.examDate || '').slice(0, 10);
+    const regStart = String(row.regStart || '').slice(0, 10);
+    const regEnd = String(row.regEnd || '').slice(0, 10);
+    if (!examDate || !regStart || !regEnd) return [];
+    let parts: { day: string; month: string };
+    let isOpen = false;
+    try {
+      parts = getDateOnlyParts(examDate);
+      isOpen = isRegistrationOpen(regStart, regEnd, String(row.timeZone || DEFAULT_EXAM_TIME_ZONE));
+    } catch {
+      parts = { day: '—', month: '' };
+    }
+    return [{
+      id: String(row.id || row.code || ''),
+      code: String(row.code || ''),
+      name: String(row.name || 'Examination'),
+      category: String(row.category || 'Professional') as ExamItem['category'],
+      targetAudience: String(row.targetAudience || ''),
+      day: parts.day,
+      month: parts.month,
+      regStart,
+      regEnd,
+      examDate,
+      timeZone: String(row.timeZone || DEFAULT_EXAM_TIME_ZONE),
+      fee: String(row.fee || 'See exam details'),
+      status: isOpen ? 'Apply Now' : 'Apply Soon',
+      isButtonActive: isOpen,
+      duration: String(row.duration || 'See exam instructions'),
+      mode: String(row.mode || 'To be announced'),
+      shifts: String(row.shifts || 'To be announced'),
+      syllabusHighlights: [],
+    }];
+  });
+  const candidateAppliedExamCodes = new Set(list('applications').map((item) => String(item.exam_code)));
+  const candidateToday = currentDateInTimeZone(new Date(), DEFAULT_EXAM_TIME_ZONE);
+  const filteredCandidateExams = candidateExamItems.filter((exam) => {
+    const query = candidateExamSearch.trim().toLowerCase();
+    const matchesSearch = !query || `${exam.name} ${exam.code} ${exam.category} ${exam.targetAudience}`.toLowerCase().includes(query);
+    const matchesCategory = candidateExamCategory === 'all' || exam.category === candidateExamCategory;
+    const matchesOpen = activeCandidateSection !== 'apply-exam' || exam.isButtonActive;
+    return matchesSearch && matchesCategory && matchesOpen;
+  });
+  const submitCandidateTicket = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSubmittingCandidateTicket(true);
+    setError(null);
+    setCandidateTicketId(null);
+    try {
+      const { entry } = await apiRequest<{ entry: { id: string } }>('/api/feedback', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: candidateTicketType,
+          title: candidateTicketTitle.trim(),
+          description: candidateTicketDescription.trim(),
+          module: 'Student portal',
+          candidateName: user.name,
+          email: candidateTicketEmail.trim() || undefined,
+          applicationNumber: candidateTicketApplication.trim() || undefined,
+          priority: 'medium',
+        }),
+      });
+      setCandidateTicketId(entry.id);
+      setCandidateTicketTitle('');
+      setCandidateTicketDescription('');
+    } catch (ticketError) {
+      setError(ticketError instanceof Error ? ticketError.message : 'Could not submit your support request. Please try again.');
+    } finally {
+      setIsSubmittingCandidateTicket(false);
+    }
+  };
+  const openCandidateExamApply = (exam: ExamItem) => {
+    if (candidateAppliedExamCodes.has(exam.code)) {
+      setNotice('Your account already has an application for this examination. Open My Applications to see its status.');
+      return;
+    }
+    setCandidateApplyExam(exam);
+  };
+  const renderCandidateExams = (openOnly = false) => (
+    <>
+      <div className="mb-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+        <label className="relative block">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <span className="sr-only">Search examinations</span>
+          <input value={candidateExamSearch} onChange={(event) => setCandidateExamSearch(event.target.value)} placeholder="Search by exam, code or eligibility" className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm" />
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          <span className="sr-only">Filter by category</span>
+          <select value={candidateExamCategory} onChange={(event) => setCandidateExamCategory(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5">
+            <option value="all">All categories</option>
+            <option value="Undergraduate">Undergraduate</option>
+            <option value="Scholarship">Scholarship</option>
+            <option value="Teacher">Teacher</option>
+            <option value="Professional">Professional</option>
+          </select>
+        </label>
+      </div>
+      {candidateSectionStatus('exams', 'Published examinations') ?? (filteredCandidateExams.length ? (
+        <div className="grid gap-4 xl:grid-cols-2">
+          {filteredCandidateExams.map((exam) => {
+            const applied = candidateAppliedExamCodes.has(exam.code);
+            return (
+              <article key={exam.code} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wide text-blue-700">{exam.category} · {exam.code}</span>
+                    <h3 className="mt-1 text-lg font-extrabold text-[#0B2E59]">{exam.name}</h3>
+                  </div>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${exam.isButtonActive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{exam.isButtonActive ? 'Applications open' : 'Applications closed'}</span>
+                </div>
+                <p className="mt-2 text-sm text-slate-600">{exam.targetAudience}</p>
+                <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+                  <div><dt className="text-xs text-slate-500">Exam date</dt><dd className="font-semibold text-slate-800">{exam.examDate}</dd></div>
+                  <div><dt className="text-xs text-slate-500">Registration</dt><dd className="font-semibold text-slate-800">{exam.regStart} – {exam.regEnd}</dd></div>
+                  <div><dt className="text-xs text-slate-500">Mode & duration</dt><dd className="font-semibold text-slate-800">{exam.mode} · {exam.duration}</dd></div>
+                  <div><dt className="text-xs text-slate-500">Published fee information</dt><dd className="font-semibold text-slate-800">{exam.fee}</dd></div>
+                </dl>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {openOnly || activeCandidateSection === 'apply-exam'
+                    ? <button type="button" disabled={!exam.isButtonActive || applied} onClick={() => openCandidateExamApply(exam)} className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400">{applied ? 'Already applied' : exam.isButtonActive ? 'Start application' : 'Registration closed'}</button>
+                    : <button type="button" onClick={() => openCandidateSection('apply-exam')} className="rounded-lg border border-blue-700 px-4 py-2.5 text-sm font-bold text-blue-800 hover:bg-blue-50">View application options</button>}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600">{openOnly ? 'There are no published examinations currently accepting applications.' : 'No published examinations match your search.'}</p>)}
+    </>
+  );
 
   useEffect(() => {
     const profile = record('profile');
@@ -1302,6 +1517,27 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     };
   }, [isInstituteMenuOpen]);
 
+  useEffect(() => {
+    if (!isCandidateMenuOpen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setIsCandidateMenuOpen(false);
+      candidateMenuButtonRef.current?.focus();
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (candidateMenuRef.current?.contains(target) || candidateMenuButtonRef.current?.contains(target)) return;
+      setIsCandidateMenuOpen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [isCandidateMenuOpen]);
+
   const instituteSectionErrors: Record<string, string> = {
     'center:checkins': 'Candidate check-ins could not be loaded',
     'center:workspace': 'Institute forms, profile and wallet could not be loaded',
@@ -1326,18 +1562,22 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
 
   return (
     <main className={`min-h-screen text-slate-900 ${theme.shell}`}>
-      {user.role === 'center' && (
+      {user.role === 'center' && import.meta.env.DEV && import.meta.env.VITE_ELTNOY_LIVE_PREVIEW === 'true' && (
+        <div role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm font-semibold text-amber-950">
+          {t('Live institute data is connected. Changes are disabled in this local preview.')}
+        </div>
+      )}
+      {(user.role === 'center' || user.role === 'candidate') && (
         <div className="bg-[#0B2E59] text-white">
           <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 py-2 text-[11px] font-bold tracking-[0.12em] sm:px-6">
             <span className="uppercase">ELTNOY {t('Examination portal')}</span>
-            <span className="hidden text-blue-100 sm:inline"><span className="uppercase">{t('Institute workspace')}</span> · {instituteDisplayName}</span>
+            <span className="hidden text-blue-100 sm:inline"><span className="uppercase">{t(user.role === 'center' ? 'Institute workspace' : 'Student workspace')}</span> · {user.role === 'center' ? instituteDisplayName : user.name}</span>
           </div>
         </div>
       )}
-      <header className={`${user.role === 'center' ? 'sticky top-0 z-40 bg-white text-slate-900 border-b border-slate-200 shadow-sm' : 'bg-gradient-to-r ' + theme.header + ' text-white shadow-md'}`}>
-        {/* Institute: one row at every width (icon-only buttons on phones) and the same 1600px
-            width as the top bar and the page content. Other roles keep the original header. */}
-        <div className={user.role === 'center'
+      <header className={`${user.role !== 'official' ? 'sticky top-0 z-40 bg-white text-slate-900 border-b border-slate-200 shadow-sm' : 'bg-gradient-to-r ' + theme.header + ' text-white shadow-md'}`}>
+        {/* Student and institute headers keep navigation reachable on small screens. */}
+        <div className={user.role !== 'official'
           ? 'relative mx-auto flex max-w-[1600px] items-center justify-between gap-2 px-4 py-3 sm:gap-4 sm:px-6'
           : 'mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6'}
         >
@@ -1355,8 +1595,21 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 {isInstituteMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
               </button>
             )}
-            {user.role === 'center' ? <BrandLogo compact /> : <BrandLogo compact light />}
-            <div className={`min-w-0 ${user.role === 'center' ? 'hidden lg:block' : ''}`}><p className="truncate font-black tracking-wide">{user.role === 'center' ? t('Institute Dashboard') : `${t(detail.label)} ${t('Portal')}`}</p><p className={`truncate text-xs ${user.role === 'center' ? 'text-slate-500' : 'text-slate-300'}`}>{user.role === 'center' ? instituteDisplayName : user.name} · {user.id}</p></div>
+            {user.role === 'candidate' && (
+              <button
+                ref={candidateMenuButtonRef}
+                type="button"
+                aria-label={t(isCandidateMenuOpen ? 'Close student workspace menu' : 'Open student workspace menu')}
+                aria-controls="candidate-section-menu"
+                aria-expanded={isCandidateMenuOpen}
+                onClick={() => setIsCandidateMenuOpen((isOpen) => !isOpen)}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 lg:hidden"
+              >
+                {isCandidateMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+              </button>
+            )}
+            {user.role !== 'official' ? <BrandLogo compact /> : <BrandLogo compact light />}
+            <div className={`min-w-0 ${user.role !== 'official' ? 'hidden lg:block' : ''}`}><p className="truncate font-black tracking-wide">{user.role === 'center' ? t('Institute Dashboard') : user.role === 'candidate' ? t('Student Dashboard') : `${t(detail.label)} ${t('Portal')}`}</p><p className={`truncate text-xs ${user.role !== 'official' ? 'text-slate-500' : 'text-slate-300'}`}>{user.role === 'center' ? instituteDisplayName : user.name} · {user.id}</p></div>
           </div>
           {user.role === 'center' ? (
             <div className="flex shrink-0 items-center gap-2">
@@ -1370,6 +1623,12 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               <button type="button" onClick={() => void onLogout()} className="inline-flex h-10 min-w-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-600 px-2.5 text-sm font-bold text-white hover:bg-emerald-500 max-[319px]:hidden sm:px-3">
                 <LogOut className="h-4 w-4 shrink-0" /><span className="sr-only sm:not-sr-only">{t('Sign out')}</span>
               </button>
+            </div>
+          ) : user.role === 'candidate' ? (
+            <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+              <button type="button" onClick={onHome} className="hidden whitespace-nowrap rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 sm:inline-flex">{t('Public website')}</button>
+              <button type="button" onClick={() => openCandidateSection('profile')} aria-label="Open student profile" className="grid h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"><UserRound className="h-5 w-5" /></button>
+              <button type="button" onClick={() => void onLogout()} aria-label={t('Sign out')} className="grid h-10 w-10 place-items-center rounded-lg bg-blue-700 text-white hover:bg-blue-800"><LogOut className="h-4 w-4" /></button>
             </div>
           ) : (
             <div className="flex items-center gap-2">
@@ -1407,9 +1666,23 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
               </div>
             </nav>
           )}
+          {user.role === 'candidate' && (
+            <nav
+              ref={candidateMenuRef}
+              id="candidate-section-menu"
+              aria-label={t('Student sections')}
+              className={`${isCandidateMenuOpen ? 'block' : 'hidden'} absolute left-0 top-full z-50 mt-2 max-h-[calc(100vh-8rem)] w-[min(92vw,380px)] overflow-y-auto rounded-2xl border border-slate-200 bg-[#071E49] p-3 text-white shadow-2xl lg:hidden`}
+            >
+              <p className="px-3 pb-2 pt-1 text-xs font-black uppercase tracking-[0.16em] text-blue-200">Student workspace · 15 sections</p>
+              <div className="space-y-1">{renderCandidateNavItems('mobile')}</div>
+              <div className="mt-2 border-t border-white/15 pt-2 sm:hidden">
+                <button type="button" onClick={() => { setIsCandidateMenuOpen(false); onHome(); }} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-semibold text-slate-200 hover:bg-white/10"><Home className="h-5 w-5 shrink-0" /><span>{t('Public website')}</span></button>
+              </div>
+            </nav>
+          )}
         </div>
       </header>
-      <div className={`mx-auto flex w-full gap-5 px-4 py-7 sm:px-6 ${user.role === 'center' ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
+      <div className={`mx-auto flex w-full gap-5 px-4 py-7 sm:px-6 ${user.role !== 'official' ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
         {user.role === 'center' && (
           <aside aria-label={t('Institute sections')} className="sticky top-[112px] hidden h-[calc(100vh-128px)] w-[252px] shrink-0 self-start flex-col overflow-hidden rounded-2xl bg-[#071E49] text-white shadow-lg lg:flex">
             <div className="border-b border-white/10 px-4 py-4">
@@ -1425,20 +1698,41 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
             </div>
           </aside>
         )}
+        {user.role === 'candidate' && (
+          <aside aria-label={t('Student sections')} className="sticky top-[112px] hidden h-[calc(100vh-128px)] w-[260px] shrink-0 self-start flex-col overflow-hidden rounded-2xl bg-[#071E49] text-white shadow-lg lg:flex">
+            <div className="border-b border-white/10 px-4 py-4">
+              <p className="text-xs font-black uppercase tracking-[0.16em] text-blue-200">Student workspace</p>
+              <p className="mt-1 text-[11px] text-blue-100/70">Applications, exams and results</p>
+            </div>
+            <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2" aria-label={t('Student navigation')}>
+              {renderCandidateNavItems('desktop')}
+            </nav>
+            <div className="border-t border-white/10 px-4 py-3">
+              <p className="truncate text-xs font-bold">{user.name}</p>
+              <p className="mt-0.5 truncate text-[10px] text-blue-100/70">Student ID: {user.id}</p>
+            </div>
+          </aside>
+        )}
         <div className="min-w-0 flex-1">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className={`text-xs font-bold uppercase tracking-[0.16em] ${
-              user.role === 'official' ? 'text-blue-800' : user.role === 'center' ? 'text-sky-800' : 'text-emerald-800'
+              user.role === 'official' || user.role === 'candidate' ? 'text-blue-800' : 'text-sky-800'
             }`}>{t(theme.eyebrow)}</p>
-            <h1 className="mt-1 text-2xl font-black text-[#0B2E59] sm:text-3xl">{user.role === 'center' ? activeInstituteSection === 'institute-overview' ? t('Welcome back, {name}').replace('{name}', instituteDisplayName) : t(selectedInstituteSection.label) : `${t(detail.title.replace('Login', '').trim())} ${t('Dashboard')}`}</h1>
-            <p className="mt-1 text-sm text-slate-600">{user.role === 'center' ? t(instituteSectionDescriptions[activeInstituteSection]) : t(theme.description)}</p>
+            <h1 className="mt-1 text-2xl font-black text-[#0B2E59] sm:text-3xl">{user.role === 'center' ? activeInstituteSection === 'institute-overview' ? t('Welcome back, {name}').replace('{name}', instituteDisplayName) : t(selectedInstituteSection.label) : user.role === 'candidate' ? activeCandidateSection === 'dashboard' ? `Welcome back, ${user.name}` : t(selectedCandidateSection.label) : `${t(detail.title.replace('Login', '').trim())} ${t('Dashboard')}`}</h1>
+            <p className="mt-1 text-sm text-slate-600">{user.role === 'center' ? t(instituteSectionDescriptions[activeInstituteSection]) : user.role === 'candidate' ? t(candidateSectionDescriptions[activeCandidateSection]) : t(theme.description)}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {user.role === 'center' && activeInstituteSection === 'institute-overview' && (
               <>
                 <button type="button" onClick={() => jumpToInstituteSection('institute-forms')} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-bold text-emerald-800 shadow-sm hover:bg-emerald-50"><PlusCircle className="h-4 w-4" />{t('Create institute form')}</button>
                 <button type="button" onClick={() => jumpToInstituteSection('institute-checkins')} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-600"><ClipboardCheck className="h-4 w-4" />{t('Verify candidate')}</button>
+              </>
+            )}
+            {user.role === 'candidate' && activeCandidateSection === 'dashboard' && (
+              <>
+                <button type="button" onClick={() => openCandidateSection('browse-exams')} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-blue-700 bg-white px-4 py-2.5 text-sm font-bold text-blue-800 shadow-sm hover:bg-blue-50"><Search className="h-4 w-4" />Browse exams</button>
+                <button type="button" onClick={() => openCandidateSection('apply-exam')} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-800"><PlusCircle className="h-4 w-4" />Apply now</button>
               </>
             )}
             <button onClick={() => void refresh()} disabled={isLoading} className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} /> {t('Refresh')}</button>
@@ -1459,7 +1753,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
             ))}
           </div>
         )}
-        {user.role !== 'center' && currentSectionStatuses.length > 0 && (
+        {user.role === 'official' && currentSectionStatuses.length > 0 && (
           <section aria-label="Dashboard data loading status" className="mb-5 rounded-xl border border-slate-200 bg-white p-4">
             <h2 className="font-bold text-slate-800">{t('Dashboard data status')}</h2>
             <ul className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -1868,73 +2162,151 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
                 onOpenWallet={openWallet}
               />
             )}
-            {(user.role === 'candidate' || (user.role === 'official' && tab === 'overview')) && (
+            {user.role === 'official' && tab === 'overview' && (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                {(user.role === 'candidate' ? [
-                  { label: 'Applications', value: candidateSectionState('portal') === 'success' ? list('applications').length : '—', icon: FileText },
-                  { label: 'Mock tests', value: candidateSectionState('attempts') === 'success' ? list('attempts').length : '—', icon: ClipboardCheck },
-                  { label: 'Published results', value: candidateSectionState('portal') === 'success' ? list('results').length : '—', icon: Award },
-                ] : [
+                {[
                   { label: 'Applications', value: count(dashboardStats.applications), icon: FileText },
                   ...(permissions.canSeeHelpdeskCount ? [{ label: 'Open helpdesk tickets', value: count(dashboardStats.openHelpdesk), icon: ClipboardCheck }] : []),
                   { label: 'Mock test attempts', value: count(dashboardStats.mockExamAttempts), icon: Award },
                   { label: 'Published results', value: count(dashboardStats.publishedResults), icon: CheckCircle2 },
-                ]).map((item) => {
+                ].map((item) => {
                   const CardIcon = item.icon;
                   return <article key={item.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-500">{item.label}</p><CardIcon className="h-5 w-5 text-emerald-700" /></div><p className="mt-3 text-2xl font-black text-[#0B2E59]">{item.value}</p></article>;
                 })}
               </div>
             )}
-            {user.role === 'candidate' && <div className="mt-5"><StudentGoogleLinkCard /></div>}
-            {user.role === 'candidate' && <StudentEmailContactPanel />}
-
-            {user.role === 'candidate' && (
-              <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">My applications</h2>
-                  {candidateSectionStatus('portal', 'Applications') ?? (
-                    list('applications').length
-                      ? <div className="mt-4 space-y-3">{list('applications').map((item) => <article key={String(item.application_number)} className="rounded-lg border border-slate-100 bg-slate-50 p-4"><div className="flex flex-wrap justify-between gap-2"><strong>{String(item.exam_code)}</strong><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold capitalize text-amber-800">{String(item.status)}</span></div><p className="mt-2 text-sm text-slate-600">Application {String(item.application_number)}</p>{item.roll_number !== null && item.roll_number !== undefined && <p className="mt-1 text-sm text-slate-600">Roll no. {String(item.roll_number)} · {String(item.center_name)}</p>}</article>)}</div>
-                      : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{t(NO_LINKED_APPLICATIONS_MESSAGE)}</p>
-                  )}
-                  <button onClick={onOpenAdmitCard} className="mt-4 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600">Open admit card lookup</button>
-                </section>
-                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">My results and practice</h2>
-                  {candidateSectionStatus('portal', 'Results') ?? (
-                    list('results').length
-                      ? <p className="mt-3 text-sm text-emerald-800">{list('results').length} result(s) published for your account.</p>
-                      : <p className="mt-3 text-sm text-slate-600">No official result has been published for this account.</p>
-                  )}
-                  <button onClick={onOpenResults} className="mt-4 rounded-lg border border-emerald-700 px-4 py-2.5 text-sm font-bold text-emerald-800 hover:bg-emerald-50">Check official result</button>
-                  <h3 className="mt-6 font-bold text-slate-800">Practice test history</h3>
-                  {candidateSectionStatus('attempts', 'Practice history') ?? (
-                    list('attempts').length
-                      ? <ul className="mt-3 space-y-2 text-sm text-slate-600">{list('attempts').slice(0, 5).map((attempt) => <li key={String(attempt.id)} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>{String(attempt.correct)} correct of {String(attempt.total_questions)}</span><strong>{String(attempt.percentage)}%</strong></li>)}</ul>
-                      : <p className="mt-2 text-sm text-slate-500">No practice attempts yet.</p>
-                  )}
-                </section>
-                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
-                  <h2 className="text-lg font-extrabold text-[#0B2E59]">Online examinations</h2>
-                  {list('onlineExams').length ? (
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      {list('onlineExams').map((exam) => {
-                        // Uses the server-computed attempt.state (falls back to the previous logic if absent).
-                        const card = describeOnlineExamAttempt(exam.attempt as Record<string, unknown> | null, Date.now());
-                        const toneClass = { success: 'text-emerald-800', warning: 'text-amber-800', danger: 'text-rose-800', active: 'text-blue-800', neutral: 'text-slate-600' }[card.tone];
-                        return (
-                          <article key={String(exam.exam_code)} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                            <h3 className="font-bold text-slate-900">{String(exam.exam_name)}</h3>
-                            <p className="mt-1 text-xs text-slate-500">{String(exam.exam_code)} · {String(exam.question_count)} questions · {String(exam.duration_minutes)} minutes</p>
-                            {card.statusText && <p className={`mt-2 text-sm ${toneClass}`}>{card.statusText}</p>}
-                            <button type="button" disabled={!card.canOpen} onClick={() => setActiveOnlineExam({ code: String(exam.exam_code), name: String(exam.exam_name) })} className="mt-3 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">{card.buttonLabel}</button>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  ) : candidateSectionStatus('online-exams', 'Online examinations') ?? <p className="mt-3 text-sm text-slate-500">No published online exams are available for your approved applications.</p>}
-                </section>
+            {user.role === 'candidate' && activeCandidateSection === 'dashboard' && (
+              <div className="space-y-5">
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    { label: 'My applications', value: candidateSectionState('portal') === 'success' ? list('applications').length : '—', icon: FileText, section: 'applications' },
+                    { label: 'Upcoming exams', value: candidateSectionState('portal') === 'success' && candidateSectionState('exams') === 'success' ? list('applications').filter((application) => {
+                      const exam = candidateExamItems.find((item) => item.code === String(application.exam_code));
+                      return Boolean(exam && exam.examDate >= candidateToday);
+                    }).length : '—', icon: CalendarDays, section: 'my-exams' },
+                    { label: 'Admit cards', value: candidateSectionState('portal') === 'success' ? list('applications').filter((application) => Boolean(application.roll_number)).length : '—', icon: Award, section: 'admit-cards' },
+                    { label: 'Published results', value: candidateSectionState('portal') === 'success' ? list('results').length : '—', icon: CheckCircle2, section: 'results' },
+                  ].map((item) => {
+                    const CardIcon = item.icon;
+                    return <button type="button" key={item.label} onClick={() => openCandidateSection(item.section)} className="rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md"><div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-500">{item.label}</p><CardIcon className="h-5 w-5 text-blue-700" /></div><p className="mt-3 text-2xl font-black text-[#0B2E59]">{item.value}</p></button>;
+                  })}
+                </div>
+                <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+                  <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-extrabold text-[#0B2E59]">Application progress</h2><p className="mt-1 text-xs text-slate-500">Status comes from your linked applications.</p></div><button type="button" onClick={() => openCandidateSection('applications')} className="text-sm font-bold text-blue-700 hover:underline">View all</button></div>
+                    {candidateSectionStatus('portal', 'Applications') ?? (list('applications').length ? <div className="mt-4 space-y-3">{list('applications').slice(0, 5).map((item) => <article key={String(item.application_number)} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 p-4"><div><p className="font-bold text-slate-900">{String(item.exam_code)}</p><p className="mt-1 text-xs text-slate-500">{String(item.application_number)} · {item.created_at ? new Date(String(item.created_at)).toLocaleDateString() : 'Date unavailable'}</p></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold capitalize text-blue-800">{String(item.status).replaceAll('_', ' ')}</span></article>)}</div> : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{t(NO_LINKED_APPLICATIONS_MESSAGE)}</p>)}
+                  </section>
+                  <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-extrabold text-[#0B2E59]">Upcoming schedule</h2><p className="mt-1 text-xs text-slate-500">Published exams linked to your applications.</p></div><CalendarDays className="h-5 w-5 text-blue-700" /></div>
+                    {candidateSectionStatus('portal', 'Schedule') ?? (() => {
+                      const applicationCodes = new Set(list('applications').map((application) => String(application.exam_code)));
+                      const upcoming = candidateExamItems.filter((exam) => applicationCodes.has(exam.code) && exam.examDate >= candidateToday).slice(0, 4);
+                      return upcoming.length ? <ul className="mt-4 space-y-3">{upcoming.map((exam) => <li key={exam.code} className="flex items-center gap-3 rounded-lg bg-slate-50 p-3"><span className="min-w-14 rounded-md bg-blue-100 px-2 py-2 text-center text-xs font-black text-blue-800">{exam.day} {exam.month}</span><span className="min-w-0"><strong className="block truncate text-sm text-slate-900">{exam.name}</strong><span className="text-xs text-slate-500">{exam.code} · {exam.mode}</span></span></li>)}</ul> : <p className="mt-4 text-sm text-slate-500">No upcoming exam dates are published for your linked applications.</p>;
+                    })()}
+                  </section>
+                </div>
+                <div className="grid gap-5 xl:grid-cols-[1fr_300px]">
+                  <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h2 className="text-lg font-extrabold text-[#0B2E59]">Recent activity</h2>
+                    {candidateSectionStatus('portal', 'Recent activity') ?? (list('applications').length ? <ul className="mt-3 space-y-3">{list('applications').slice(0, 4).map((item) => <li key={String(item.application_number)} className="flex gap-3 text-sm text-slate-700"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /><span>Application <strong>{String(item.application_number)}</strong> is <span className="capitalize">{String(item.status).replaceAll('_', ' ')}</span>.</span></li>)}{list('results').slice(0, 2).map((item) => <li key={`${String(item.exam_code)}-${String(item.published_at)}`} className="flex gap-3 text-sm text-slate-700"><Award className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><span>A result was published for <strong>{String(item.exam_code)}</strong>.</span></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">Activity will appear after you submit an examination application.</p>)}
+                  </section>
+                  <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h2 className="text-lg font-extrabold text-[#0B2E59]">Quick actions</h2>
+                    <div className="mt-3 grid gap-2"><button type="button" onClick={() => openCandidateSection('browse-exams')} className="flex items-center justify-between rounded-lg bg-blue-50 px-3 py-3 text-sm font-bold text-blue-900 hover:bg-blue-100"><span className="flex items-center gap-2"><Search className="h-4 w-4" />Browse exams</span><ArrowRight className="h-4 w-4" /></button><button type="button" onClick={() => openCandidateSection('admit-cards')} className="flex items-center justify-between rounded-lg bg-violet-50 px-3 py-3 text-sm font-bold text-violet-900 hover:bg-violet-100"><span className="flex items-center gap-2"><Award className="h-4 w-4" />Admit cards</span><ArrowRight className="h-4 w-4" /></button><button type="button" onClick={() => openCandidateSection('results')} className="flex items-center justify-between rounded-lg bg-emerald-50 px-3 py-3 text-sm font-bold text-emerald-900 hover:bg-emerald-100"><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />Results</span><ArrowRight className="h-4 w-4" /></button></div>
+                  </section>
+                </div>
               </div>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'profile' && (
+              <section className="space-y-5">
+                <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+                  <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-xl bg-blue-100 text-blue-800"><UserRound className="h-6 w-6" /></div><div><h2 className="text-lg font-extrabold text-[#0B2E59]">Student account</h2><p className="text-sm text-slate-500">Authenticated account details</p></div></div>
+                    <dl className="mt-5 divide-y divide-slate-100 text-sm"><div className="py-3"><dt className="text-slate-500">Name</dt><dd className="mt-1 font-bold text-slate-900">{user.name}</dd></div><div className="py-3"><dt className="text-slate-500">Student login ID</dt><dd className="mt-1 font-mono font-bold text-slate-900">{user.id}</dd></div><div className="py-3"><dt className="text-slate-500">Applications linked</dt><dd className="mt-1 font-bold text-slate-900">{candidateSectionState('portal') === 'success' ? list('applications').length : 'Loading…'}</dd></div></dl>
+                    <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs leading-5 text-blue-900">Personal details for each application are stored with that application. Editing identity details or uploading profile documents is not available in this account yet.</p>
+                  </article>
+                  <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-[#0B2E59]">Application identity details</h2>{candidateSectionStatus('portal', 'Application details') ?? (list('applications').length ? <div className="mt-4 space-y-3">{list('applications').slice(0, 4).map((application) => <div key={String(application.application_number)} className="rounded-lg bg-slate-50 p-4"><p className="font-bold text-slate-900">{String(application.candidate_name)}</p><p className="mt-1 text-xs text-slate-500">{String(application.exam_code)} · {String(application.application_number)}</p></div>)}</div> : <p className="mt-4 text-sm text-slate-500">Your application identity details will appear after you apply.</p>)}</article>
+                </div>
+              </section>
+            )}
+
+            {user.role === 'candidate' && ['browse-exams', 'apply-exam'].includes(activeCandidateSection) && (
+              <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5">
+                {renderCandidateExams(activeCandidateSection === 'apply-exam')}
+              </section>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'applications' && (
+              <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-extrabold text-[#0B2E59]">Application tracker</h2><p className="mt-1 text-sm text-slate-500">Application status and exam details for your signed-in account.</p></div><button type="button" onClick={() => openCandidateSection('browse-exams')} className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800">Browse examinations</button></div>
+                {candidateSectionStatus('portal', 'Applications') ?? (list('applications').length ? <div className="mt-5 space-y-3">{list('applications').map((item) => <article key={String(item.application_number)} className="rounded-xl border border-slate-200 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wide text-blue-700">{String(item.exam_code)}</p><h3 className="mt-1 font-extrabold text-slate-900">{String(item.application_number)}</h3></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold capitalize text-blue-800">{String(item.status).replaceAll('_', ' ')}</span></div><div className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-2"><p>Submitted: {item.created_at ? new Date(String(item.created_at)).toLocaleDateString() : '—'}</p><p>{item.roll_number ? `Roll number: ${String(item.roll_number)}` : 'Roll number: not assigned yet'}</p><p>{item.exam_date ? `Exam date: ${String(item.exam_date).slice(0, 10)}` : 'Exam date: not published here'}</p><p>{item.center_name ? `Center: ${String(item.center_name)}` : 'Center: not allocated yet'}</p></div></article>)}</div> : <p className="mt-5 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{t(NO_LINKED_APPLICATIONS_MESSAGE)}</p>)}
+              </section>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'payments' && (
+              <section className="space-y-4">
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950"><strong>Payment status is not connected to student accounts.</strong> Fees shown below come from published exam details; this portal does not collect, confirm, or mark payments as paid.</div>
+                {candidateSectionStatus('portal', 'Applications') ?? (list('applications').length ? list('applications').map((application) => {
+                  const exam = candidateExamItems.find((item) => item.code === String(application.exam_code));
+                  return <article key={String(application.application_number)} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div><h2 className="font-extrabold text-[#0B2E59]">{String(application.exam_code)}</h2><p className="mt-1 text-xs text-slate-500">Application {String(application.application_number)}</p></div><div className="text-right"><p className="text-xs text-slate-500">Published fee information</p><p className="font-bold text-slate-900">{exam?.fee ?? 'Not listed for this exam'}</p></div></article>;
+                }) : <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600">Fee details will appear here when you have an application for a published examination.</p>)}
+              </section>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'admit-cards' && (
+              <section className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4"><div><h2 className="font-extrabold text-[#0B2E59]">Admit card access</h2><p className="mt-1 text-sm text-blue-900">A card is available only after the examination team publishes your center allocation.</p></div><button type="button" onClick={onOpenAdmitCard} className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800">Open secure lookup</button></div>
+                {candidateSectionStatus('portal', 'Applications') ?? (list('applications').length ? list('applications').map((application) => <article key={String(application.application_number)} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-extrabold text-[#0B2E59]">{String(application.exam_code)}</h3><p className="mt-1 text-xs text-slate-500">{String(application.application_number)}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${application.roll_number ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{application.roll_number ? 'Admit card details published' : 'Awaiting publication'}</span></div>{Boolean(application.roll_number) && <dl className="mt-4 grid gap-2 text-sm text-slate-700 sm:grid-cols-2"><div><dt className="text-xs text-slate-500">Roll number</dt><dd className="font-bold">{String(application.roll_number)}</dd></div><div><dt className="text-xs text-slate-500">Exam date</dt><dd className="font-bold">{String(application.exam_date || '—')}</dd></div><div><dt className="text-xs text-slate-500">Center</dt><dd className="font-bold">{String(application.center_name || '—')}</dd></div><div><dt className="text-xs text-slate-500">Center address</dt><dd className="font-bold">{String(application.center_address || '—')}</dd></div></dl>}</article>) : <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600">No applications are linked to this account yet.</p>)}
+              </section>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'my-exams' && (
+              <div className="space-y-5">
+                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-[#0B2E59]">Online examinations</h2>{candidateSectionStatus('online-exams', 'Online examinations') ?? (list('onlineExams').length ? <div className="mt-4 grid gap-3 md:grid-cols-2">{list('onlineExams').map((exam) => { const card = describeOnlineExamAttempt(exam.attempt as Record<string, unknown> | null, Date.now()); const toneClass = { success: 'text-emerald-800', warning: 'text-amber-800', danger: 'text-rose-800', active: 'text-blue-800', neutral: 'text-slate-600' }[card.tone]; return <article key={String(exam.exam_code)} className="rounded-lg border border-slate-200 bg-slate-50 p-4"><h3 className="font-bold text-slate-900">{String(exam.exam_name)}</h3><p className="mt-1 text-xs text-slate-500">{String(exam.exam_code)} · {String(exam.question_count)} questions · {String(exam.duration_minutes)} minutes</p>{card.statusText && <p className={`mt-2 text-sm ${toneClass}`}>{card.statusText}</p>}<button type="button" disabled={!card.canOpen} onClick={() => setActiveOnlineExam({ code: String(exam.exam_code), name: String(exam.exam_name) })} className="mt-3 rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-400">{card.buttonLabel}</button></article>; })}</div> : <p className="mt-3 text-sm text-slate-500">No published online exams are currently available for your approved applications.</p>)}</section>
+                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-[#0B2E59]">Practice test history</h2>{candidateSectionStatus('attempts', 'Practice history') ?? (list('attempts').length ? <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-3">Submitted</th><th className="p-3">Questions</th><th className="p-3">Correct</th><th className="p-3">Score</th><th className="p-3">Percent</th></tr></thead><tbody className="divide-y divide-slate-100">{list('attempts').map((attempt) => <tr key={String(attempt.id)}><td className="p-3">{attempt.submitted_at ? new Date(String(attempt.submitted_at)).toLocaleString() : '—'}</td><td className="p-3">{String(attempt.total_questions)}</td><td className="p-3">{String(attempt.correct)}</td><td className="p-3">{String(attempt.total_score)} / {String(attempt.max_score)}</td><td className="p-3 font-bold">{String(attempt.percentage)}%</td></tr>)}</tbody></table></div> : <p className="mt-3 text-sm text-slate-500">No submitted practice tests yet.</p>)}</section>
+              </div>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'instructions' && (
+              <section className="space-y-4">
+                <div className="rounded-xl border border-blue-100 bg-blue-50 p-5"><h2 className="text-lg font-extrabold text-[#0B2E59]">Before you start</h2><ul className="mt-3 space-y-2 text-sm leading-6 text-blue-950"><li>• Confirm exam date, mode, duration and shift from the official exam details or your admit card.</li><li>• Keep your application number and roll number available when contacting support.</li><li>• Online exam timers and submission status are controlled by the examination server.</li><li>• Follow the latest instructions published by ELTNOY for your specific examination.</li></ul></div>
+                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-[#0B2E59]">Your examination details</h2>{candidateSectionStatus('portal', 'Applications') ?? (list('applications').length ? <div className="mt-4 space-y-3">{list('applications').map((application) => { const exam = candidateExamItems.find((item) => item.code === String(application.exam_code)); return <article key={String(application.application_number)} className="rounded-lg border border-slate-100 bg-slate-50 p-4"><h3 className="font-bold">{exam?.name ?? String(application.exam_code)}</h3><p className="mt-1 text-xs text-slate-500">Application {String(application.application_number)} · {String(application.status).replaceAll('_', ' ')}</p>{exam && <p className="mt-2 text-sm text-slate-700">{exam.examDate} · {exam.mode} · {exam.duration} · {exam.shifts}</p>}</article>; })}</div> : <p className="mt-3 text-sm text-slate-500">Apply for a published exam to see its details here.</p>)}</section>
+              </section>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'results' && (
+              <section className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50 p-4"><div><h2 className="font-extrabold text-emerald-950">Published scorecards</h2><p className="mt-1 text-sm text-emerald-900">Scores are shown only after official publication and identity verification.</p></div><button type="button" onClick={onOpenResults} className="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-800">Open secure result lookup</button></div>
+                {candidateSectionStatus('portal', 'Results') ?? (list('results').length ? <div className="grid gap-3 md:grid-cols-2">{list('results').map((result) => <article key={`${String(result.exam_code)}-${String(result.application_number)}`} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-800">Published</span><h3 className="mt-3 text-lg font-extrabold text-[#0B2E59]">{String(result.exam_code)}</h3><p className="mt-1 text-sm text-slate-600">Application {String(result.application_number)}{result.roll_number ? ` · Roll ${String(result.roll_number)}` : ''}</p><p className="mt-2 text-xs text-slate-500">Published {result.published_at ? new Date(String(result.published_at)).toLocaleDateString() : 'date unavailable'}</p><button type="button" onClick={onOpenResults} className="mt-4 rounded-lg border border-blue-700 px-3 py-2 text-sm font-bold text-blue-800 hover:bg-blue-50">View verified scorecard</button></article>)}</div> : <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600">No official results have been published for your linked applications.</p>)}
+              </section>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'attendance' && (
+              <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"><div className="flex items-start gap-3"><CalendarCheck className="mt-1 h-6 w-6 text-blue-700" /><div><h2 className="text-lg font-extrabold text-[#0B2E59]">Exam attendance</h2><p className="mt-2 text-sm leading-6 text-slate-600">Candidate attendance records are not currently exposed in the student account API. Your exam check-in is recorded by the assigned center; ask the examination team if you need an attendance confirmation.</p><button type="button" onClick={() => openCandidateSection('helpdesk')} className="mt-4 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800">Contact support</button></div></div></section>
+            )}
+
+            {user.role === 'candidate' && ['interview', 'training'].includes(activeCandidateSection) && (
+              <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"><div className="flex items-start gap-3">{activeCandidateSection === 'interview' ? <UserRound className="mt-1 h-6 w-6 text-blue-700" /> : <GraduationCap className="mt-1 h-6 w-6 text-blue-700" />}<div><h2 className="text-lg font-extrabold text-[#0B2E59]">{activeCandidateSection === 'interview' ? 'Online interview' : 'Online training'}</h2><p className="mt-2 text-sm leading-6 text-slate-600">{activeCandidateSection === 'interview' ? 'Interview schedules, panel details and join links are not yet provided by the current student services API. Any official schedule will be shown when the exam team publishes it.' : 'There are no course enrollment or learning progress services connected to student accounts yet. Published training options will appear here when available.'}</p><button type="button" onClick={() => openCandidateSection('helpdesk')} className="mt-4 rounded-lg border border-blue-700 px-4 py-2.5 text-sm font-bold text-blue-800 hover:bg-blue-50">Ask the helpdesk</button></div></div></section>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'helpdesk' && (
+              <section className="grid gap-5 lg:grid-cols-[1fr_320px]">
+                <form onSubmit={(event) => void submitCandidateTicket(event)} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div><h2 className="text-lg font-extrabold text-[#0B2E59]">Create a support ticket</h2><p className="mt-1 text-sm text-slate-500">The ELTNOY team receives this request with your student account attached.</p></div>
+                  {candidateTicketId && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">Ticket submitted. Save this reference: <strong className="font-mono">{candidateTicketId}</strong></p>}
+                  <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Request type<select value={candidateTicketType} onChange={(event) => setCandidateTicketType(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5"><option value="other">General support</option><option value="admit_card">Admit card</option><option value="cbt_issue">Online exam issue</option><option value="bug">Technical problem</option><option value="suggestion">Suggestion</option></select></label><label className="text-sm font-semibold text-slate-700">Application number (optional)<select value={candidateTicketApplication} onChange={(event) => setCandidateTicketApplication(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5"><option value="">Not related to an application</option>{list('applications').map((application) => <option key={String(application.application_number)} value={String(application.application_number)}>{String(application.application_number)} · {String(application.exam_code)}</option>)}</select></label></div>
+                  <label className="block text-sm font-semibold text-slate-700">Contact email (optional)<input type="email" value={candidateTicketEmail} onChange={(event) => setCandidateTicketEmail(event.target.value)} maxLength={254} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5" placeholder="Email for a reply" /></label>
+                  <label className="block text-sm font-semibold text-slate-700">Subject<input required minLength={4} maxLength={100} value={candidateTicketTitle} onChange={(event) => setCandidateTicketTitle(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label>
+                  <label className="block text-sm font-semibold text-slate-700">Describe the issue<textarea required minLength={10} maxLength={1000} rows={5} value={candidateTicketDescription} onChange={(event) => setCandidateTicketDescription(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label>
+                  <button type="submit" disabled={isSubmittingCandidateTicket} className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-60">{isSubmittingCandidateTicket ? 'Submitting…' : 'Submit support request'}</button>
+                </form>
+                <aside className="h-fit rounded-xl border border-blue-100 bg-blue-50 p-5"><LifeBuoy className="h-6 w-6 text-blue-700" /><h3 className="mt-3 font-extrabold text-[#0B2E59]">Ticket follow-up</h3><p className="mt-2 text-sm leading-6 text-blue-950">Keep the ticket reference shown after submission. This release lets you submit a ticket, but does not yet provide student ticket history or replies inside the portal.</p></aside>
+              </section>
+            )}
+
+            {user.role === 'candidate' && activeCandidateSection === 'settings' && (
+              <section className="space-y-5"><StudentEmailContactPanel /><StudentGoogleLinkCard /><section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-extrabold text-[#0B2E59]">Session</h2><p className="mt-1 text-sm text-slate-600">Sign out of this student account on this device.</p><button type="button" onClick={() => void onLogout()} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-rose-300 px-4 py-2.5 text-sm font-bold text-rose-700 hover:bg-rose-50"><LogOut className="h-4 w-4" />Sign out</button></section></section>
             )}
 
             {user.role === 'center' && activeInstituteSection === 'institute-checkins' && (
@@ -2112,6 +2484,15 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
           onSubmitted={() => void refresh()}
         />
       )}
+      <ExamApplyModal
+        exam={candidateApplyExam}
+        onClose={() => setCandidateApplyExam(null)}
+        onApplicationComplete={(applicationNumberValue) => {
+          setNotice(`Application ${applicationNumberValue} submitted successfully.`);
+          setActiveCandidateSection('applications');
+          void refresh();
+        }}
+      />
     </main>
   );
 };

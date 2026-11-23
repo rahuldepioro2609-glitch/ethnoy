@@ -8,6 +8,21 @@ export type SurfaceHostnames = Record<PortalSurface, string>;
  */
 export type DisclosedSurfaceHostnames = Partial<Record<PortalSurface, string>>;
 
+export type InstituteSignOutViewState = 'checking' | 'wrong_surface' | 'signed_out' | 'confirm';
+
+/** A display hint is never enough to sign out; verify both the owning host and its live Institute session. */
+export function instituteSignOutViewState(input: {
+  authLoading: boolean;
+  hostnames: DisclosedSurfaceHostnames | null;
+  currentHostname: string;
+  accountRole?: PortalRole | null;
+}): InstituteSignOutViewState {
+  if (input.authLoading || !input.hostnames) return 'checking';
+  if (input.hostnames.institution?.toLowerCase() !== input.currentHostname.toLowerCase()) return 'wrong_surface';
+  if (input.accountRole !== 'center') return 'signed_out';
+  return 'confirm';
+}
+
 const ROLE_SURFACE: Readonly<Record<PortalRole, PortalSurface>> = Object.freeze({
   candidate: 'exam',
   center: 'institution',

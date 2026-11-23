@@ -16,6 +16,7 @@ export const instituteDashboardTranslations: Record<string, TranslationSet> = {
   'Institute sections': { Hindi: 'संस्थान अनुभाग', Kannada: 'ಸಂಸ್ಥೆಯ ವಿಭಾಗಗಳು', Bengali: 'প্রতিষ্ঠানের বিভাগসমূহ', Marathi: 'संस्था विभाग' },
   'Institute navigation': { Hindi: 'संस्थान नेविगेशन', Kannada: 'ಸಂಸ್ಥೆಯ ನ್ಯಾವಿಗೇಶನ್', Bengali: 'প্রতিষ্ঠান নেভিগেশন', Marathi: 'संस्था नेव्हिगेशन' },
   'Center code': { Hindi: 'केंद्र कोड', Kannada: 'ಕೇಂದ್ರ ಕೋಡ್', Bengali: 'কেন্দ্র কোড', Marathi: 'केंद्र कोड' },
+  'Live institute data is connected. Changes are disabled in this local preview.': { Hindi: 'लाइव संस्थान डेटा जुड़ा है। इस स्थानीय प्रीव्यू में बदलाव बंद हैं।', Kannada: 'ಲೈವ್ ಸಂಸ್ಥೆಯ ಡೇಟಾ ಸಂಪರ್ಕಿಸಲಾಗಿದೆ. ಈ ಸ್ಥಳೀಯ ಪೂರ್ವವೀಕ್ಷಣೆಯಲ್ಲಿ ಬದಲಾವಣೆಗಳನ್ನು ನಿಷ್ಕ್ರಿಯಗೊಳಿಸಲಾಗಿದೆ.', Bengali: 'লাইভ প্রতিষ্ঠানের ডেটা সংযুক্ত। এই স্থানীয় প্রিভিউতে পরিবর্তন বন্ধ রয়েছে।', Marathi: 'थेट संस्थेचा डेटा जोडलेला आहे. या स्थानिक पूर्वावलोकनात बदल बंद आहेत.' },
   'Applicants & verification': { Hindi: 'आवेदक और सत्यापन', Kannada: 'ಅರ್ಜಿದಾರರು ಮತ್ತು ಪರಿಶೀಲನೆ', Bengali: 'আবেদনকারী ও যাচাই', Marathi: 'अर्जदार आणि पडताळणी' },
   'Create Examination': { Hindi: 'परीक्षा बनाएँ', Kannada: 'ಪರೀಕ್ಷೆ ರಚಿಸಿ', Bengali: 'পরীক্ষা তৈরি করুন', Marathi: 'परीक्षा तयार करा' },
   'Exam Management': { Hindi: 'परीक्षा प्रबंधन', Kannada: 'ಪರೀಕ್ಷೆ ನಿರ್ವಹಣೆ', Bengali: 'পরীক্ষা ব্যবস্থাপনা', Marathi: 'परीक्षा व्यवस्थापन' },

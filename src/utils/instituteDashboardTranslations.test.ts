@@ -34,10 +34,13 @@ test('the institute overview has no untranslated UI text', () => {
 
 test('the institute header, menu and section titles in RolePortal are translated', () => {
   const source = readFileSync(new URL('../components/RolePortal.tsx', import.meta.url), 'utf8');
-  const start = source.indexOf('const instituteNavItems = [');
-  const end = source.indexOf('const navTabs');
-  assert.ok(start > 0 && end > start, 'institute menu definitions not found');
-  const definitions = source.slice(start, end);
+  const menuStart = source.indexOf('const instituteNavItems = [');
+  const menuEnd = source.indexOf('];', menuStart);
+  const descriptionsStart = source.indexOf('const instituteSectionDescriptions:', menuEnd);
+  const descriptionsEnd = source.indexOf('};', descriptionsStart);
+  assert.ok(menuStart > 0 && menuEnd > menuStart && descriptionsStart > menuEnd && descriptionsEnd > descriptionsStart,
+    'institute menu and section definitions not found');
+  const definitions = `${source.slice(menuStart, menuEnd)}\n${source.slice(descriptionsStart, descriptionsEnd)}`;
   // Menu labels (`label: '…'`) and section descriptions (`'institute-x': '…'`), not the ids.
   const strings = [...definitions.matchAll(/(?:label: |'institute-[a-z]+': )'([^']+)'/g)].map((match) => match[1]);
   assert.ok(strings.length >= 14, `expected menu labels and descriptions, found ${strings.length}`);
