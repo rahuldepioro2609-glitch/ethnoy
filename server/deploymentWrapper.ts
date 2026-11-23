@@ -28,7 +28,7 @@ import {
 } from './deploymentConfig.js';
 // AUTH C1.3-B.2: the pure shared SMS/claim-lifetime rule (imports only node: built-ins via
 // verificationProviders.ts). No database, credential, dotenv, Express or auth-store module.
-import { validateEmailProtectionDeployment, validateSmsProtectionDeployment } from './smsProtectionConfig.js';
+import { validateEmailProtectionDeployment, validateMobileVerificationDeployment, validateSmsProtectionDeployment } from './smsProtectionConfig.js';
 
 /** Compose variables declared `${VAR:?…}` (required). Kept equal to docker-compose.yml by a test. */
 export const REQUIRED_COMPOSE_VARIABLES = [
@@ -42,7 +42,7 @@ export const REQUIRED_COMPOSE_VARIABLES = [
 /** Compose variables with a default (`${VAR:-…}`). Absent values stay absent: Compose uses the default. */
 export const OPTIONAL_COMPOSE_VARIABLES = [
   // Verification delivery providers and host-side secret-file paths (api_public only).
-  'AUTH_EMAIL_PROVIDER', 'AUTH_OTP_HMAC_KEY_FILE', 'AUTH_SMS_PROVIDER', 'RESEND_API_KEY_FILE',
+  'AUTH_EMAIL_PROVIDER', 'AUTH_MOBILE_VERIFICATION', 'AUTH_OTP_HMAC_KEY_FILE', 'AUTH_SMS_PROVIDER', 'RESEND_API_KEY_FILE',
   'RESEND_FROM_EMAIL', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN_FILE', 'TWILIO_MESSAGING_SERVICE_SID',
   'TWILIO_VERIFY_API_KEY_SECRET_FILE', 'TWILIO_VERIFY_API_KEY_SID', 'TWILIO_VERIFY_SERVICE_SID',
   // AUTH C1.3-B (api_public only; pending owner approval, no defaults; validated by the preflight).
@@ -389,6 +389,8 @@ export function planDeployment(input: {
       ...validateSmsProtectionDeployment(governedValues),
       // AUTH C1.4-B-2: the six email settings, the same rule as the in-container preflight.
       ...validateEmailProtectionDeployment(governedValues),
+      // AUTH_MOBILE_VERIFICATION: required (default) or off, the same rule as the container preflight.
+      ...validateMobileVerificationDeployment(governedValues),
     ];
     if (validationErrors.length > 0) return { ok: false, errors: validationErrors };
   }

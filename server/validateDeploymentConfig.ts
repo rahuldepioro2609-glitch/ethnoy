@@ -6,13 +6,15 @@
 // AUTH C1.3-B: the SMS limits and claim lifetime use the PURE shared resolver (smsProtectionConfig.ts),
 // never authVerification.ts, so no database, Express, dotenv or credential module is loaded here.
 import { deploymentConfigFromEnvironment, validateDeploymentConfig } from './deploymentConfig.js';
-import { validateEmailProtectionDeployment, validateSmsProtectionDeployment } from './smsProtectionConfig.js';
+import { validateEmailProtectionDeployment, validateMobileVerificationDeployment, validateSmsProtectionDeployment } from './smsProtectionConfig.js';
 
 const errors = [
   ...validateDeploymentConfig(deploymentConfigFromEnvironment(process.env)),
   ...validateSmsProtectionDeployment(process.env),
   // AUTH C1.4-B-2: the six email settings, same all-or-nothing pattern (independent of SMS).
   ...validateEmailProtectionDeployment(process.env),
+  // AUTH_MOBILE_VERIFICATION: required (default) or off.
+  ...validateMobileVerificationDeployment(process.env),
 ];
 
 if (errors.length > 0) {

@@ -108,7 +108,7 @@ export class MemoryAuthVerificationStore implements AuthVerificationStore {
   challenges = new Map<string, VerificationChallenge & { createdAt: Date }>();
   contacts = new Map<string, string>(); // `${userId}:${channel}` -> destination (verified)
   institutes = new Map<string, InstituteVerificationState>();
-  sessions: Array<{ tokenHash: string; userId: string; expiresAt: Date; verified: boolean }> = [];
+  sessions: Array<{ tokenHash: string; userId: string; expiresAt: Date; verified: boolean; method?: 'sms_otp' | 'email_otp' }> = [];
   google = new Map<string, { userId: string; email: string }>(); // sub -> link
   oauth = new Map<string, OAuthState & { consumed: boolean }>();
   readonly events: AuthVerificationEvent[] = [];
@@ -140,13 +140,16 @@ export class MemoryAuthVerificationStore implements AuthVerificationStore {
       .filter(([key, destination]) => key.endsWith(':sms') && destination === mobile && this.users.get(key.slice(0, -4))?.role === 'candidate')
       .map(([key]) => key.slice(0, -4)).sort().slice(0, limit);
   }
-  async completeStudentVerification(input: { challengeId: string; userId: string; destination: string; sessionTokenHash: string; sessionExpiresAt: Date; now: Date }) {
+  async completeStudentVerification(input: { challengeId: string; userId: string; channel?: ContactChannel; destination: string; sessionTokenHash: string; sessionExpiresAt: Date; now: Date }) {
     const c = this.challenges.get(input.challengeId);
     if (!c || c.consumedAt) return false;
     c.consumedAt = input.now;
-    this.contacts.set(`${input.userId}:sms`, input.destination);
-    this.sessions.push({ tokenHash: input.sessionTokenHash, userId: input.userId, expiresAt: input.sessionExpiresAt, verified: true });
-    this.events.push({ action: 'student.verified_session_issued', userId: input.userId });
+    const channel = input.channel ?? 'sms';
+    this.contacts.set(`${input.userId}:${channel}`, input.destination);
+    const user = this.users.get(input.userId);
+    if (channel === 'email' && user) user.contactEmail = input.destination;
+    this.sessions.push({ tokenHash: input.sessionTokenHash, userId: input.userId, expiresAt: input.sessionExpiresAt, verified: true, method: channel === 'email' ? 'email_otp' : 'sms_otp' });
+    this.events.push({ action: 'student.verified_session_issued', userId: input.userId, details: { channel } });
     return true;
   }
   async completeStudentEmailVerification(input: { challengeId: string; userId: string; destination: string; now: Date }) {

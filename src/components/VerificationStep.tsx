@@ -21,6 +21,7 @@ export const VerificationStep: React.FC<VerificationStepProps> = ({ challenge: i
   const [challenge, setChallenge] = useState(initial);
   const [code, setCode] = useState('');
   const [mobile, setMobile] = useState('');
+  const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -59,7 +60,8 @@ export const VerificationStep: React.FC<VerificationStepProps> = ({ challenge: i
   const submitDestination = async (event: React.FormEvent) => {
     event.preventDefault();
     try {
-      const data = await post('/api/auth/verification/destination', { mobile });
+      // An email destination is asked only for Student sign-in while mobile verification is off.
+      const data = await post('/api/auth/verification/destination', challenge.channel === 'email' ? { email } : { mobile });
       if (isChallenge(data)) setChallenge(data);
     } catch (caught) {
       handleError(caught);
@@ -114,7 +116,9 @@ export const VerificationStep: React.FC<VerificationStepProps> = ({ challenge: i
         </h2>
         <p className="mt-1 text-sm text-slate-600">
           {challenge.step === 'destination'
-            ? 'Your account does not have a verified mobile number yet. Enter it to receive a one-time code.'
+            ? challenge.channel === 'email'
+              ? 'Your account does not have a verified email address yet. Enter it to receive a one-time code; it is saved only after the code is confirmed.'
+              : 'Your account does not have a verified mobile number yet. Enter it to receive a one-time code.'
             : `Enter the 6-digit code sent to your ${channelLabel(challenge)} ${challenge.destination ?? ''}. ${challenge.purpose === 'student_email_capture' ? 'This email is marked verified only after the code is confirmed.' : 'Your session starts only after the code is verified.'}`}
         </p>
       </div>
@@ -123,8 +127,17 @@ export const VerificationStep: React.FC<VerificationStepProps> = ({ challenge: i
 
       {challenge.step === 'destination' ? (
         <form className="space-y-4" onSubmit={(event) => void submitDestination(event)}>
-          <label htmlFor="verification-mobile" className="block text-sm font-semibold text-slate-700">Mobile number</label>
-          <input id="verification-mobile" type="tel" inputMode="numeric" autoComplete="tel-national" required maxLength={16} value={mobile} onChange={(event) => setMobile(event.target.value)} placeholder="10-digit mobile number" className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-600/15" />
+          {challenge.channel === 'email' ? (
+            <>
+              <label htmlFor="verification-email" className="block text-sm font-semibold text-slate-700">Email address</label>
+              <input id="verification-email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-600/15" />
+            </>
+          ) : (
+            <>
+              <label htmlFor="verification-mobile" className="block text-sm font-semibold text-slate-700">Mobile number</label>
+              <input id="verification-mobile" type="tel" inputMode="numeric" autoComplete="tel-national" required maxLength={16} value={mobile} onChange={(event) => setMobile(event.target.value)} placeholder="10-digit mobile number" className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-600/15" />
+            </>
+          )}
           <button type="submit" disabled={busy} className="w-full rounded-lg bg-emerald-700 px-4 py-3 text-sm font-bold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60">{busy ? 'Please wait…' : 'Send code'}</button>
         </form>
       ) : (

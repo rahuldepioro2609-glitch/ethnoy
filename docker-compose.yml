@@ -107,6 +107,8 @@ services:
       AUTH_EMAIL_DAILY_MAX_SENDS: ${AUTH_EMAIL_DAILY_MAX_SENDS:-}
       AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS: ${AUTH_EMAIL_DAILY_MAX_UNVERIFIED_SENDS:-}
       AUTH_EMAIL_PROVIDER: ${AUTH_EMAIL_PROVIDER:-}
+      # required (default when empty) or off: off lets Students and Institutes verify by email alone.
+      AUTH_MOBILE_VERIFICATION: ${AUTH_MOBILE_VERIFICATION:-}
       RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
       RESEND_API_KEY_FILE: /run/secrets/resend_api_key
       AUTH_OTP_HMAC_KEY_FILE: /run/secrets/auth_otp_hmac_key

@@ -64,6 +64,7 @@ import {
   configureVerificationServices,
   EMAIL_PROVIDER_NOT_CONFIGURED,
   OTP_PROVIDER_NOT_CONFIGURED,
+  mobileVerificationMode,
   normaliseEmail,
   normaliseMobile,
   providerStatus,
@@ -1804,15 +1805,21 @@ const accountRegistrationSchema = z.object({
 });
 
 app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response) => {
-  // AUTH-1 (strict): registration is closed, before any write, until mobile OTP is available.
-  if (!providerStatus().sms.available) {
-    response.status(503).json({ error: 'Student registration is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED });
+  // AUTH-1 (strict): registration is closed, before any write, until mobile OTP is available (email
+  // OTP while AUTH_MOBILE_VERIFICATION is off).
+  const mobileRequired = mobileVerificationMode() !== 'off';
+  const providers = providerStatus();
+  if (mobileRequired ? !providers.sms.available : !providers.email.available) {
+    response.status(503).json(mobileRequired
+      ? { error: 'Student registration is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED }
+      : { error: 'Student registration is unavailable: email verification is not configured.', code: EMAIL_PROVIDER_NOT_CONFIGURED });
     return;
   }
   const parsed = z.object({
     name: accountRegistrationSchema.shape.name,
     password: registrationPasswordSchema,
     mobile: z.string().trim().max(20),
+    email: z.string().trim().max(254).optional(),
   }).safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
@@ -1823,32 +1830,44 @@ app.post('/api/auth/register', authLimiter, asyncRoute(async (request, response)
     response.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_MOBILE' });
     return;
   }
+  // While mobile verification is off the code goes to this email; the mobile stays the sign-in identifier.
+  const email = mobileRequired ? null : normaliseEmail(parsed.data.email);
+  if (!mobileRequired && !email) {
+    response.status(400).json({ error: 'Enter a valid email address.', code: parsed.data.email ? 'INVALID_EMAIL' : 'EMAIL_REQUIRED' });
+    return;
+  }
   const { name, password } = parsed.data;
-  // AUTH C1: the mobile owner creates the permanent account only after verifying their code.
+  // AUTH C1: the account is created only after the code is verified.
   const passwordHash = await bcrypt.hash(password, 12);
   try {
-    response.status(202).json(await startStudentRegistration(response, { mobile, displayName: name, passwordHash }));
+    response.status(202).json(await startStudentRegistration(response, { mobile, email, displayName: name, passwordHash }));
   } catch (error) {
     if (!sendFlowError(response, error)) throw error;
   }
 }));
 
 app.post('/api/center/register', authLimiter, asyncRoute(async (request, response) => {
-  // AUTH-1 (strict): closed, before any write, until both mobile and email verification exist.
+  // AUTH-1 (strict): closed, before any write, until both mobile and email verification exist (email
+  // alone while AUTH_MOBILE_VERIFICATION is off).
   const providers = providerStatus();
-  if (!providers.sms.available || !providers.email.available) {
+  const mobileRequired = mobileVerificationMode() !== 'off';
+  if ((mobileRequired && !providers.sms.available) || !providers.email.available) {
     response.status(503).json({
-      error: 'Institute registration is unavailable: mobile and email verification are not configured.',
-      code: providers.sms.available ? EMAIL_PROVIDER_NOT_CONFIGURED : OTP_PROVIDER_NOT_CONFIGURED,
+      error: mobileRequired
+        ? 'Institute registration is unavailable: mobile and email verification are not configured.'
+        : 'Institute registration is unavailable: email verification is not configured.',
+      code: mobileRequired && !providers.sms.available ? OTP_PROVIDER_NOT_CONFIGURED : EMAIL_PROVIDER_NOT_CONFIGURED,
     });
     return;
   }
-  try {
-    const gate = await smsProtectionGate('unverified');
-    if (gate) throw gate;
-  } catch (error) {
-    if (!sendFlowError(response, error)) throw error;
-    return;
+  if (mobileRequired) {
+    try {
+      const gate = await smsProtectionGate('unverified');
+      if (gate) throw gate;
+    } catch (error) {
+      if (!sendFlowError(response, error)) throw error;
+      return;
+    }
   }
   const parsed = accountRegistrationSchema.extend({
     contactEmail: z.string().trim().email().max(254),
@@ -1868,8 +1887,10 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     return;
   }
   try {
-    const mobileGate = await smsProtectionGate('unverified', contactMobile);
-    if (mobileGate) throw mobileGate;
+    if (mobileRequired) {
+      const mobileGate = await smsProtectionGate('unverified', contactMobile);
+      if (mobileGate) throw mobileGate;
+    }
     const emailGate = await emailProtectionGate('unverified', normalisedEmail);
     if (emailGate) throw emailGate;
   } catch (error) {
@@ -1925,7 +1946,8 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     client.release();
   }
   if (issue) setInstitutionSubmissionCookie(response, issue);
-  // Institute mobile is verified first; email follows. No portal session is created yet.
+  // Institute mobile is verified first, then email (email only while mobile verification is off).
+  // No portal session is created yet.
   let verification: Awaited<ReturnType<typeof startInstituteVerification>> | { error: string; code: string } | null = null;
   try {
     verification = await startInstituteVerification(response, createdInstitutionId!, normalisedEmail, {
@@ -1936,7 +1958,9 @@ app.post('/api/center/register', authLimiter, asyncRoute(async (request, respons
     verification = { error: error.message, code: error.code };
   }
   response.status(201).json({
-    message: 'Institute request submitted. Verify your mobile number and email; Super Admin will verify the registration details before approval.',
+    message: mobileRequired
+      ? 'Institute request submitted. Verify your mobile number and email; Super Admin will verify the registration details before approval.'
+      : 'Institute request submitted. Verify your email; Super Admin will verify the registration details before approval.',
     verification,
   });
 }));
@@ -2058,7 +2082,7 @@ app.post('/api/center/resubmit', authLimiter, asyncRoute(async (request, respons
 app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) => {
   // Students use mobile + password, then SMS OTP. Institutes and Officials keep loginId + password.
   const schema = z.object({
-    loginId: z.string().trim().min(1).max(100).optional(),
+    loginId: z.string().trim().min(1).max(254).optional(),
     mobile: z.string().trim().min(1).max(20).optional(),
     password: z.string().min(1).max(128),
     role: z.enum(['candidate', 'center', 'official']),
@@ -2081,22 +2105,31 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
   // AUTH-1 (strict): Student and Institute sign-in stays closed until real verification providers are
   // configured. Checked BEFORE any lookup, so the answer reveals nothing about the account.
   const providers = providerStatus();
-  if (role === 'candidate' && !providers.sms.available) {
-    response.status(503).json({ error: 'Student sign-in is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED });
+  // AUTH_MOBILE_VERIFICATION=off: Students receive the code by email and Institutes verify email only.
+  const mobileRequired = mobileVerificationMode() !== 'off';
+  if (role === 'candidate' && !(mobileRequired ? providers.sms.available : providers.email.available)) {
+    response.status(503).json(mobileRequired
+      ? { error: 'Student sign-in is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED }
+      : { error: 'Student sign-in is unavailable: email verification is not configured.', code: EMAIL_PROVIDER_NOT_CONFIGURED });
     return;
   }
-  if (role === 'center' && (!providers.sms.available || !providers.email.available)) {
+  if (role === 'center' && !providers.email.available) {
     response.status(503).json({
-      error: 'Institute sign-in is unavailable: mobile and email verification are not configured.',
-      code: providers.sms.available ? EMAIL_PROVIDER_NOT_CONFIGURED : OTP_PROVIDER_NOT_CONFIGURED,
+      error: 'Institute sign-in is unavailable: email verification is not configured.',
+      code: EMAIL_PROVIDER_NOT_CONFIGURED,
     });
     return;
   }
   if (role === 'candidate' || role === 'center') {
     try {
-      const smsGate = await smsProtectionGate(role === 'candidate' ? 'any' : 'config');
-      if (smsGate) throw smsGate;
-      if (role === 'center') {
+      // Candidate sign-in always needs an SMS provider when mobile verification is required.
+      // An Institute with its mobile already verified needs no SMS delivery at login; if it still
+      // needs a mobile challenge, startVerification below refuses it when SMS is unavailable.
+      if (mobileRequired) {
+        const smsGate = await smsProtectionGate(role === 'candidate' ? 'any' : 'config');
+        if (smsGate) throw smsGate;
+      }
+      if (role === 'center' || !mobileRequired) {
         const emailGate = await emailProtectionGate('config');
         if (emailGate) throw emailGate;
       }
@@ -2135,11 +2168,25 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
     }
     user = match;
   } else {
-    const { rows } = await pool.query(
-      `SELECT ${USER_COLUMNS} FROM users WHERE login_id = $1 AND role = $2`,
-      [loginId!.toUpperCase(), role],
-    );
-    user = rows[0];
+    const { rows } = role === 'center' && loginId!.includes('@')
+      ? await pool.query(
+        `SELECT u.id, u.login_id, u.display_name, u.role, u.password_hash, u.account_status, u.is_super_admin, u.contact_email
+           FROM users u
+           JOIN institute_verifications iv ON iv.institution_id = u.id
+          WHERE u.role = 'center'
+            AND iv.email_verified_at IS NOT NULL
+            AND lower(iv.email_destination) = lower($1)
+          LIMIT 2`,
+        [loginId!.trim()],
+      )
+      : await pool.query(
+        `SELECT ${USER_COLUMNS} FROM users WHERE login_id = $1 AND role = $2`,
+        [loginId!.toUpperCase(), role],
+      );
+    // An Institute email is a login alias only when it is the account's verified address and maps
+    // to exactly one account. Ambiguous or unverified addresses fail generically, like unknown IDs.
+    const uniqueInstituteEmailMatch = role !== 'center' || !loginId!.includes('@') || rows.length === 1;
+    user = uniqueInstituteEmailMatch ? rows[0] : undefined;
     // AUTH C1.9.1 (D-11): an unknown login ID costs one bcrypt comparison too (against the fixed,
     // once-per-process dummy hash), so the answer time does not reveal whether the account exists.
     const valid = user ? await bcrypt.compare(password, user.password_hash) : await compareAgainstDummyHash(password);
@@ -2157,9 +2204,18 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
     });
     return;
   }
-  // A correct password never yields a Student session by itself; mobile OTP is required.
+  // A correct password never yields a Student session by itself; a one-time code is required (to the
+  // mobile, or to the verified email while AUTH_MOBILE_VERIFICATION is off).
   if (user.role === 'candidate') {
     try {
+      if (!mobileRequired) {
+        // No verified email yet: the challenge starts at the destination step and asks for one.
+        const verifiedEmail = await authVerificationStore().findVerifiedContact(String(user.id), 'email');
+        response.status(202).json(await startVerification(response, {
+          purpose: 'student_login', userId: String(user.id), channel: 'email', destination: verifiedEmail,
+        }));
+        return;
+      }
       const verifiedMobile = await authVerificationStore().findVerifiedContact(String(user.id), 'sms');
       const destination = signInMobile ?? verifiedMobile;
       const challenge = await startVerification(response, {
@@ -2182,8 +2238,9 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
     }
     return;
   }
-  // Institute access needs verified mobile and email, institutional verification, Official approval
-  // (above) and no suspension before any session.
+  // Institute access needs verified mobile (unless mobile verification is off) and email, institutional
+  // verification, Official approval (above) and no suspension before any session. A missing SMS provider
+  // does not block accounts that completed mobile verification earlier.
   if (user.role === 'center') {
     try {
       const state = await authVerificationStore().getInstituteVerification(String(user.id));

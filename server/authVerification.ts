@@ -44,6 +44,7 @@ import {
   hashOtp,
   maskEmail,
   maskMobile,
+  mobileVerificationMode,
   normaliseEmail,
   normaliseMobile,
   OTP_POLICY,
@@ -220,7 +221,7 @@ export function describeChallenge(challenge: VerificationChallenge, now: Date) {
 async function deliverCode(challenge: VerificationChallenge, now: Date, deadlineMs: number = PROVIDER_DELIVERY_TIMEOUT_MS): Promise<void> {
   const services = verificationServices();
   if (!channelAvailable(services, challenge.channel)) throw providerUnavailable(challenge.channel);
-  if (!challenge.destination) throw new VerificationFlowError(409, 'DESTINATION_REQUIRED', 'Enter the mobile number to verify first.');
+  if (!challenge.destination) throw new VerificationFlowError(409, 'DESTINATION_REQUIRED', challenge.channel === 'sms' ? 'Enter the mobile number to verify first.' : 'Enter the email address to verify first.');
   if (challenge.sendCount >= OTP_POLICY.maxSendsPerChallenge) throw new VerificationFlowError(429, 'TOO_MANY_RESENDS', 'Too many codes were requested. Start again later.');
   if (challenge.lastSentAt && now.getTime() - challenge.lastSentAt.getTime() < OTP_POLICY.resendCooldownMs) {
     throw new VerificationFlowError(429, 'RESEND_COOLDOWN', 'Please wait before requesting another code.', { resendAvailableAt: new Date(challenge.lastSentAt.getTime() + OTP_POLICY.resendCooldownMs).toISOString() });
@@ -324,9 +325,11 @@ export async function startVerification(
   if (!channelAvailable(verificationServices(), input.channel)) throw providerUnavailable(input.channel);
   const userId = input.userId ?? null;
   const registrationClaimId = input.registrationClaimId ?? null;
-  // AUTH C1: registration claims are completed only by the Student's SMS OTP.
-  if (registrationClaimId && (input.purpose !== 'student_registration' || input.channel !== 'sms')) {
-    throw new Error('registration claims are used only for Student registration over SMS');
+  // AUTH C1: registration claims are completed only by the Student's SMS OTP (or email OTP while
+  // AUTH_MOBILE_VERIFICATION is off).
+  const claimChannelAllowed = input.channel === 'sms' || (input.channel === 'email' && mobileVerificationMode() === 'off');
+  if (registrationClaimId && (input.purpose !== 'student_registration' || !claimChannelAllowed)) {
+    throw new Error('registration claims are used only for Student registration over SMS (or email while mobile verification is off)');
   }
   // Per-account throttling applies to accounts; a pending claim has none (destination limits apply).
   if (userId && await store.countChallengesSince(userId, new Date(now.getTime() - 3600 * 1000)) >= ACCOUNT_CHALLENGES_PER_HOUR) {
@@ -367,10 +370,18 @@ function emailDailyLimitReached(): VerificationFlowError {
  * AUTH C1.4-B-1 email bucket rule, evaluated fresh for every send and resend from server data only:
  * ACCOUNT only when a fresh findPortalUser shows an APPROVED Institute, the purpose is institute_email
  * and the destination is exactly its recorded institute_verifications.email_destination. A stored
- * address is never treated as verified. Everything else (new and pending Institutes) is UNVERIFIED.
+ * address is never treated as verified. Also ACCOUNT: a Student's student_login (email codes while
+ * AUTH_MOBILE_VERIFICATION is off) to exactly its current VERIFIED email contact, so ordinary sign-ins
+ * do not use up the small unverified allowance. Everything else (new and pending Institutes, Student
+ * registration and email capture) is UNVERIFIED.
  */
 export async function emailBucketFor(challenge: Pick<VerificationChallenge, 'userId' | 'purpose' | 'destination' | 'channel'>): Promise<EmailBucket> {
-  if (challenge.channel !== 'email' || !challenge.userId || !challenge.destination || challenge.purpose !== 'institute_email') return 'unverified';
+  if (challenge.channel !== 'email' || !challenge.userId || !challenge.destination) return 'unverified';
+  if (challenge.purpose === 'student_login') {
+    const current = await store.findVerifiedContact(challenge.userId, 'email');
+    return current !== null && current === challenge.destination ? 'account' : 'unverified';
+  }
+  if (challenge.purpose !== 'institute_email') return 'unverified';
   const account = await store.findPortalUser(challenge.userId);
   if (!account || account.role !== 'center' || account.accountStatus !== 'approved') return 'unverified';
   const state = await store.getInstituteVerification(challenge.userId);
@@ -457,19 +468,24 @@ export async function smsProtectionGate(scope: 'config' | 'any' | 'unverified', 
  */
 export async function startStudentRegistration(
   response: Response,
-  input: { mobile: string; displayName: string; passwordHash: string; now?: Date },
+  input: { mobile: string; email?: string | null; displayName: string; passwordHash: string; now?: Date },
 ) {
   const now = input.now ?? new Date();
-  if (!channelAvailable(verificationServices(), 'sms')) throw providerUnavailable('sms');
+  // While AUTH_MOBILE_VERIFICATION is off the code goes to the email; the claim still records the
+  // mobile, from which the login ID is derived (unverified until mobile verification is back on).
+  const channel: ContactChannel = input.email ? 'email' : 'sms';
+  if (channel === 'email' && mobileVerificationMode() !== 'off') throw new Error('email registration is used only while mobile verification is off');
+  if (!channelAvailable(verificationServices(), channel)) throw providerUnavailable(channel);
   const protection = abuseProtection();
-  if (!protection.sms) throw smsProtectionNotConfigured();
+  if (channel === 'sms' && !protection.sms) throw smsProtectionNotConfigured();
+  if (channel === 'email' && !protection.email) throw emailProtectionNotConfigured();
   if (protection.registrationClaimTtlMs === null) {
     throw new VerificationFlowError(503, 'REGISTRATION_NOT_CONFIGURED', 'Student registration is unavailable: the registration lifetime is not configured.');
   }
-  // Check only the shared daily budgets before creating a temporary claim. The destination is
-  // deliberately omitted: per-number limits are authoritatively reserved in deliverCode. This
+  // Check only the shared daily budgets before creating a temporary claim. For SMS the destination
+  // is deliberately omitted: per-number limits are authoritatively reserved in deliverCode. This
   // advisory check avoids unnecessary claims when the daily service budget is already exhausted.
-  const dailyGate = await smsProtectionGate('unverified');
+  const dailyGate = channel === 'sms' ? await smsProtectionGate('unverified') : await emailProtectionGate('unverified', input.email!);
   if (dailyGate) throw dailyGate;
   // Bounded, idempotent cleanup of expired claims. Best effort: a failure never blocks registration
   // and removes nothing it should not (the store selects only expired, unconsumed, dead claims).
@@ -479,7 +495,9 @@ export async function startStudentRegistration(
     id: claimId, mobile: input.mobile, displayName: input.displayName, passwordHash: input.passwordHash,
     createdAt: now, expiresAt: new Date(now.getTime() + protection.registrationClaimTtlMs),
   });
-  return startVerification(response, { purpose: 'student_registration', registrationClaimId: claimId, channel: 'sms', destination: input.mobile, now });
+  return startVerification(response, {
+    purpose: 'student_registration', registrationClaimId: claimId, channel, destination: channel === 'sms' ? input.mobile : input.email!, now,
+  });
 }
 
 async function currentChallenge(request: Request, now: Date): Promise<VerificationChallenge> {
@@ -491,10 +509,16 @@ async function currentChallenge(request: Request, now: Date): Promise<Verificati
   return challenge;
 }
 
-/** Institute contact verification is mobile first, then email. */
-export function nextInstituteChannel(state: InstituteVerificationState | null): ContactChannel | null {
-  if (!state?.mobileVerifiedAt) return 'sms';
-  if (!state.emailVerifiedAt) return 'email';
+/**
+ * Institute contact verification is mobile first, then email. While AUTH_MOBILE_VERIFICATION is off
+ * only the email is verified; the contact mobile stays recorded (unverified) for the records.
+ */
+export function nextInstituteChannel(
+  state: InstituteVerificationState | null,
+  mode = mobileVerificationMode(),
+): ContactChannel | null {
+  if (mode !== 'off' && !state?.mobileVerifiedAt) return 'sms';
+  if (!state?.emailVerifiedAt) return 'email';
   return null;
 }
 
@@ -572,17 +596,30 @@ export function createAuthVerificationRouter(options: AuthVerificationRouterOpti
     response.json(describeChallenge(challenge, now()));
   }));
 
-  // Existing accounts without a registered mobile (decision: capture at next sign-in).
+  // Existing accounts without a registered mobile (decision: capture at next sign-in). While
+  // AUTH_MOBILE_VERIFICATION is off, a Student sign-in without a verified email captures an email the
+  // same way (the code proves the address before it is stored as verified).
   router.post('/auth/verification/destination', verificationLimiter, flowRoute(async (request, response) => {
     const challenge = await currentChallenge(request, now());
-    if (challenge.channel !== 'sms' || challenge.destination) throw new VerificationFlowError(409, 'DESTINATION_ALREADY_SET', 'A destination is already set for this verification.');
-    const mobile = normaliseMobile((request.body as { mobile?: unknown })?.mobile);
-    if (!mobile) throw new VerificationFlowError(400, 'INVALID_MOBILE', 'Enter a valid 10-digit Indian mobile number.');
-    if (!channelAvailable(verificationServices(), 'sms')) throw providerUnavailable('sms');
-    await store.setChallengeDestination(challenge.id, mobile);
+    const emailCapture = challenge.channel === 'email' && challenge.purpose === 'student_login' && mobileVerificationMode() === 'off';
+    if ((challenge.channel !== 'sms' && !emailCapture) || challenge.destination) throw new VerificationFlowError(409, 'DESTINATION_ALREADY_SET', 'A destination is already set for this verification.');
+    const body = request.body as { mobile?: unknown; email?: unknown } | undefined;
+    const destination = emailCapture ? normaliseEmail(body?.email) : normaliseMobile(body?.mobile);
+    if (!destination) {
+      throw emailCapture
+        ? new VerificationFlowError(400, 'INVALID_EMAIL', 'Enter a valid email address.')
+        : new VerificationFlowError(400, 'INVALID_MOBILE', 'Enter a valid 10-digit Indian mobile number.');
+    }
+    if (!channelAvailable(verificationServices(), challenge.channel)) throw providerUnavailable(challenge.channel);
+    if (emailCapture) {
+      // Advisory early check for that address (the reservation in deliverCode stays authoritative).
+      const gate = await emailProtectionGate('unverified', destination);
+      if (gate) throw gate;
+    }
+    await store.setChallengeDestination(challenge.id, destination);
     // Deliver only to the destination actually stored: a concurrent capture may have set another one.
     const updated = await store.getChallenge(challenge.id);
-    if (!updated || updated.consumedAt || updated.destination !== mobile) throw new VerificationFlowError(409, 'DESTINATION_ALREADY_SET', 'A destination is already set for this verification.');
+    if (!updated || updated.consumedAt || updated.destination !== destination) throw new VerificationFlowError(409, 'DESTINATION_ALREADY_SET', 'A destination is already set for this verification.');
     await deliverCode(updated, now(), deliveryDeadlineMs);
     response.json(describeChallenge((await store.getChallenge(challenge.id))!, now()));
   }));
@@ -654,7 +691,7 @@ export function createAuthVerificationRouter(options: AuthVerificationRouterOpti
         throw new VerificationFlowError(410, 'VERIFICATION_EXPIRED', 'This registration has expired. Please register again.');
       }
       const result = await registrationStore.completeRegistration({
-        challengeId: challenge.id, claimId: challenge.registrationClaimId, destination: challenge.destination,
+        challengeId: challenge.id, claimId: challenge.registrationClaimId, destination: challenge.destination, channel: challenge.channel,
         userId: randomUUID(), loginId: studentLoginIdForMobile(services.otpKey!, mobile),
         sessionTokenHash: hashSessionToken(token), sessionExpiresAt: new Date(now().getTime() + SESSION_TTL_MS), now: now(),
       });
@@ -689,7 +726,7 @@ export function createAuthVerificationRouter(options: AuthVerificationRouterOpti
       if (!user || user.role !== 'candidate' || user.accountStatus !== 'approved') throw new VerificationFlowError(403, 'ACCOUNT_NOT_ELIGIBLE', 'This account cannot sign in.');
       const token = newSessionToken();
       const done = await store.completeStudentVerification({
-        challengeId: challenge.id, userId: user.id, destination: challenge.destination, sessionTokenHash: hashSessionToken(token),
+        challengeId: challenge.id, userId: user.id, channel: challenge.channel, destination: challenge.destination, sessionTokenHash: hashSessionToken(token),
         sessionExpiresAt: new Date(now().getTime() + SESSION_TTL_MS), now: now(),
         // AUTH C1 (approved rule): capturing a number that belongs to a mobile-first Student is refused.
         mobileFirstLoginId: challenge.purpose === 'student_mobile_capture' ? studentLoginIdForMobile(services.otpKey!, challenge.destination) : undefined,
@@ -722,7 +759,9 @@ export function createAuthVerificationRouter(options: AuthVerificationRouterOpti
       verified: challenge.channel,
       approval: user.accountStatus,
       institutionalVerification: state?.institutionalStatus ?? 'pending',
-      message: 'Mobile and email are verified. Sign in again; access also needs institutional verification and Official approval.',
+      message: mobileVerificationMode() === 'off'
+        ? 'Email is verified. Sign in again; access also needs institutional verification and Official approval.'
+        : 'Mobile and email are verified. Sign in again; access also needs institutional verification and Official approval.',
     });
   }));
 

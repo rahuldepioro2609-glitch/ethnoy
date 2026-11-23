@@ -37,7 +37,7 @@ import { AdminMfaEnrollment } from './AdminMfaEnrollment';
 import { adminMfaStartStatus } from '../utils/adminMfa';
 import { StudentAuthPanel } from './StudentAuthPanel';
 import { StudentGoogleLinkCard } from './StudentGoogleLinkCard';
-import { googleNotice, isChallenge, signInAvailable, unavailableMessage, verificationMessage, type ProviderStatus, type VerificationChallengeView } from '../utils/authVerification';
+import { emailOnlyVerification, googleNotice, isChallenge, signInAvailable, unavailableMessage, verificationMessage, type ProviderStatus, type VerificationChallengeView } from '../utils/authVerification';
 import { OnlineExamRunner } from './OnlineExamRunner';
 import { BrandLogo } from './BrandLogo';
 import { useLanguage } from '../utils/languageContext';
@@ -521,15 +521,17 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, surfaceHostn
                 )}
                 <div>
                   <label htmlFor="role-login-id" className="mb-1.5 block text-sm font-semibold text-slate-700">
-                    {t(isRegistering ? 'Choose institute / center ID' : 'Staff / Center ID')}
+                    {t(isRegistering ? 'Choose institute / center ID' : role === 'center' ? 'Institute email or Staff / Center ID' : 'Staff / Center ID')}
                   </label>
-                  <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={4} maxLength={50} pattern="[A-Za-z0-9._-]+" title="Use 4-50 letters, numbers, dots, underscores or hyphens." className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm uppercase outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+                  <input id="role-login-id" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required minLength={isRegistering ? 4 : 1} maxLength={isRegistering ? 50 : role === 'center' ? 254 : 50} pattern={isRegistering || role === 'official' ? '[A-Za-z0-9._-]+' : undefined} title={isRegistering || role === 'official' ? 'Use 4-50 letters, numbers, dots, underscores or hyphens.' : undefined} className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm uppercase outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
                 </div>
                 {isRegistering && !isResubmitting && (
                   <div>
                     <label htmlFor="role-register-mobile" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Institute contact mobile number')}</label>
                     <input id="role-register-mobile" type="tel" inputMode="numeric" autoComplete="tel-national" value={mobile} onChange={(event) => setMobile(event.target.value)} required maxLength={16} placeholder="10-digit mobile number" className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-600/15" />
-                    <p className="mt-1 text-xs text-slate-500">{t('A one-time code will be sent to this number. You can sign in only after it is verified.')}</p>
+                    <p className="mt-1 text-xs text-slate-500">{t(emailOnlyVerification(providers)
+                      ? 'Contact number for institute records. It is not verified while mobile verification is off; the one-time code is sent to your email.'
+                      : 'A one-time code will be sent to this number. You can sign in only after it is verified.')}</p>
                   </div>
                 )}
                 {isRegistering && role === 'center' && (

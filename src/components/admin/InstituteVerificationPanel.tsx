@@ -100,7 +100,7 @@ export const InstituteVerificationPanel: React.FC = () => {
         description="Super Admin only. Institutional verification (registration details and documents) and suspension are separate from Official approval, which is shown here for reference and is not changed by these decisions."
       >
         <ul className="list-disc space-y-1 pl-5 text-sm text-slate-600">
-          <li>An Institute can use the portal only when Official approval is granted, its mobile and email are verified, it is institutionally verified and it is not suspended.</li>
+          <li>An Institute can use the portal only when Official approval is granted, its email is verified (and its mobile, while mobile verification is on), it is institutionally verified and it is not suspended.</li>
           <li>Suspension takes effect on the Institute's next request. Lifting it does not change the verification decision.</li>
           <li>Every decision needs a reason (10–500 characters) and is recorded with your account in the append-only audit log.</li>
         </ul>

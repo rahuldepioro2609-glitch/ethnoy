@@ -112,6 +112,27 @@ export interface VerificationServices {
   otpKey: Buffer | null;
   /** Fixed, user-safe reasons for disabled channels (never secret values). */
   reasons: { sms: string | null; email: string | null; google: string | null };
+  /**
+   * AUTH_MOBILE_VERIFICATION. `off` lets Students and Institutes verify by email alone while SMS is
+   * unavailable (owner decision, 2026-11-23). Absent means `required` (see mobileVerificationMode).
+   */
+  mobileVerification?: MobileVerificationMode;
+}
+
+export type MobileVerificationMode = 'required' | 'off';
+
+/**
+ * Parses AUTH_MOBILE_VERIFICATION. Empty or absent is `required` (the safe default); anything other
+ * than `required` or `off` is invalid (null) and fails the deployment preflight.
+ */
+export function parseMobileVerificationSetting(value: string | undefined): MobileVerificationMode | null {
+  if (value === undefined || value === '' || value === 'required') return 'required';
+  return value === 'off' ? 'off' : null;
+}
+
+/** The effective mode: `off` only when explicitly configured. */
+export function mobileVerificationMode(services: Pick<VerificationServices, 'mobileVerification'> = current): MobileVerificationMode {
+  return services.mobileVerification === 'off' ? 'off' : 'required';
 }
 
 export const OTP_PROVIDER_NOT_CONFIGURED = 'OTP_PROVIDER_NOT_CONFIGURED';
@@ -282,7 +303,10 @@ export function resolveVerificationServices(
     }
   }
 
-  return { sms, email, google, otpKey: sms || email ? otpKey : null, reasons };
+  // An invalid value never weakens verification: it resolves to `required` (and fails the preflight).
+  const mobileVerification = parseMobileVerificationSetting(env.AUTH_MOBILE_VERIFICATION) ?? 'required';
+
+  return { sms, email, google, otpKey: sms || email ? otpKey : null, reasons, mobileVerification };
 }
 
 /**
@@ -320,6 +344,8 @@ export function providerStatus(services: VerificationServices = current) {
     sms: { available: services.sms !== null && services.otpKey !== null, reason: services.sms && services.otpKey ? null : services.reasons.sms },
     email: { available: services.email !== null && services.otpKey !== null, reason: services.email && services.otpKey ? null : services.reasons.email },
     google: { available: services.google !== null && services.sms !== null && services.otpKey !== null, reason: services.google ? (services.sms ? null : 'Google sign-in also needs mobile verification, which is unavailable.') : services.reasons.google },
+    /** `off`: Student and Institute verification uses email only (AUTH_MOBILE_VERIFICATION). */
+    mobileVerification: mobileVerificationMode(services),
   };
 }
 

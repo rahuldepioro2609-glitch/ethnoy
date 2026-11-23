@@ -5,6 +5,16 @@ export interface ProviderStatus {
   sms: { available: boolean; reason: string | null };
   email: { available: boolean; reason: string | null };
   google: { available: boolean; reason: string | null };
+  /**
+   * Server setting AUTH_MOBILE_VERIFICATION. `off`: Institutes verify only email, and Students get their
+   * one-time code by email (they still sign in with mobile + password). Missing means `required`.
+   */
+  mobileVerification?: 'required' | 'off';
+}
+
+/** True while the server runs without mobile (SMS) verification (AUTH_MOBILE_VERIFICATION=off). */
+export function emailOnlyVerification(providers: ProviderStatus | null): boolean {
+  return providers?.mobileVerification === 'off';
 }
 
 export interface VerificationChallengeView {
@@ -25,18 +35,25 @@ export type PortalSignInRole = 'candidate' | 'center' | 'official';
 export function signInAvailable(role: PortalSignInRole, providers: ProviderStatus | null): boolean | null {
   if (role === 'official') return true;
   if (!providers) return null;
-  return role === 'candidate' ? providers.sms.available : providers.sms.available && providers.email.available;
+  // Institutes that already verified their mobile during onboarding can sign in with email even
+  // when no SMS vendor is configured. If a mobile still needs verification, the server keeps that
+  // challenge fail-closed. Student sign-in continues to follow the selected mobile-verification mode.
+  if (role === 'center') return providers.email.available;
+  if (emailOnlyVerification(providers)) return providers.email.available;
+  return providers.sms.available;
 }
 
 export function unavailableMessage(role: PortalSignInRole, providers: ProviderStatus | null = null): string {
+  const emailOnly = emailOnlyVerification(providers);
   if (role === 'candidate') {
-    return 'Student sign-in and registration are temporarily unavailable. Mobile verification has not been set up yet, and students can only sign in after verifying their mobile number.';
+    return emailOnly
+      ? 'Student sign-in and registration are temporarily unavailable. Email verification has not been set up yet, and students can only sign in after confirming a code sent to their email.'
+      : 'Student sign-in and registration are temporarily unavailable. Mobile verification has not been set up yet, and students can only sign in after verifying their mobile number.';
   }
-  if (providers) {
-    const missing = [!providers.sms.available ? 'mobile' : null, !providers.email.available ? 'email' : null].filter(Boolean);
-    if (missing.length) return `Institute sign-in and registration are paused until ${missing.join(' and ')} verification is configured.`;
+  if (providers && !providers.email.available) {
+    return 'Institute sign-in and registration are paused until email verification is configured.';
   }
-  return 'Institute sign-in and registration are temporarily unavailable. Mobile and email verification have not been set up yet, and institutes can only enter the portal after both are verified.';
+  return 'Institute sign-in is temporarily unavailable until email verification is configured.';
 }
 
 const MESSAGES: Readonly<Record<string, string>> = Object.freeze({
@@ -60,9 +77,9 @@ const MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   APPROVAL_PENDING: 'Your institute registration is awaiting approval.',
   ACCOUNT_REJECTED: 'This account was not approved. Contact the portal administrator.',
   INSTITUTE_SUSPENDED: 'This institute account is suspended.',
-  INSTITUTIONAL_VERIFICATION_PENDING: 'Your mobile and email are verified. Institutional verification is still pending.',
+  INSTITUTIONAL_VERIFICATION_PENDING: 'Your contact details are verified. Institutional verification is still pending.',
   INSTITUTIONAL_VERIFICATION_REJECTED: 'Institutional verification was not successful. Contact the portal administrator.',
-  STUDENT_VERIFICATION_REQUIRED: 'Please sign in again and verify your mobile number.',
+  STUDENT_VERIFICATION_REQUIRED: 'Please sign in again and confirm the one-time code.',
   INSTITUTE_VERIFICATION_INCOMPLETE: 'Your institute must complete verification before using the portal.',
   INVALID_MOBILE_CREDENTIALS: 'Invalid mobile number or password. If you signed up earlier with a Student ID, use "Existing account?".',
   ACCOUNT_NOT_CREATED: 'We could not create an account with these details. If you already have an account, sign in instead.',
@@ -77,18 +94,27 @@ const MESSAGES: Readonly<Record<string, string>> = Object.freeze({
 export type OptionState = { state: 'checking' } | { state: 'available' } | { state: 'unavailable'; reason: string };
 
 export const STUDENT_MOBILE_UNAVAILABLE = 'Mobile sign-in is not available yet: mobile (SMS) verification has not been set up, so no code can be sent. Student sign-in and account creation are paused until it is.';
+export const STUDENT_EMAIL_UNAVAILABLE = 'Sign-in is not available yet: email verification has not been set up, so no code can be sent. Student sign-in and account creation are paused until it is.';
 export const STUDENT_GOOGLE_UNAVAILABLE = 'Google sign-in has not been set up.';
+export const STUDENT_GOOGLE_PAUSED = 'Google sign-in is paused while codes are sent by email, because it still ends with a code sent to your mobile.';
 export const STUDENT_GOOGLE_SIGN_UP_UNSUPPORTED = 'Google cannot create a new account. Create your account with your mobile number; after you sign in, you can link Google from your dashboard.';
 
-/** Student sign-in and registration use mobile OTP. */
+/**
+ * Student sign-in and registration with mobile + password. The one-time code goes to the mobile, or to
+ * the email while the server runs without mobile verification (AUTH_MOBILE_VERIFICATION=off).
+ */
 export function studentMobileOption(providers: ProviderStatus | null): OptionState {
   if (!providers) return { state: 'checking' };
+  if (emailOnlyVerification(providers)) {
+    return providers.email.available ? { state: 'available' } : { state: 'unavailable', reason: STUDENT_EMAIL_UNAVAILABLE };
+  }
   return providers.sms.available ? { state: 'available' } : { state: 'unavailable', reason: STUDENT_MOBILE_UNAVAILABLE };
 }
 
 /** "Continue with Google" for sign-in: only linked accounts, and it still ends with the mobile code. */
 export function studentGoogleSignInOption(providers: ProviderStatus | null): OptionState {
   if (!providers) return { state: 'checking' };
+  if (emailOnlyVerification(providers)) return { state: 'unavailable', reason: STUDENT_GOOGLE_PAUSED };
   if (!providers.sms.available) return { state: 'unavailable', reason: STUDENT_MOBILE_UNAVAILABLE };
   return providers.google.available ? { state: 'available' } : { state: 'unavailable', reason: providers.google.reason ?? STUDENT_GOOGLE_UNAVAILABLE };
 }

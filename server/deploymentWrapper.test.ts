@@ -754,3 +754,19 @@ test('C1.4-B-2: emergency syntax-only operations skip the email rule (character 
     assert.equal(planDeployment({ arguments: { ...validArguments, operation }, envFileText: envText({ ...syntheticValues, AUTH_EMAIL_DAILY_MAX_SENDS: '5 0' }), shellEnvironment: {} }).ok, false, `${operation}: unsafe value refused`);
   }
 });
+
+test('AUTH_MOBILE_VERIFICATION: optional, governed, forwarded only when set, and validated by the host preflight', () => {
+  assert.ok((OPTIONAL_COMPOSE_VARIABLES as readonly string[]).includes('AUTH_MOBILE_VERIFICATION'), 'optional');
+  assert.ok(!(REQUIRED_COMPOSE_VARIABLES as readonly string[]).includes('AUTH_MOBILE_VERIFICATION'), 'never required');
+  assert.ok(GOVERNED_VARIABLES.includes('AUTH_MOBILE_VERIFICATION'), 'governed');
+  for (const value of ['', 'required', 'off']) assert.deepEqual(errorsOf(hostPreflight({ AUTH_MOBILE_VERIFICATION: value })), [], `accepted: "${value}"`);
+  assert.deepEqual(errorsOf(hostPreflight({})), [], 'absent: accepted (required)');
+  for (const bad of ['OFF', 'disabled', 'false']) {
+    assert.deepEqual(errorsOf(hostPreflight({ AUTH_MOBILE_VERIFICATION: bad })), ['AUTH_MOBILE_VERIFICATION is invalid: it must be required or off (or left empty for required).'], bad);
+  }
+  const off = planDeployment({ arguments: validArguments, envFileText: envText({ ...syntheticValues, AUTH_MOBILE_VERIFICATION: 'off' }), shellEnvironment: {} });
+  assert.ok(off.ok, off.ok ? '' : off.errors.join(' | '));
+  if (off.ok) assert.equal(off.plan.childEnvironment?.AUTH_MOBILE_VERIFICATION, 'off', 'reaches Compose');
+  const absent = planDeployment({ arguments: validArguments, envFileText: envText(syntheticValues), shellEnvironment: {} });
+  if (absent.ok) assert.equal(absent.plan.childEnvironment?.AUTH_MOBILE_VERIFICATION, undefined, 'absent stays absent');
+});

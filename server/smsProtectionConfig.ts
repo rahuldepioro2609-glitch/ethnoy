@@ -5,7 +5,7 @@
 // database, dotenv or store is reachable from here, so the deployment preflight
 // (validateDeploymentConfig.ts), API startup and every request share exactly this code.
 // Values are PENDING OWNER APPROVAL: there are no defaults, and nothing here ever prints a value.
-import { OTP_POLICY } from './verificationProviders.js';
+import { OTP_POLICY, parseMobileVerificationSetting } from './verificationProviders.js';
 
 export interface SmsDestinationLimit {
   /** Rolling window for the per-destination limit of this bucket. */
@@ -252,4 +252,15 @@ export function validateEmailProtectionDeployment(env: Readonly<Record<string, s
     : status === 'inconsistent'
       ? `${name} is inconsistent: it must not exceed ${EMAIL_PROTECTION_SETTINGS.dailyMaxSends}.`
       : `${name} is invalid: it must be a positive whole number.`));
+}
+
+/**
+ * AUTH_MOBILE_VERIFICATION deployment preflight rule (owner decision, 2026-11-23), applied by the host
+ * wrapper and the in-container preflight alike. Missing or empty (= required), `required` and `off` are
+ * accepted; any other value is rejected, so a typo can never silently change who must verify a mobile.
+ */
+export function validateMobileVerificationDeployment(env: Readonly<Record<string, string | undefined>>): string[] {
+  return parseMobileVerificationSetting(env.AUTH_MOBILE_VERIFICATION) === null
+    ? ['AUTH_MOBILE_VERIFICATION is invalid: it must be required or off (or left empty for required).']
+    : [];
 }

@@ -61,6 +61,7 @@ test('db:migrate runs core, auth, staff and grants migrations in dependency orde
     'adminMfaMigration.sql',
     'platformStaffMigration.sql',
     'organizationStaffMigration.sql',
+    'studentEmailOtpMigration.sql',
     'databaseGrantsMigration.sql',
   ]);
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -260,6 +261,21 @@ test('AUTH C1: the claims migration runs once, right after AUTH-1 and before the
   assert.equal(files.at(-1), 'databaseGrantsMigration.sql', 'the grants migration stays last');
   assert.equal(files.indexOf('platformStaffMigration.sql'), files.indexOf('adminMfaMigration.sql') + 1);
   assert.equal(files.indexOf('organizationStaffMigration.sql'), files.indexOf('platformStaffMigration.sql') + 1);
+});
+
+test('AUTH_MOBILE_VERIFICATION: the email-OTP migration runs once, after AUTH-1, right before grants, and only widens the session-method CHECK', async () => {
+  const files = [...MIGRATION_FILES] as string[];
+  assert.equal(files.filter((name) => name === 'studentEmailOtpMigration.sql').length, 1);
+  assert.ok(files.indexOf('studentEmailOtpMigration.sql') > files.indexOf('authVerificationMigration.sql'), 'needs auth_session_verifications');
+  assert.equal(files.indexOf('studentEmailOtpMigration.sql'), files.indexOf('databaseGrantsMigration.sql') - 1);
+  const sql = withoutComments(await readServerFile('studentEmailOtpMigration.sql'));
+  assert.doesNotMatch(sql, /\bBEGIN\s*;|\bCOMMIT\b|\bROLLBACK\b/i, 'the runner owns the transaction');
+  assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|TRUNCATE|UPDATE\s+\w+\s+SET|CREATE TABLE|ADD COLUMN|DROP TABLE|DROP COLUMN)\b/i, 'no data, table or column changes');
+  const statements = sql.split(/;\s*(?=\n|$)/).map((statement) => statement.trim().replace(/\s+/g, ' ')).filter(Boolean);
+  assert.deepEqual(statements, [
+    'ALTER TABLE auth_session_verifications DROP CONSTRAINT IF EXISTS auth_session_verifications_method_check',
+    "ALTER TABLE auth_session_verifications ADD CONSTRAINT auth_session_verifications_method_check CHECK ( method IN ('sms_otp', 'email_otp') )",
+  ]);
 });
 
 test('AUTH C1: the claims migration is additive, re-runnable, non-exclusive per mobile, and never touches existing rows', async () => {

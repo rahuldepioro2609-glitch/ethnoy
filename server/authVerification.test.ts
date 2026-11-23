@@ -60,7 +60,9 @@ class MemoryRegistrationStore implements StudentRegistrationStore {
     const challenge = this.auth.challenges.get(input.challengeId);
     if (!claim || !challenge || challenge.consumedAt || challenge.registrationClaimId !== input.claimId || challenge.expiresAt <= input.now) return 'not_in_progress' as const;
     challenge.consumedAt = input.now;
-    if (claim.consumedAt || claim.expiresAt <= input.now || claim.mobile !== input.destination) {
+    const channel = input.channel ?? 'sms';
+    // SMS: the code went to the claim's mobile. Email (AUTH_MOBILE_VERIFICATION off): to the challenge's email.
+    if (claim.consumedAt || claim.expiresAt <= input.now || (channel === 'sms' && claim.mobile !== input.destination)) {
       this.auth.events.push({ action: 'student.registration_refused', userId: null, details: { reason: 'claim_expired' } });
       return 'expired' as const;
     }
@@ -70,10 +72,10 @@ class MemoryRegistrationStore implements StudentRegistrationStore {
       this.auth.events.push({ action: 'student.registration_refused', userId: null, details: { reason: owned ? 'mobile_in_use' : 'login_id_taken' } });
       return 'refused' as const;
     }
-    this.auth.users.set(input.userId, { id: input.userId, loginId: input.loginId, role: 'candidate', accountStatus: 'approved', contactEmail: null });
+    this.auth.users.set(input.userId, { id: input.userId, loginId: input.loginId, role: 'candidate', accountStatus: 'approved', contactEmail: channel === 'email' ? input.destination : null });
     this.onUserCreated({ id: input.userId, loginId: input.loginId, displayName: claim.displayName, passwordHash: claim.passwordHash });
-    this.auth.contacts.set(`${input.userId}:sms`, input.destination);
-    this.auth.sessions.push({ tokenHash: input.sessionTokenHash, userId: input.userId, expiresAt: input.sessionExpiresAt, verified: true });
+    this.auth.contacts.set(`${input.userId}:${channel}`, channel === 'sms' ? claim.mobile : input.destination);
+    this.auth.sessions.push({ tokenHash: input.sessionTokenHash, userId: input.userId, expiresAt: input.sessionExpiresAt, verified: true, method: channel === 'email' ? 'email_otp' : 'sms_otp' });
     // AUTH C1.1: the completed claim is deleted, and its challenge with it (ON DELETE CASCADE).
     this.removeClaim(claim.id);
     this.auth.events.push({ action: 'student.registration_completed', userId: input.userId }, { action: 'student.verified_session_issued', userId: input.userId });
@@ -139,12 +141,15 @@ interface Fixture {
  * The shared pool answers only users lookups, users inserts, auth_sessions inserts and session
  * lookups, from in-memory fixtures; any other query fails the test.
  */
-async function setup(options: { services?: 'none' | 'sms' | 'both'; studentMobile?: string | null; extraStudents?: Array<{ id: string; loginId: string; mobile?: string }>; institute?: { status: string; verification?: Parameters<InstanceType<typeof MemoryAuthVerificationStore>['institutes']['set']>[1] }; protection?: import('./authVerification.js').AbuseProtectionConfig } = {}): Promise<Fixture> {
+async function setup(options: { services?: 'none' | 'sms' | 'both' | 'email'; mobileVerification?: 'required' | 'off'; studentMobile?: string | null; studentEmail?: string | null; extraStudents?: Array<{ id: string; loginId: string; mobile?: string }>; institute?: { status: string; verification?: Parameters<InstanceType<typeof MemoryAuthVerificationStore>['institutes']['set']>[1] }; protection?: import('./authVerification.js').AbuseProtectionConfig } = {}): Promise<Fixture> {
   const store = withC1CaptureRule(new MemoryAuthVerificationStore());
   const sms = new RecordingSmsProvider();
   const email = new RecordingEmailProvider();
   const mode = options.services ?? 'both';
-  providers.configureVerificationServices(mode === 'none' ? providers.DISABLED_SERVICES : testServices({ sms, email: mode === 'both' ? email : null }));
+  providers.configureVerificationServices(mode === 'none' ? providers.DISABLED_SERVICES : {
+    ...testServices({ sms: mode === 'email' ? null : sms, email: mode === 'both' || mode === 'email' ? email : null }),
+    mobileVerification: options.mobileVerification ?? 'required',
+  });
   verification.configureAuthVerificationStore(store);
   const studentHash = await bcrypt.hash(STUDENT_PASSWORD, 4);
   const instituteHash = await bcrypt.hash(INSTITUTE_PASSWORD, 4);
@@ -158,6 +163,7 @@ async function setup(options: { services?: 'none' | 'sms' | 'both'; studentMobil
   }
   for (const user of users) store.users.set(user.id, { id: user.id, loginId: user.login_id, role: user.role as 'candidate' | 'center', accountStatus: user.account_status, contactEmail: user.contact_email });
   if (options.studentMobile) store.contacts.set('student-1:sms', options.studentMobile);
+  if (options.studentEmail) store.contacts.set('student-1:email', options.studentEmail);
   if (options.institute?.verification) store.institutes.set('institute-1', options.institute.verification);
   const created: string[] = [];
   const registrations = new MemoryRegistrationStore(store, (user) => {
@@ -173,6 +179,16 @@ async function setup(options: { services?: 'none' | 'sms' | 'both'; studentMobil
   const fixture: Fixture = { store, sms, email, base: '', close: async () => undefined, sessionsInserted: [], legacy: new Map(), lookups: 0, inserted: [], registrations, smsGuard, emailGuard, created };
 
   (pool as unknown as { query: unknown }).query = async (text: string, values: unknown[] = []) => {
+    if (text.includes('JOIN institute_verifications iv') && text.includes('lower(iv.email_destination)')) {
+      fixture.lookups += 1;
+      const emailAddress = String(values[0]).trim().toLowerCase();
+      const matches = users.filter((user) => {
+        const state = store.institutes.get(user.id);
+        return user.role === 'center' && Boolean(state?.emailVerifiedAt)
+          && state?.emailDestination?.toLowerCase() === emailAddress;
+      });
+      return { rows: matches.slice(0, 2) };
+    }
     if (text.includes('FROM users WHERE login_id = $1 AND role = $2')) {
       fixture.lookups += 1;
       return { rows: users.filter((user) => user.login_id === values[0] && user.role === values[1]) };
@@ -196,7 +212,10 @@ async function setup(options: { services?: 'none' | 'sms' | 'both'; studentMobil
       if (!ownerId) return { rows: [] };
       const user = users.find((candidate) => candidate.id === ownerId)!;
       const state = store.institutes.get(user.id);
-      return { rows: [{ ...user, session_verified_at: verified ? new Date() : null, iv_institution_id: state ? user.id : null,
+      // Mirrors `v.method = ANY($2)`: only the accepted session methods count as verification evidence.
+      const accepted = Array.isArray(values[1]) ? values[1] as string[] : ['sms_otp'];
+      const evidence = verified !== undefined && accepted.includes(verified.method ?? 'sms_otp');
+      return { rows: [{ ...user, session_verified_at: evidence ? new Date() : null, iv_institution_id: state ? user.id : null,
         iv_mobile_verified_at: state?.mobileVerifiedAt ?? null, iv_email_verified_at: state?.emailVerifiedAt ?? null,
         iv_institutional_status: state?.institutionalStatus ?? null, iv_suspended_at: state?.suspendedAt ?? null }] };
     }
@@ -226,6 +245,7 @@ async function setup(options: { services?: 'none' | 'sms' | 'both'; studentMobil
 
 const studentLogin = (f: Fixture) => call(f.base, 'POST', '/api/auth/login', { surface: 'exam', body: { loginId: 'student-1', password: STUDENT_PASSWORD, role: 'candidate' } });
 const instituteLogin = (f: Fixture) => call(f.base, 'POST', '/api/auth/login', { surface: 'institution', body: { loginId: 'institute-1', password: INSTITUTE_PASSWORD, role: 'center' } });
+const instituteEmailLogin = (f: Fixture, email = 'office@example.test', password = INSTITUTE_PASSWORD) => call(f.base, 'POST', '/api/auth/login', { surface: 'institution', body: { loginId: email, password, role: 'center' } });
 const verificationCookie = (result: { setCookies: string[] }) => `elt_verification=${cookieValue(result.setCookies, 'elt_verification')}`;
 const verify = (f: Fixture, cookie: string, code: string, surface = 'exam') => call(f.base, 'POST', '/api/auth/verification/verify', { surface, cookie, body: { code } });
 
@@ -281,7 +301,7 @@ test('with no providers: Student and Institute sign-in and registration are clos
     assert.equal(student.body.code, 'OTP_PROVIDER_NOT_CONFIGURED');
     const institute = await instituteLogin(f);
     assert.equal(institute.status, 503);
-    assert.equal(institute.body.code, 'OTP_PROVIDER_NOT_CONFIGURED');
+    assert.equal(institute.body.code, 'EMAIL_PROVIDER_NOT_CONFIGURED');
     const register = await call(f.base, 'POST', '/api/auth/register', { surface: 'exam', body: { loginId: 'NEW-STUDENT', name: 'New Student', password: STUDENT_PASSWORD, mobile: '9876543210' } });
     assert.equal(register.status, 503);
     assert.equal(f.lookups, 0, 'no account lookup reveals anything');
@@ -576,6 +596,48 @@ test('Institute: mobile then email are verified independently; access also needs
     assert.deepEqual([me.status, me.body.code], [403, 'INSTITUTE_SUSPENDED']);
     const blocked = await instituteLogin(f);
     assert.deepEqual([blocked.status, blocked.body.code], [403, 'INSTITUTE_SUSPENDED']);
+  } finally {
+    await f.close();
+  }
+});
+
+test('Institute: verified email sign-in works without an SMS provider; Student SMS requirements stay unchanged', async () => {
+  const f = await setup({ services: 'email', institute: { status: 'approved', verification: { mobileDestination: '+919876500010', mobileVerifiedAt: new Date(), emailDestination: 'office@example.test', emailVerifiedAt: new Date(), institutionalStatus: 'verified', suspendedAt: null } } });
+  try {
+    const login = await instituteEmailLogin(f);
+    assert.equal(login.status, 200);
+    assert.ok(cookieValue(login.setCookies, 'elt_session'), 'a session is issued only after matching password and verified institute state');
+    assert.equal(f.sessionsInserted.length, 1);
+
+    const wrongPassword = await instituteEmailLogin(f, 'office@example.test', 'Wrong-password-2026');
+    assert.equal(wrongPassword.status, 401);
+    assert.equal(cookieValue(wrongPassword.setCookies, 'elt_session'), undefined);
+
+    f.store.institutes.get('institute-1')!.emailVerifiedAt = null;
+    const unverifiedAddress = await instituteEmailLogin(f);
+    assert.equal(unverifiedAddress.status, 401, 'unverified contact emails cannot become login aliases');
+    assert.equal(cookieValue(unverifiedAddress.setCookies, 'elt_session'), undefined);
+
+    f.store.institutes.get('institute-1')!.emailVerifiedAt = new Date();
+    f.store.institutes.get('institute-1')!.institutionalStatus = 'pending';
+    const pending = await instituteEmailLogin(f);
+    assert.deepEqual([pending.status, pending.body.code], [403, 'INSTITUTIONAL_VERIFICATION_PENDING']);
+    assert.equal(cookieValue(pending.setCookies, 'elt_session'), undefined);
+    assert.equal(f.sms.sent.length, 0, 'a verified Institute mobile needs no SMS at login');
+
+    const student = await studentLogin(f);
+    assert.deepEqual([student.status, student.body.code], [503, 'OTP_PROVIDER_NOT_CONFIGURED'], 'Institute sign-in availability does not weaken Student SMS verification');
+  } finally {
+    await f.close();
+  }
+});
+
+test('Institute: without a verified mobile, email-only provider configuration cannot bypass the mobile challenge', async () => {
+  const f = await setup({ services: 'email', institute: { status: 'approved', verification: { mobileDestination: '+919876500010', mobileVerifiedAt: null, emailDestination: 'office@example.test', emailVerifiedAt: new Date(), institutionalStatus: 'verified', suspendedAt: null } } });
+  try {
+    const result = await instituteEmailLogin(f);
+    assert.deepEqual([result.status, result.body.code], [503, 'OTP_PROVIDER_NOT_CONFIGURED']);
+    assert.equal(cookieValue(result.setCookies, 'elt_session'), undefined);
   } finally {
     await f.close();
   }
@@ -2653,4 +2715,196 @@ test('C1.4-B-1 PostgreSQL store statements: own lock and actions; SMS statements
   assert.equal(sms.log[2].sql, "SELECT count(*)::int AS total, count(*) FILTER (WHERE coalesce(details->>'bucket', 'unverified') = 'unverified')::int AS unverified FROM auth_verification_events WHERE action = 'sms.send_reserved' AND occurred_at > clock_timestamp() - interval '24 hours'");
   assert.equal(sms.log[3].sql, "SELECT count(*)::int AS n FROM auth_verification_events WHERE action = 'sms.send_reserved' AND details->>'destinationKey' = $1 AND coalesce(details->>'bucket', 'unverified') = $2 AND occurred_at > clock_timestamp() - make_interval(secs => $3)");
   assert.equal(sms.log.find(({ sql }) => sql.startsWith('INSERT'))!.values[1], 'sms.send_reserved');
+});
+
+// ---------------------------------------------------------------------------
+// AUTH_MOBILE_VERIFICATION=off (owner decision, 2026-11-23): email-only verification while SMS is
+// unavailable. Institutes verify email only; Students keep mobile + password, codes go by email.
+// ---------------------------------------------------------------------------
+
+test('AUTH_MOBILE_VERIFICATION: parsing, preflight rule, provider status and the pure gates', async () => {
+  const { validateMobileVerificationDeployment } = await import('./smsProtectionConfig.js');
+  for (const value of [undefined, '', 'required']) assert.equal(providers.parseMobileVerificationSetting(value), 'required', String(value));
+  assert.equal(providers.parseMobileVerificationSetting('off'), 'off');
+  for (const bad of ['OFF', 'false', '0', 'no', 'disabled', ' off']) {
+    assert.equal(providers.parseMobileVerificationSetting(bad), null, bad);
+    assert.deepEqual(validateMobileVerificationDeployment({ AUTH_MOBILE_VERIFICATION: bad }), ['AUTH_MOBILE_VERIFICATION is invalid: it must be required or off (or left empty for required).'], bad);
+  }
+  for (const ok of [{}, { AUTH_MOBILE_VERIFICATION: '' }, { AUTH_MOBILE_VERIFICATION: 'required' }, { AUTH_MOBILE_VERIFICATION: 'off' }]) assert.deepEqual(validateMobileVerificationDeployment(ok), []);
+  // An invalid value never weakens verification at runtime either.
+  assert.equal(providers.resolveVerificationServices({ AUTH_MOBILE_VERIFICATION: 'OFF' }).mobileVerification, 'required');
+  assert.equal(providers.resolveVerificationServices({ AUTH_MOBILE_VERIFICATION: 'off' }).mobileVerification, 'off');
+  assert.equal(providers.mobileVerificationMode({}), 'required', 'absent means required');
+  assert.equal(providers.providerStatus(providers.DISABLED_SERVICES).mobileVerification, 'required');
+  assert.equal(providers.providerStatus({ ...providers.DISABLED_SERVICES, mobileVerification: 'off' }).mobileVerification, 'off');
+
+  assert.deepEqual(auth.acceptedStudentSessionMethods('required'), ['sms_otp']);
+  assert.deepEqual(auth.acceptedStudentSessionMethods('off'), ['sms_otp', 'email_otp']);
+  const emailOnlyInstitute = { sessionVerified: false, officialMfaVerified: false, institute: { mobileVerified: false, emailVerified: true, institutionalStatus: 'verified' as const, suspended: false } };
+  assert.deepEqual(auth.portalVerificationGate('center', emailOnlyInstitute, 'off'), { ok: true });
+  assert.equal(auth.portalVerificationGate('center', emailOnlyInstitute, 'required').ok, false, 'mobile still required by default');
+  assert.equal(auth.portalVerificationGate('center', { ...emailOnlyInstitute, institute: { ...emailOnlyInstitute.institute, emailVerified: false } }, 'off').ok, false, 'email is always required');
+  assert.equal(auth.portalVerificationGate('candidate', emailOnlyInstitute, 'off').ok, false, 'a Student still needs session evidence');
+
+  const fresh = { mobileDestination: '+919876500010', mobileVerifiedAt: null, emailDestination: 'office@example.test', emailVerifiedAt: null, institutionalStatus: 'pending' as const, suspendedAt: null };
+  assert.equal(verification.nextInstituteChannel(fresh, 'required'), 'sms');
+  assert.equal(verification.nextInstituteChannel(fresh, 'off'), 'email');
+  assert.equal(verification.nextInstituteChannel({ ...fresh, emailVerifiedAt: new Date() }, 'off'), null, 'email alone completes contacts');
+  assert.equal(verification.nextInstituteChannel({ ...fresh, emailVerifiedAt: new Date() }, 'required'), 'sms');
+});
+
+test('AUTH_MOBILE_VERIFICATION=off: Institutes verify email only (no SMS provider needed) and then reach the portal', async () => {
+  const f = await setup({ services: 'email', mobileVerification: 'off', institute: { status: 'approved', verification: { mobileDestination: '+919876500010', mobileVerifiedAt: null, emailDestination: 'office@example.test', emailVerifiedAt: null, institutionalStatus: 'verified', suspendedAt: null } } });
+  try {
+    const status = await call(f.base, 'GET', '/api/auth/providers', { surface: 'institution' });
+    assert.deepEqual([status.body.mobileVerification, (status.body.sms as { available: boolean }).available, (status.body.email as { available: boolean }).available], ['off', false, true]);
+    const login = await instituteLogin(f);
+    assert.deepEqual([login.status, login.body.channel, login.body.purpose, login.body.step], [202, 'email', 'institute_email', 'code']);
+    assert.equal(f.email.sent.at(-1)!.destination, 'office@example.test');
+    const done = await verify(f, verificationCookie(login), f.email.lastCode()!, 'institution');
+    assert.deepEqual([done.status, done.body.status], [200, 'contacts_verified']);
+    assert.match(String(done.body.message), /^Email is verified\./);
+    assert.equal(f.store.institutes.get('institute-1')!.mobileVerifiedAt, null, 'the mobile is not marked verified');
+    const signedIn = await instituteLogin(f);
+    assert.equal(signedIn.status, 200);
+    const session = cookieValue(signedIn.setCookies, 'elt_session')!;
+    assert.equal((await call(f.base, 'GET', '/api/auth/me', { surface: 'institution', cookie: `elt_session=${session}` })).status, 200);
+    assert.equal(f.sms.sent.length, 0, 'no SMS is ever attempted');
+  } finally {
+    await f.close();
+  }
+});
+
+test('AUTH_MOBILE_VERIFICATION=off: Student registration sends the code by email; the account keeps the mobile-derived login ID', async () => {
+  const f = await setup({ services: 'email', mobileVerification: 'off' });
+  try {
+    const missing = await call(f.base, 'POST', '/api/auth/register', { surface: 'exam', body: { name: 'New Student', password: STUDENT_PASSWORD, mobile: '9876543290' } });
+    assert.deepEqual([missing.status, missing.body.code], [400, 'EMAIL_REQUIRED']);
+    const invalid = await call(f.base, 'POST', '/api/auth/register', { surface: 'exam', body: { name: 'New Student', password: STUDENT_PASSWORD, mobile: '9876543290', email: 'not-an-email' } });
+    assert.deepEqual([invalid.status, invalid.body.code], [400, 'INVALID_EMAIL']);
+    assert.equal(f.registrations.claims.size, 0, 'nothing is written for invalid input');
+
+    const result = await call(f.base, 'POST', '/api/auth/register', { surface: 'exam', body: { name: 'New Student', password: STUDENT_PASSWORD, mobile: '9876543290', email: 'New.Student@Example.test' } });
+    assert.deepEqual([result.status, result.body.purpose, result.body.channel, result.body.step, result.body.codeSent], [202, 'student_registration', 'email', 'code', true]);
+    assert.equal(f.email.sent.at(-1)!.destination, 'new.student@example.test', 'normalised email');
+    assert.equal(f.created.length, 0, 'no account before the code is verified');
+    const ok = await verify(f, verificationCookie(result), f.email.lastCode()!);
+    assert.deepEqual([ok.status, ok.body.status], [200, 'signed_in']);
+    assert.deepEqual(f.created, [derivedId('+919876543290')], 'login ID still derived from the mobile');
+    const account = [...f.store.users.values()].find((user) => user.loginId === derivedId('+919876543290'))!;
+    assert.equal(f.store.contacts.get(`${account.id}:email`), 'new.student@example.test', 'the proven email is the verified contact');
+    assert.equal(f.store.contacts.get(`${account.id}:sms`), undefined, 'the mobile is NOT marked verified');
+    assert.equal(account.contactEmail, 'new.student@example.test');
+    assert.equal(f.store.sessions.at(-1)!.method, 'email_otp');
+    const session = cookieValue(ok.setCookies, 'elt_session')!;
+    assert.equal((await call(f.base, 'GET', '/api/auth/me', { surface: 'exam', cookie: `elt_session=${session}` })).status, 200, 'an email_otp session is accepted while the switch is off');
+    assert.equal(f.sms.sent.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('AUTH_MOBILE_VERIFICATION=off: Student sign-in sends the code to the verified email (account bucket), or captures an email first', async () => {
+  const f = await setup({ services: 'email', mobileVerification: 'off', studentEmail: 'student@example.test', extraStudents: [{ id: 'student-m', loginId: derivedId('+919876543291') }] });
+  try {
+    // A Student with a verified email: straight to the code, counted in the account bucket.
+    const login = await studentLogin(f);
+    assert.deepEqual([login.status, login.body.purpose, login.body.channel, login.body.step], [202, 'student_login', 'email', 'code']);
+    assert.equal(f.email.sent.at(-1)!.destination, 'student@example.test');
+    assert.equal(f.emailGuard.reservations.at(-1)!.bucket, 'account', 'ordinary sign-ins do not use the unverified allowance');
+    const ok = await verify(f, verificationCookie(login), f.email.lastCode()!);
+    assert.deepEqual([ok.status, ok.body.status], [200, 'signed_in']);
+    assert.equal(f.store.sessions.at(-1)!.method, 'email_otp');
+
+    // A mobile-first Student without a verified email: the challenge asks for one first.
+    const capture = await mobileLogin(f, '9876543291');
+    assert.deepEqual([capture.status, capture.body.channel, capture.body.step, capture.body.codeSent], [202, 'email', 'destination', false]);
+    const cookie = verificationCookie(capture);
+    const bad = await call(f.base, 'POST', '/api/auth/verification/destination', { surface: 'exam', cookie, body: { email: 'nope' } });
+    assert.deepEqual([bad.status, bad.body.code], [400, 'INVALID_EMAIL']);
+    const set = await call(f.base, 'POST', '/api/auth/verification/destination', { surface: 'exam', cookie, body: { email: 'Mobile.First@Example.test' } });
+    assert.deepEqual([set.status, set.body.step, set.body.codeSent], [200, 'code', true]);
+    assert.equal(f.email.sent.at(-1)!.destination, 'mobile.first@example.test');
+    assert.equal(f.emailGuard.reservations.at(-1)!.bucket, 'unverified', 'a new address is unverified until proven');
+    assert.equal(f.store.contacts.get('student-m:email'), undefined, 'nothing is stored before the code is confirmed');
+    const done = await verify(f, cookie, f.email.lastCode()!);
+    assert.deepEqual([done.status, done.body.status], [200, 'signed_in']);
+    assert.equal(f.store.contacts.get('student-m:email'), 'mobile.first@example.test');
+    assert.equal(f.store.users.get('student-m')!.contactEmail, 'mobile.first@example.test');
+    assert.equal(f.sms.sent.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('AUTH_MOBILE_VERIFICATION: email_otp sessions stop counting when the switch is back to required; SMS flows are unchanged', async () => {
+  const f = await setup({ services: 'both', mobileVerification: 'off', studentEmail: 'student@example.test' });
+  try {
+    const login = await studentLogin(f);
+    const ok = await verify(f, verificationCookie(login), f.email.lastCode()!);
+    const session = cookieValue(ok.setCookies, 'elt_session')!;
+    assert.equal((await call(f.base, 'GET', '/api/auth/me', { surface: 'exam', cookie: `elt_session=${session}` })).status, 200);
+    // Operator sets AUTH_MOBILE_VERIFICATION=required again (same services, mode switched).
+    providers.configureVerificationServices({ ...providers.verificationServices(), mobileVerification: 'required' });
+    const refused = await call(f.base, 'GET', '/api/auth/me', { surface: 'exam', cookie: `elt_session=${session}` });
+    assert.deepEqual([refused.status, refused.body.code], [403, 'STUDENT_VERIFICATION_REQUIRED']);
+    // In required mode the same sign-in goes back to SMS (here: mobile capture, no verified mobile yet).
+    const sms = await studentLogin(f);
+    assert.deepEqual([sms.status, sms.body.channel, sms.body.purpose], [202, 'sms', 'student_mobile_capture']);
+    // And an email destination is refused for an SMS challenge.
+    const wrong = await call(f.base, 'POST', '/api/auth/verification/destination', { surface: 'exam', cookie: verificationCookie(sms), body: { email: 'x@example.test' } });
+    assert.deepEqual([wrong.status, wrong.body.code], [400, 'INVALID_MOBILE']);
+  } finally {
+    await f.close();
+  }
+});
+
+test('AUTH_MOBILE_VERIFICATION=off: sign-in and registration stay closed without an email provider; SMS alone is not enough', async () => {
+  const f = await setup({ services: 'sms', mobileVerification: 'off' });
+  try {
+    const student = await studentLogin(f);
+    assert.deepEqual([student.status, student.body.code], [503, 'EMAIL_PROVIDER_NOT_CONFIGURED']);
+    const institute = await instituteLogin(f);
+    assert.deepEqual([institute.status, institute.body.code], [503, 'EMAIL_PROVIDER_NOT_CONFIGURED']);
+    const register = await call(f.base, 'POST', '/api/auth/register', { surface: 'exam', body: { name: 'New Student', password: STUDENT_PASSWORD, mobile: '9876543292', email: 'a@example.test' } });
+    assert.deepEqual([register.status, register.body.code], [503, 'EMAIL_PROVIDER_NOT_CONFIGURED']);
+    assert.equal(f.lookups, 0, 'closed before any account lookup');
+    assert.deepEqual([f.sms.sent.length, f.email.sent.length, f.registrations.claims.size], [0, 0, 0]);
+  } finally {
+    await f.close();
+  }
+});
+
+test('AUTH_MOBILE_VERIFICATION=off (PostgreSQL store): email completion stores the email contact and an email_otp session; SMS is unchanged', async () => {
+  const storeModule = await import('./authVerificationStore.js');
+  const scripted = scriptedPool((sql) => {
+    if (sql.startsWith('SELECT mobile, display_name')) return { rows: [CLAIM_ROW] };
+    if (sql.startsWith('SELECT ac.user_id')) return { rows: [] };
+    return { rowCount: 1, rows: sql.includes('RETURNING id') ? [{ id: 'x' }] : [] };
+  });
+  // The destination is the email the code went to (not the claim mobile): still completed.
+  assert.equal(await storeModule.createPostgresStudentRegistrationStore(scripted.pool).completeRegistration(completion({ channel: 'email', destination: 'new@example.test' })), 'completed');
+  const user = scripted.log.find(({ sql }) => sql.startsWith('INSERT INTO users'))!;
+  assert.equal(user.values[4], 'new@example.test', 'users.contact_email is the proven email');
+  const contact = scripted.log.find(({ sql }) => sql.startsWith('INSERT INTO account_contacts'))!;
+  assert.deepEqual(contact.values.slice(2, 4), ['email', 'new@example.test']);
+  const method = scripted.log.find(({ sql }) => sql.startsWith('INSERT INTO auth_session_verifications'))!;
+  assert.equal(method.values[1], 'email_otp');
+
+  // SMS (default channel) keeps the claim-mobile check and writes exactly what it wrote before.
+  const sms = scriptedPool((sql) => {
+    if (sql.startsWith('SELECT mobile, display_name')) return { rows: [CLAIM_ROW] };
+    if (sql.startsWith('SELECT ac.user_id')) return { rows: [] };
+    return { rowCount: 1, rows: sql.includes('RETURNING id') ? [{ id: 'x' }] : [] };
+  });
+  assert.equal(await storeModule.createPostgresStudentRegistrationStore(sms.pool).completeRegistration(completion({ destination: '+919876543499' })), 'expired', 'an SMS code to another number never completes');
+  const smsOk = scriptedPool((sql) => {
+    if (sql.startsWith('SELECT mobile, display_name')) return { rows: [CLAIM_ROW] };
+    if (sql.startsWith('SELECT ac.user_id')) return { rows: [] };
+    return { rowCount: 1, rows: sql.includes('RETURNING id') ? [{ id: 'x' }] : [] };
+  });
+  assert.equal(await storeModule.createPostgresStudentRegistrationStore(smsOk.pool).completeRegistration(completion()), 'completed');
+  assert.equal(smsOk.log.find(({ sql }) => sql.startsWith('INSERT INTO users'))!.values[4], null);
+  assert.deepEqual(smsOk.log.find(({ sql }) => sql.startsWith('INSERT INTO account_contacts'))!.values.slice(2, 4), ['sms', '+919876543400']);
+  assert.equal(smsOk.log.find(({ sql }) => sql.startsWith('INSERT INTO auth_session_verifications'))!.values[1], 'sms_otp');
 });

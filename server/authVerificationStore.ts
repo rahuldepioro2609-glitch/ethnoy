@@ -151,7 +151,12 @@ export interface AuthVerificationStore {
    * already has that mobile-derived login ID (approved rule: refuse only against mobile-first
    * accounts); the challenge is then consumed and no contact or session is written.
    */
-  completeStudentVerification(input: { challengeId: string; userId: string; destination: string; sessionTokenHash: string; sessionExpiresAt: Date; now: Date; mobileFirstLoginId?: string }): Promise<boolean | 'mobile_in_use'>;
+  /**
+   * Consumes a Student sign-in challenge and issues the verified session. `channel` (default 'sms') is
+   * the channel the code was verified on: it sets which contact is stored as verified and the session's
+   * method (sms_otp, or email_otp while AUTH_MOBILE_VERIFICATION is off).
+   */
+  completeStudentVerification(input: { challengeId: string; userId: string; channel?: ContactChannel; destination: string; sessionTokenHash: string; sessionExpiresAt: Date; now: Date; mobileFirstLoginId?: string }): Promise<boolean | 'mobile_in_use'>;
   /** Consumes a Student email-capture challenge and records the newly verified address atomically. */
   completeStudentEmailVerification(input: { challengeId: string; userId: string; destination: string; now: Date }): Promise<boolean>;
   getInstituteVerification(institutionId: string): Promise<InstituteVerificationState | null>;
@@ -211,10 +216,13 @@ export interface StudentRegistrationStore {
    * serializes on the mobile (studentMobileLockKey), refuses generically if a Student already owns the
    * mobile, inserts the account (ON CONFLICT on the unique login_id refuses), the verified contact,
    * the session and its verification record, and deletes the claim (AUTH C1.1). A refusal marks the
-   * claim consumed. Any error rolls everything back.
+   * claim consumed. Any error rolls everything back. `channel` (default 'sms'): with 'email' (only
+   * while AUTH_MOBILE_VERIFICATION is off) the code went to `destination` (an email), so that email is
+   * stored as the verified contact and the session method is email_otp; the mobile stays the login
+   * identifier but is not marked verified.
    */
   completeRegistration(input: {
-    challengeId: string; claimId: string; destination: string; userId: string; loginId: string;
+    challengeId: string; claimId: string; destination: string; channel?: ContactChannel; userId: string; loginId: string;
     sessionTokenHash: string; sessionExpiresAt: Date; now: Date;
   }): Promise<StudentRegistrationResult>;
   /**
@@ -411,26 +419,34 @@ export function createPostgresAuthVerificationStore(pool: QueryablePool): AuthVe
       [mobile, limit],
     )).rows.map((row) => String(row.user_id))),
     completeStudentVerification: (input) => transaction(async (client) => {
+      const channel = input.channel ?? 'sms';
       const consumed = await client.query('UPDATE verification_challenges SET consumed_at = $2 WHERE id = $1 AND consumed_at IS NULL RETURNING id', [input.challengeId, input.now]);
       if (consumed.rowCount !== 1) return false;
-      // AUTH C1: serialize with registration completion for the same number (same key, same order:
-      // own challenge first, then the mobile lock). Each later statement sees the other's commit.
-      await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [studentMobileLockKey(input.destination)]);
-      if (input.mobileFirstLoginId) {
-        const owner = await client.query("SELECT id FROM users WHERE login_id = $1 AND role = 'candidate' AND id <> $2", [input.mobileFirstLoginId, input.userId]);
-        if (owner.rows.length > 0) {
-          await event(client, { action: 'student.mobile_capture_refused', userId: input.userId, details: { reason: 'mobile_first_account' } });
-          return 'mobile_in_use' as const;
+      if (channel === 'sms') {
+        // AUTH C1: serialize with registration completion for the same number (same key, same order:
+        // own challenge first, then the mobile lock). Each later statement sees the other's commit.
+        await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [studentMobileLockKey(input.destination)]);
+        if (input.mobileFirstLoginId) {
+          const owner = await client.query("SELECT id FROM users WHERE login_id = $1 AND role = 'candidate' AND id <> $2", [input.mobileFirstLoginId, input.userId]);
+          if (owner.rows.length > 0) {
+            await event(client, { action: 'student.mobile_capture_refused', userId: input.userId, details: { reason: 'mobile_first_account' } });
+            return 'mobile_in_use' as const;
+          }
         }
       }
       await client.query(
-        `INSERT INTO account_contacts (id, user_id, channel, destination, verified_at) VALUES ($1, $2, 'sms', $3, $4)
+        `INSERT INTO account_contacts (id, user_id, channel, destination, verified_at) VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (user_id, channel) DO UPDATE SET destination = EXCLUDED.destination, verified_at = EXCLUDED.verified_at`,
-        [randomUUID(), input.userId, input.destination, input.now],
+        [randomUUID(), input.userId, channel, input.destination, input.now],
       );
+      if (channel === 'email') {
+        // Email sign-in (AUTH_MOBILE_VERIFICATION off): the proven address is also the account email.
+        const updated = await client.query("UPDATE users SET contact_email = $2 WHERE id = $1 AND role = 'candidate'", [input.userId, input.destination]);
+        if (updated.rowCount !== 1) throw new Error('Student account disappeared during email sign-in');
+      }
       await client.query('INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', [input.sessionTokenHash, input.userId, input.sessionExpiresAt]);
-      await client.query("INSERT INTO auth_session_verifications (token_hash, method, verified_at) VALUES ($1, 'sms_otp', $2)", [input.sessionTokenHash, input.now]);
-      await event(client, { action: 'student.verified_session_issued', userId: input.userId });
+      await client.query('INSERT INTO auth_session_verifications (token_hash, method, verified_at) VALUES ($1, $2, $3)', [input.sessionTokenHash, channel === 'email' ? 'email_otp' : 'sms_otp', input.now]);
+      await event(client, { action: 'student.verified_session_issued', userId: input.userId, details: { channel } });
       return true;
     }),
     completeStudentEmailVerification: (input) => transaction(async (client) => {
@@ -627,7 +643,11 @@ export function createPostgresStudentRegistrationStore(pool: QueryablePool): Stu
       );
       const claim = claims.rows[0];
       if (!claim || consumed.rowCount !== 1) return 'not_in_progress' as const;
-      if (claim.consumed_at !== null || new Date(String(claim.expires_at)) <= input.now || String(claim.mobile) !== input.destination) {
+      // SMS: the code went to the claim's own mobile. Email (mobile verification off): the code went to
+      // the address stored on this claim's own challenge, which is input.destination.
+      const channel = input.channel ?? 'sms';
+      const destinationMismatch = channel === 'sms' && String(claim.mobile) !== input.destination;
+      if (claim.consumed_at !== null || new Date(String(claim.expires_at)) <= input.now || destinationMismatch) {
         // The challenge stays consumed; the unconsumed, expired claim is left for cleanup.
         await appendEvent(client, { action: 'student.registration_refused', userId: null, details: { reason: claim.consumed_at !== null ? 'claim_consumed' : 'claim_expired' } });
         return 'expired' as const;
@@ -648,18 +668,19 @@ export function createPostgresStudentRegistrationStore(pool: QueryablePool): Stu
       if (owned.rows.length > 0) return refuse('mobile_in_use');
       const inserted = await client.query(
         `INSERT INTO users (id, login_id, display_name, role, password_hash, contact_email, account_status)
-         VALUES ($1, $2, $3, 'candidate', $4, NULL, 'approved')
+         VALUES ($1, $2, $3, 'candidate', $4, $5, 'approved')
          ON CONFLICT (login_id) DO NOTHING
          RETURNING id`,
-        [input.userId, input.loginId, String(claim.display_name), String(claim.password_hash)],
+        [input.userId, input.loginId, String(claim.display_name), String(claim.password_hash), channel === 'email' ? input.destination : null],
       );
       if (inserted.rowCount !== 1) return refuse('login_id_taken');
+      // The verified contact is the one the code proved: the mobile (SMS) or the email.
       await client.query(
-        "INSERT INTO account_contacts (id, user_id, channel, destination, verified_at) VALUES ($1, $2, 'sms', $3, $4)",
-        [randomUUID(), input.userId, String(claim.mobile), input.now],
+        'INSERT INTO account_contacts (id, user_id, channel, destination, verified_at) VALUES ($1, $2, $3, $4, $5)',
+        [randomUUID(), input.userId, channel, channel === 'sms' ? String(claim.mobile) : input.destination, input.now],
       );
       await client.query('INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', [input.sessionTokenHash, input.userId, input.sessionExpiresAt]);
-      await client.query("INSERT INTO auth_session_verifications (token_hash, method, verified_at) VALUES ($1, 'sms_otp', $2)", [input.sessionTokenHash, input.now]);
+      await client.query('INSERT INTO auth_session_verifications (token_hash, method, verified_at) VALUES ($1, $2, $3)', [input.sessionTokenHash, channel === 'email' ? 'email_otp' : 'sms_otp', input.now]);
       // AUTH C1.1: the completed claim is deleted in this same transaction (already row-locked above);
       // ON DELETE CASCADE removes its registration-only challenge. Nothing is deleted unless every
       // write above succeeded, and any later error rolls the deletion back with everything else.

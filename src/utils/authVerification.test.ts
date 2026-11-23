@@ -12,7 +12,8 @@ test('sign-in availability follows the server status; Super Admin/Official is ne
   assert.equal(signInAvailable('candidate', none), false);
   assert.equal(signInAvailable('candidate', smsOnly), true, 'Students need SMS verification');
   assert.equal(signInAvailable('candidate', emailOnly), false, 'email alone cannot verify Student sign-in');
-  assert.equal(signInAvailable('center', smsOnly), false, 'institutes need mobile AND email');
+  assert.equal(signInAvailable('center', smsOnly), false, 'Institutes still need a configured email provider');
+  assert.equal(signInAvailable('center', emailOnly), true, 'verified Institutes can sign in without SMS delivery');
   assert.equal(signInAvailable('center', both), true);
   assert.equal(signInAvailable('official', none), true);
   assert.match(unavailableMessage('candidate'), /mobile/i);
@@ -62,4 +63,29 @@ test('mobile sign-in and registration errors map to fixed, privacy-safe messages
   assert.equal(googleLinkNotice('?google=sub_taken')?.tone, 'error');
   assert.equal(googleLinkNotice('?google=user_has_link')?.tone, 'error');
   assert.equal(googleLinkNotice('?google=<b>x</b>'), null);
+});
+
+test('AUTH_MOBILE_VERIFICATION=off: email alone opens Student and Institute sign-in; Google stays paused', async () => {
+  const { emailOnlyVerification, STUDENT_EMAIL_UNAVAILABLE, STUDENT_GOOGLE_PAUSED } = await import('./authVerification.ts');
+  const emailOff = { ...emailOnly, mobileVerification: 'off' as const };
+  const noneOff = { ...none, mobileVerification: 'off' as const };
+  assert.equal(emailOnlyVerification(emailOff), true);
+  assert.equal(emailOnlyVerification(both), false, 'missing means required');
+  assert.equal(emailOnlyVerification({ ...both, mobileVerification: 'required' }), false);
+  assert.equal(emailOnlyVerification(null), false);
+
+  assert.equal(signInAvailable('candidate', emailOff), true, 'Students: code by email');
+  assert.equal(signInAvailable('center', emailOff), true, 'Institutes: email only');
+  assert.equal(signInAvailable('candidate', noneOff), false);
+  assert.equal(signInAvailable('center', { ...smsOnly, mobileVerification: 'off' }), false, 'SMS alone is not enough when email is the channel');
+  assert.equal(signInAvailable('center', emailOnly), true, 'Institute sign-in needs email even when Student mobile verification is required');
+
+  assert.deepEqual(studentMobileOption(emailOff), { state: 'available' });
+  assert.deepEqual(studentMobileOption(noneOff), { state: 'unavailable', reason: STUDENT_EMAIL_UNAVAILABLE });
+  assert.deepEqual(studentGoogleSignInOption({ ...emailOff, google: { available: true, reason: null } }), { state: 'unavailable', reason: STUDENT_GOOGLE_PAUSED });
+
+  assert.match(unavailableMessage('candidate', noneOff), /email/i);
+  assert.doesNotMatch(unavailableMessage('candidate', noneOff), /mobile verification/i);
+  assert.equal(unavailableMessage('center', noneOff), 'Institute sign-in and registration are paused until email verification is configured.', 'mobile is not listed as missing');
+  assert.equal(unavailableMessage('center', none), 'Institute sign-in and registration are paused until email verification is configured.');
 });

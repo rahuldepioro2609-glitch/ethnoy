@@ -1058,7 +1058,9 @@ test('login: a role not allowed on the surface gets the generic 401 before any u
     resetDb();
     const outcome = await login(surface, role);
     assert.equal(outcome.status, 503, `${role} on ${surface}: closed without a provider`);
-    assert.equal((outcome.body as { code: string }).code, 'OTP_PROVIDER_NOT_CONFIGURED');
+    // Students need SMS (mobile verification required by default); Institutes always need email, and
+    // an SMS code only when their mobile is still unverified (refused later, after the password).
+    assert.equal((outcome.body as { code: string }).code, role === 'candidate' ? 'OTP_PROVIDER_NOT_CONFIGURED' : 'EMAIL_PROVIDER_NOT_CONFIGURED');
     assert.equal(db.businessQueries.length, 0, `${role} on ${surface}: no user lookup while closed`);
   }
   // With (test-double) providers configured, the original surface rules apply unchanged.

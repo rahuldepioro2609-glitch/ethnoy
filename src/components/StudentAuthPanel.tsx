@@ -1,5 +1,6 @@
 // AUTH-1: Student sign-in and account creation. Mobile number + password, then a code sent to that
-// mobile; "Continue with Google" for accounts that linked Google (also ends with the mobile code).
+// mobile (or to the Student's email while the server runs with AUTH_MOBILE_VERIFICATION=off);
+// "Continue with Google" for accounts that linked Google (also ends with the mobile code).
 // Every option stays visible. When the server reports a provider as unavailable the option is
 // disabled with the reason;
 // nothing here signs anyone in: only a server-started verification can lead to a session.
@@ -8,6 +9,7 @@ import { ArrowLeft, Smartphone } from 'lucide-react';
 import { ApiError, apiRequestWithMeta } from '../api';
 import { useLanguage } from '../utils/languageContext';
 import {
+  emailOnlyVerification,
   isChallenge,
   studentGoogleSignInOption,
   studentGoogleSignUpOption,
@@ -56,6 +58,7 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
   const { t } = useLanguage();
   const [mode, setMode] = useState<Mode>('sign-in');
   const [mobile, setMobile] = useState('');
+  const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(initialError);
@@ -65,6 +68,8 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
 
   const mobileOption = studentMobileOption(providers);
   const canSubmit = mobileOption.state === 'available' && !busy;
+  // AUTH_MOBILE_VERIFICATION=off: the code goes to the Student's email; the mobile stays the identifier.
+  const emailOnly = emailOnlyVerification(providers);
 
   const switchMode = (next: Mode) => {
     setMode(next);
@@ -93,14 +98,21 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
-    if (mode === 'register') void send('/api/auth/register', { name: fullName.trim(), mobile: mobile.trim(), password });
-    else void send('/api/auth/login', { mobile: mobile.trim(), password, role: 'candidate' });
+    if (mode === 'register') {
+      void send('/api/auth/register', emailOnly
+        ? { name: fullName.trim(), mobile: mobile.trim(), email: email.trim(), password }
+        : { name: fullName.trim(), mobile: mobile.trim(), password });
+    } else void send('/api/auth/login', { mobile: mobile.trim(), password, role: 'candidate' });
   };
 
   const title = mode === 'register' ? 'Create student account' : 'Student sign-in';
   const subtitle = mode === 'register'
-    ? 'Use your mobile number. We send a one-time code to it; your account works only after the code is confirmed.'
-    : 'Enter your mobile number and password. We then send a one-time code to your mobile to finish signing in.';
+    ? emailOnly
+      ? 'Use your mobile number to sign in. We send a one-time code to your email; your account works only after the code is confirmed.'
+      : 'Use your mobile number. We send a one-time code to it; your account works only after the code is confirmed.'
+    : emailOnly
+      ? 'Enter your mobile number and password. We then send a one-time code to your email to finish signing in.'
+      : 'Enter your mobile number and password. We then send a one-time code to your mobile to finish signing in.';
 
   return (
     <>
@@ -121,6 +133,13 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
           <label htmlFor="student-mobile" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Mobile number')}</label>
           <input id="student-mobile" type="tel" inputMode="numeric" autoComplete="tel-national" value={mobile} onChange={(e) => setMobile(e.target.value)} required maxLength={16} placeholder="10-digit mobile number" disabled={mobileOption.state !== 'available'} className={inputClass} />
         </div>
+        {mode === 'register' && emailOnly && (
+          <div>
+            <label htmlFor="student-email" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Email address')}</label>
+            <input id="student-email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required maxLength={254} disabled={mobileOption.state !== 'available'} className={inputClass} />
+            <p className="mt-1 text-xs text-slate-500">{t('Your one-time codes are sent to this email.')}</p>
+          </div>
+        )}
         <div>
           <label htmlFor="student-password" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Password')}</label>
           <input id="student-password" type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} minLength={mode === 'register' ? 12 : undefined} maxLength={128} value={password} onChange={(e) => setPassword(e.target.value)} required disabled={mobileOption.state !== 'available'} className={inputClass} />

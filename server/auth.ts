@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import { pool } from './db.js';
 import { isSessionAllowedOnSurface, isSurface, type Surface } from './surface.js';
+import { mobileVerificationMode, type MobileVerificationMode } from './verificationProviders.js';
 
 export type UserRole = 'candidate' | 'center' | 'official';
 const BCRYPT_MAX_PASSWORD_BYTES = 72;
@@ -190,23 +191,34 @@ export type PortalVerificationDecision = { ok: true } | { ok: false; code: 'STUD
 
 /**
  * Pure gate, applied to every request with a session (AUTH-1 strict; AUTH C1.9.1).
- * - Students: the session was issued after mobile OTP verification.
- * - Institutes: verified mobile and email, institutional verification, not suspended.
+ * - Students: the session was issued after one-time-code verification (mobile; or email while
+ *   AUTH_MOBILE_VERIFICATION is off, see acceptedStudentSessionMethods).
+ * - Institutes: verified email, verified mobile unless AUTH_MOBILE_VERIFICATION is off, institutional
+ *   verification, not suspended.
  * - Officials and Super Admins: the session carries MFA evidence from an active, confirmed factor. Every
  *   password-only session (all sessions issued before MFA) is refused, with no exception or switch.
  */
-export function portalVerificationGate(role: UserRole, verification: SessionVerification): PortalVerificationDecision {
+export function portalVerificationGate(
+  role: UserRole,
+  verification: SessionVerification,
+  mode: MobileVerificationMode = mobileVerificationMode(),
+): PortalVerificationDecision {
   if (role === 'official' && verification.officialMfaVerified !== true) {
     return { ok: false, code: 'ADMIN_MFA_REQUIRED', message: 'Administrative access requires multi-factor authentication. Please sign in again.' };
   }
   if (role === 'candidate' && !verification.sessionVerified) {
-    return { ok: false, code: 'STUDENT_VERIFICATION_REQUIRED', message: 'Student sign-in requires mobile verification, which is not available yet. Please sign in again when it is.' };
+    return { ok: false, code: 'STUDENT_VERIFICATION_REQUIRED', message: mode === 'off'
+      ? 'Student sign-in requires a verified one-time code. Please sign in again.'
+      : 'Student sign-in requires mobile verification, which is not available yet. Please sign in again when it is.' };
   }
   if (role === 'center') {
     const institute = verification.institute;
     if (institute?.suspended) return { ok: false, code: 'INSTITUTE_SUSPENDED', message: 'This institute account is suspended.' };
-    if (!institute || !institute.mobileVerified || !institute.emailVerified || institute.institutionalStatus !== 'verified') {
-      return { ok: false, code: 'INSTITUTE_VERIFICATION_INCOMPLETE', message: 'Institute access requires verified mobile and email and completed institutional verification.' };
+    const mobileOk = mode === 'off' || Boolean(institute?.mobileVerified);
+    if (!institute || !mobileOk || !institute.emailVerified || institute.institutionalStatus !== 'verified') {
+      return { ok: false, code: 'INSTITUTE_VERIFICATION_INCOMPLETE', message: mode === 'off'
+        ? 'Institute access requires a verified email and completed institutional verification.'
+        : 'Institute access requires verified mobile and email and completed institutional verification.' };
     }
   }
   return { ok: true };
@@ -219,9 +231,17 @@ const SESSION_WITH_VERIFICATION_SQL = `SELECT u.id, u.login_id, u.display_name, 
             iv.suspended_at AS iv_suspended_at
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
-       LEFT JOIN auth_session_verifications v ON v.token_hash = s.token_hash AND v.method = 'sms_otp'
+       LEFT JOIN auth_session_verifications v ON v.token_hash = s.token_hash AND v.method = ANY($2::text[])
        LEFT JOIN institute_verifications iv ON iv.institution_id = u.id
        WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`;
+
+/**
+ * Student session evidence that counts: SMS OTP always; email OTP only while AUTH_MOBILE_VERIFICATION
+ * is off. Switching back to `required` therefore makes email-verified Student sessions sign in again.
+ */
+export function acceptedStudentSessionMethods(mode: MobileVerificationMode = mobileVerificationMode()): string[] {
+  return mode === 'off' ? ['sms_otp', 'email_otp'] : ['sms_otp'];
+}
 
 const SESSION_LEGACY_SQL = `SELECT u.id, u.login_id, u.display_name, u.role, u.account_status, u.is_super_admin
        FROM auth_sessions s
@@ -285,7 +305,7 @@ export function loadSession(request: AuthenticatedRequest): Promise<SessionLooku
     const tokenHash = hashSessionToken(token);
     let rows: Record<string, unknown>[];
     try {
-      ({ rows } = await pool.query(SESSION_WITH_VERIFICATION_SQL, [tokenHash]));
+      ({ rows } = await pool.query(SESSION_WITH_VERIFICATION_SQL, [tokenHash, acceptedStudentSessionMethods()]));
     } catch (error) {
       // AUTH-1 tables not installed yet: fall back to the session-only lookup. The verification
       // evidence is then absent, so Student and Institute sessions are refused (fail closed).

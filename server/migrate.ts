@@ -48,6 +48,8 @@ export const MIGRATION_FILES = [
   'adminMfaMigration.sql',
   'platformStaffMigration.sql',
   'organizationStaffMigration.sql',
+  // AUTH_MOBILE_VERIFICATION=off: allows the 'email_otp' Student session method (needs file 5).
+  'studentEmailOtpMigration.sql',
   'databaseGrantsMigration.sql',
 ] as const;
 

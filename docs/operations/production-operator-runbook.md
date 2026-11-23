@@ -152,9 +152,10 @@ From `server/migrate.ts`, `MIGRATION_FILES`:
 | 8 | `adminMfaMigration.sql` | AUTH C1.8 (MFA Phase 2): the 6 privileged-MFA tables (§3.12). Needs files 1 and 5 |
 | 9 | `platformStaffMigration.sql` | SM-1: separate Platform Staff identities, sessions and append-only audit |
 | 10 | `organizationStaffMigration.sql` | SM-1: tenant-scoped Organization Staff identities, invitations, roles, sessions and append-only audit |
-| 11 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` least-privilege grants for every table above, **always last** |
+| 11 | `studentEmailOtpMigration.sql` | `AUTH_MOBILE_VERIFICATION=off` (owner decision, 2026-11-23): allows the `email_otp` Student session method in `auth_session_verifications_method_check`. Constraint only, no data. Needs file 5 |
+| 12 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` least-privilege grants for every table above, **always last** |
 
-`npm run db:migrate` runs all eleven on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run. The Platform Staff and Organization Staff routes use the two Staff migrations in this list; those schemas still require runtime PostgreSQL rehearsal before release.
+`npm run db:migrate` runs all twelve on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run. The Platform Staff and Organization Staff routes use the two Staff migrations in this list; those schemas still require runtime PostgreSQL rehearsal before release.
 
 **Prerequisites for any run:** the role bootstrap (§2) on that database; the run as `eltnoy_migrator` (sessions act as `eltnoy_owner`) through the deployment wrapper; for an existing database, a verified backup and restore first (§6) and the application stopped (§3.4), because creating the AUTH-1 foreign keys briefly blocks writes to `users` and `auth_sessions`.
 
@@ -181,7 +182,7 @@ Evidence [TESTED-ISOLATED] (the five pre-AUTH-1 files):
 | State | `db:migrate` run as | Result | Evidence |
 |---|---|---|---|
 | **Before the cutover: no `eltnoy_*` roles on the cluster** | The superuser (previous Compose; the UD-1-B Compose cannot connect before the bootstrap) | Files 1–10 apply. **File 4 makes `institution_documents` immutable immediately.** File 11 (grants) is a no-op with a NOTICE. | [TESTED-ISOLATED] OD-P2-W, OD-P3 (files 1–4 and the grants file); files 5–10 [PROPOSED] |
-| Roles exist, database bootstrapped | `eltnoy_migrator` (sessions act as `eltnoy_owner`) | All eleven apply, including the AUTH-1, Student email and Student registration migrations; grants are set exactly | [TESTED-ISOLATED] P1A (as the migrator login), OD-P2, for the five pre-AUTH-1 files; files 5–10 not yet rehearsed [PROPOSED] |
+| Roles exist, database bootstrapped | `eltnoy_migrator` (sessions act as `eltnoy_owner`) | All twelve apply, including the AUTH-1, Student email and Student registration migrations; grants are set exactly | [TESTED-ISOLATED] P1A (as the migrator login), OD-P2, for the five pre-AUTH-1 files; files 5–10 not yet rehearsed [PROPOSED] |
 | Roles exist, **this database not bootstrapped** (for example a new database on the same cluster) | The superuser | **Refused**: "objects not owned by eltnoy_owner", whole run rolled back | [TESTED-ISOLATED] OD-P4 |
 | Any state | `eltnoy_app` | Refused ("permission denied for schema public"), rolled back | [TESTED-ISOLATED] P1A, OD-P2-W |
 
@@ -322,6 +323,17 @@ The AUTH C1 settings `AUTH_SMS_DESTINATION_WINDOW_SECONDS` and `AUTH_SMS_DESTINA
 **To activate SMS with Twilio Verify:** set `AUTH_SMS_PROVIDER=twilio-verify`, `TWILIO_VERIFY_SERVICE_SID` (`VA…`), `TWILIO_VERIFY_API_KEY_SID` (`SK…`), and `TWILIO_VERIFY_API_KEY_SECRET_FILE` in the deployment env file. Store only the API key secret in the referenced host file, owned `root:10001`, mode `0440`; retain `AUTH_OTP_HMAC_KEY_FILE` as configured because the application uses it for challenge binding and abuse controls. A Verify service generates and checks the OTP; the application does not store a local hash for provider-managed codes. Registration also requires `AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS`. Run the deployment preflight, start the release, and confirm startup reports `smsProtectionConfigured: true`, all settings `valid`, `smsProviderAvailable: true`, and `smsDeliveryEnabled: true`. For a Twilio trial, only verified recipients can receive a code and Twilio supplies the fixed trial template; keep `AUTH_SMS_DAILY_MAX_SENDS` within the trial allowance and test using a verified phone.
 
 **Legacy Twilio Messaging integration:** `AUTH_SMS_PROVIDER=twilio` uses a Twilio Account SID, Messaging Service SID, and `TWILIO_AUTH_TOKEN_FILE`; it sends locally generated OTP messages and is not the Twilio Verify trial flow.
+
+**Email-only verification while SMS is unavailable (`AUTH_MOBILE_VERIFICATION`, owner decision 2026-11-23):**
+- **Values:** `required` (the default when the setting is empty or absent) or `off`. Any other value fails the host and container preflight.
+- **Effect of `off`:**
+  - Institutes verify only their email; the contact mobile is still recorded, unverified.
+  - Students still sign in with mobile + password, but the one-time code goes to their verified email. A Student without one enters an email at sign-in, and it is stored as verified only after the code is confirmed.
+  - Registration asks for an email and sends the code there. The mobile-derived login ID is unchanged, but the mobile is not proven while the setting is off.
+  - Student sessions are recorded with method `email_otp` (migration `studentEmailOtpMigration.sql`).
+  - Google sign-in stays unavailable, because it still ends with an SMS code.
+- **Needs:** the email provider, the six `AUTH_EMAIL_*` limits and, for Student registration, `AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS`.
+- **Switching back to `required`** once SMS works: email-verified Student sessions stop counting and must sign in again, and Institutes are asked to verify their mobile at their next sign-in.
 
 **Buckets (decided by the server for every send, resends included, from fresh database data; nothing from the client is used).**
 - **Verified:** an account's `student_login` to exactly its **current** verified SMS contact (`account_contacts`).
@@ -825,7 +837,7 @@ COMMIT;
 - [ ] UD-2 resolved: break-glass custodians named.
 - [ ] UD-3 resolved: secret store, backup encryption, location, schedule and retention.
 - [ ] Encrypted backup taken and **restored into a separate database**; §6.3 validation passed.
-- [ ] Full cutover rehearsed on that **restored copy of production**: bootstrap, `\password`, eleven-file `db:migrate` (including the AUTH-1 and Student registration/email migrations) as `eltnoy_migrator`, API as `eltnoy_app`, functional smoke tests for every role, zero `42501` errors.
+- [ ] Full cutover rehearsed on that **restored copy of production**: bootstrap, `\password`, twelve-file `db:migrate` (including the AUTH-1 and Student registration/email migrations) as `eltnoy_migrator`, API as `eltnoy_app`, functional smoke tests for every role, zero `42501` errors.
 - [ ] Impact on any other database in the cluster assessed (cluster-wide effects, §0).
 - [ ] Stakeholders aware that `institution_documents` rows become immutable after migration file 4 (UD-11).
 - [ ] At least two active Super Admins identified (P3-D3), with the promotion approvals on file.
