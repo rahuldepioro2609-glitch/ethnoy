@@ -152,7 +152,7 @@ From `server/migrate.ts`, `MIGRATION_FILES`:
 | 8 | `adminMfaMigration.sql` | AUTH C1.8 (MFA Phase 2): the 6 privileged-MFA tables (§3.12). Needs files 1 and 5 |
 | 9 | `platformStaffMigration.sql` | SM-1: separate Platform Staff identities, sessions and append-only audit |
 | 10 | `organizationStaffMigration.sql` | SM-1: tenant-scoped Organization Staff identities, invitations, roles, sessions and append-only audit |
-| 11 | `studentEmailOtpMigration.sql` | `AUTH_MOBILE_VERIFICATION=off` (owner decision, 2026-11-23): allows the `email_otp` Student session method in `auth_session_verifications_method_check`. Constraint only, no data. Needs file 5 |
+| 11 | `studentEmailOtpMigration.sql` | `AUTH_MOBILE_VERIFICATION=off` (owner decision, 2026-11-23): allows the `email_otp` and `password` Student session methods in `auth_session_verifications_method_check`. Constraint only, no data. Needs file 5 |
 | 12 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` least-privilege grants for every table above, **always last** |
 
 `npm run db:migrate` runs all twelve on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run. The Platform Staff and Organization Staff routes use the two Staff migrations in this list; those schemas still require runtime PostgreSQL rehearsal before release.
@@ -328,12 +328,12 @@ The AUTH C1 settings `AUTH_SMS_DESTINATION_WINDOW_SECONDS` and `AUTH_SMS_DESTINA
 - **Values:** `required` (the default when the setting is empty or absent) or `off`. Any other value fails the host and container preflight.
 - **Effect of `off`:**
   - Institutes verify only their email; the contact mobile is still recorded, unverified.
-  - Students still sign in with mobile + password, but the one-time code goes to their verified email. A Student without one enters an email at sign-in, and it is stored as verified only after the code is confirmed.
+  - Owner decision (2026-11-24): an existing Student signs in with their verified email, mobile or Student ID + password alone, with no one-time code. The answer is a session straight away. (Before this decision the code went to the verified email.)
   - Registration asks for an email and sends the code there. The mobile-derived login ID is unchanged, but the mobile is not proven while the setting is off.
-  - Student sessions are recorded with method `email_otp` (migration `studentEmailOtpMigration.sql`).
+  - Student sessions are recorded with method `email_otp` (registration) or `password` (sign-in); migration `studentEmailOtpMigration.sql` allows both.
   - Google sign-in stays unavailable, because it still ends with an SMS code.
 - **Needs:** the email provider, the six `AUTH_EMAIL_*` limits and, for Student registration, `AUTH_STUDENT_REGISTRATION_CLAIM_TTL_SECONDS`.
-- **Switching back to `required`** once SMS works: email-verified Student sessions stop counting and must sign in again, and Institutes are asked to verify their mobile at their next sign-in.
+- **Switching back to `required`** once SMS works: `email_otp` and `password` Student sessions stop counting, email sign-in is refused, and must sign in again, and Institutes are asked to verify their mobile at their next sign-in.
 
 **Buckets (decided by the server for every send, resends included, from fresh database data; nothing from the client is used).**
 - **Verified:** an account's `student_login` to exactly its **current** verified SMS contact (`account_contacts`).

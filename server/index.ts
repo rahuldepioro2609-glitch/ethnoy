@@ -2080,22 +2080,25 @@ app.post('/api/center/resubmit', authLimiter, asyncRoute(async (request, respons
 }));
 
 app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) => {
-  // Students use mobile + password, then SMS OTP. Institutes and Officials keep loginId + password.
+  // Students use mobile + password, then SMS OTP. While AUTH_MOBILE_VERIFICATION is off (owner
+  // decision, 2026-11-24) an existing Student signs in with email, mobile or Student ID + password
+  // alone. Institutes and Officials keep loginId + password.
   const schema = z.object({
     loginId: z.string().trim().min(1).max(254).optional(),
     mobile: z.string().trim().min(1).max(20).optional(),
+    email: z.string().trim().min(1).max(254).optional(),
     password: z.string().min(1).max(128),
     role: z.enum(['candidate', 'center', 'official']),
   }).refine((body) => (body.role === 'candidate'
-    ? (body.loginId === undefined) !== (body.mobile === undefined)
-    : body.loginId !== undefined && body.mobile === undefined), { message: 'Provide exactly one sign-in identifier.', path: ['loginId'] });
+    ? [body.loginId, body.mobile, body.email].filter((value) => value !== undefined).length === 1
+    : body.loginId !== undefined && body.mobile === undefined && body.email === undefined), { message: 'Provide exactly one sign-in identifier.', path: ['loginId'] });
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
     sendValidationError(response, parsed.error);
     return;
   }
 
-  const { loginId, mobile: mobileInput, password, role } = parsed.data;
+  const { loginId, mobile: mobileInput, email: emailInput, password, role } = parsed.data;
   // P1-B: the role must belong to this surface; checked before any user lookup, with the same
   // generic response as invalid credentials.
   if (!isLoginRoleAllowedOnSurface(getTrustedRequestSurface(request) as Surface, role)) {
@@ -2107,10 +2110,9 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
   const providers = providerStatus();
   // AUTH_MOBILE_VERIFICATION=off: Students receive the code by email and Institutes verify email only.
   const mobileRequired = mobileVerificationMode() !== 'off';
-  if (role === 'candidate' && !(mobileRequired ? providers.sms.available : providers.email.available)) {
-    response.status(503).json(mobileRequired
-      ? { error: 'Student sign-in is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED }
-      : { error: 'Student sign-in is unavailable: email verification is not configured.', code: EMAIL_PROVIDER_NOT_CONFIGURED });
+  // Password-only Student sign-in (switch off) sends nothing, so it needs no delivery provider.
+  if (role === 'candidate' && mobileRequired && !providers.sms.available) {
+    response.status(503).json({ error: 'Student sign-in is unavailable: mobile verification is not configured.', code: OTP_PROVIDER_NOT_CONFIGURED });
     return;
   }
   if (role === 'center' && !providers.email.available) {
@@ -2129,7 +2131,7 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
         const smsGate = await smsProtectionGate(role === 'candidate' ? 'any' : 'config');
         if (smsGate) throw smsGate;
       }
-      if (role === 'center' || !mobileRequired) {
+      if (role === 'center') {
         const emailGate = await emailProtectionGate('config');
         if (emailGate) throw emailGate;
       }
@@ -2144,22 +2146,33 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
   // Student whose VERIFIED contact is that mobile. Exactly one match proceeds; none or several fail
   // generically. One bcrypt comparison runs either way.
   let signInMobile: string | null = null;
-  if (role === 'candidate' && mobileInput !== undefined) {
-    const MOBILE_FAILURE = { error: 'Invalid mobile number or password. If you signed up earlier with a Student ID, use "Existing account?".', code: 'INVALID_MOBILE_CREDENTIALS' };
-    signInMobile = normaliseMobile(mobileInput);
+  if (role === 'candidate' && (mobileInput !== undefined || emailInput !== undefined)) {
+    const MOBILE_FAILURE = mobileRequired
+      ? { error: 'Invalid mobile number or password. If you signed up earlier with a Student ID, use "Existing account?".', code: 'INVALID_MOBILE_CREDENTIALS' }
+      : { error: 'Invalid email, mobile number or password. If you signed up earlier with a Student ID, use "Existing account?".', code: 'INVALID_SIGN_IN_CREDENTIALS' };
     let match: Record<string, any> | undefined;
-    if (signInMobile) {
-      try {
-        const derived = await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE login_id = $1 AND role = 'candidate'`, [studentLoginIdForMobile(verificationServices().otpKey!, signInMobile)]);
-        const viaContact = await authVerificationStore().findCandidateIdsByVerifiedMobile(signInMobile, 3);
-        const ids = new Set<string>([...derived.rows.map((row) => String(row.id)), ...viaContact]);
-        if (ids.size === 1) {
-          match = derived.rows[0] ?? (await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1 AND role = 'candidate'`, [[...ids][0]])).rows[0];
+    try {
+      if (mobileInput !== undefined) {
+        signInMobile = normaliseMobile(mobileInput);
+        if (signInMobile) {
+          const derived = await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE login_id = $1 AND role = 'candidate'`, [studentLoginIdForMobile(verificationServices().otpKey!, signInMobile)]);
+          const viaContact = await authVerificationStore().findCandidateIdsByVerifiedMobile(signInMobile, 3);
+          const ids = new Set<string>([...derived.rows.map((row) => String(row.id)), ...viaContact]);
+          if (ids.size === 1) {
+            match = derived.rows[0] ?? (await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1 AND role = 'candidate'`, [[...ids][0]])).rows[0];
+          }
         }
-      } catch (error) {
-        if (!sendFlowError(response, error)) throw error;
-        return;
+      } else {
+        // Email sign-in exists only while the switch is off: the account's VERIFIED email, exactly one.
+        const signInEmail = mobileRequired ? null : normaliseEmail(emailInput);
+        const ids = signInEmail ? await authVerificationStore().findCandidateIdsByVerifiedEmail(signInEmail, 2) : [];
+        if (ids.length === 1) {
+          match = (await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1 AND role = 'candidate'`, [ids[0]])).rows[0];
+        }
       }
+    } catch (error) {
+      if (!sendFlowError(response, error)) throw error;
+      return;
     }
     const valid = match ? await bcrypt.compare(password, match.password_hash) : await compareAgainstDummyHash(password);
     if (!match || !valid) {
@@ -2209,11 +2222,15 @@ app.post('/api/auth/login', authLimiter, asyncRoute(async (request, response) =>
   if (user.role === 'candidate') {
     try {
       if (!mobileRequired) {
-        // No verified email yet: the challenge starts at the destination step and asks for one.
-        const verifiedEmail = await authVerificationStore().findVerifiedContact(String(user.id), 'email');
-        response.status(202).json(await startVerification(response, {
-          purpose: 'student_login', userId: String(user.id), channel: 'email', destination: verifiedEmail,
-        }));
+        // Owner decision (2026-11-24): password alone while the switch is off. The session is recorded
+        // as method 'password' and stops counting when AUTH_MOBILE_VERIFICATION is back to required.
+        const token = newSessionToken();
+        const now = new Date();
+        await authVerificationStore().issueStudentPasswordSession({
+          userId: String(user.id), sessionTokenHash: hashSessionToken(token), sessionExpiresAt: new Date(now.getTime() + SESSION_TTL_MS), now,
+        });
+        setSessionCookie(response, token);
+        response.json({ user: { id: user.id, loginId: user.login_id, name: user.display_name, role: user.role, isSuperAdmin: false } });
         return;
       }
       const verifiedMobile = await authVerificationStore().findVerifiedContact(String(user.id), 'sms');

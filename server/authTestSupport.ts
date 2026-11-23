@@ -108,7 +108,7 @@ export class MemoryAuthVerificationStore implements AuthVerificationStore {
   challenges = new Map<string, VerificationChallenge & { createdAt: Date }>();
   contacts = new Map<string, string>(); // `${userId}:${channel}` -> destination (verified)
   institutes = new Map<string, InstituteVerificationState>();
-  sessions: Array<{ tokenHash: string; userId: string; expiresAt: Date; verified: boolean; method?: 'sms_otp' | 'email_otp' }> = [];
+  sessions: Array<{ tokenHash: string; userId: string; expiresAt: Date; verified: boolean; method?: 'sms_otp' | 'email_otp' | 'password' }> = [];
   google = new Map<string, { userId: string; email: string }>(); // sub -> link
   oauth = new Map<string, OAuthState & { consumed: boolean }>();
   readonly events: AuthVerificationEvent[] = [];
@@ -139,6 +139,15 @@ export class MemoryAuthVerificationStore implements AuthVerificationStore {
     return [...this.contacts.entries()]
       .filter(([key, destination]) => key.endsWith(':sms') && destination === mobile && this.users.get(key.slice(0, -4))?.role === 'candidate')
       .map(([key]) => key.slice(0, -4)).sort().slice(0, limit);
+  }
+  async findCandidateIdsByVerifiedEmail(email: string, limit: number) {
+    return [...this.contacts.entries()]
+      .filter(([key, destination]) => key.endsWith(':email') && destination.toLowerCase() === email.toLowerCase() && this.users.get(key.slice(0, -6))?.role === 'candidate')
+      .map(([key]) => key.slice(0, -6)).sort().slice(0, limit);
+  }
+  async issueStudentPasswordSession(input: { userId: string; sessionTokenHash: string; sessionExpiresAt: Date; now: Date }) {
+    this.sessions.push({ tokenHash: input.sessionTokenHash, userId: input.userId, expiresAt: input.sessionExpiresAt, verified: true, method: 'password' });
+    this.events.push({ action: 'student.password_session_issued', userId: input.userId });
   }
   async completeStudentVerification(input: { challengeId: string; userId: string; channel?: ContactChannel; destination: string; sessionTokenHash: string; sessionExpiresAt: Date; now: Date }) {
     const c = this.challenges.get(input.challengeId);

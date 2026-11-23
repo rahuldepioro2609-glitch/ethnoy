@@ -141,6 +141,13 @@ export interface AuthVerificationStore {
    * `limit` ids. Used only to detect ambiguity in mobile sign-in; no cross-account uniqueness exists.
    */
   findCandidateIdsByVerifiedMobile(mobile: string, limit: number): Promise<string[]>;
+  /** Same as findCandidateIdsByVerifiedMobile for a VERIFIED email contact (stored normalised, lower case). */
+  findCandidateIdsByVerifiedEmail(email: string, limit: number): Promise<string[]>;
+  /**
+   * Password-only Student session (owner decision, 2026-11-24; only while AUTH_MOBILE_VERIFICATION is
+   * off): the session and its 'password' method record, in ONE transaction, with an audit event.
+   */
+  issueStudentPasswordSession(input: { userId: string; sessionTokenHash: string; sessionExpiresAt: Date; now: Date }): Promise<void>;
   /**
    * Consumes the challenge (single use), stores the verified mobile and issues the portal session
    * together with its verification record, in ONE transaction. False if already consumed.
@@ -418,6 +425,17 @@ export function createPostgresAuthVerificationStore(pool: QueryablePool): AuthVe
         ORDER BY ac.user_id LIMIT $2`,
       [mobile, limit],
     )).rows.map((row) => String(row.user_id))),
+    findCandidateIdsByVerifiedEmail: (email, limit) => run(async () => (await pool.query(
+      `SELECT ac.user_id FROM account_contacts ac JOIN users u ON u.id = ac.user_id
+        WHERE ac.channel = 'email' AND lower(ac.destination) = lower($1) AND ac.verified_at IS NOT NULL AND u.role = 'candidate'
+        ORDER BY ac.user_id LIMIT $2`,
+      [email, limit],
+    )).rows.map((row) => String(row.user_id))),
+    issueStudentPasswordSession: (input) => transaction(async (client) => {
+      await client.query('INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', [input.sessionTokenHash, input.userId, input.sessionExpiresAt]);
+      await client.query('INSERT INTO auth_session_verifications (token_hash, method, verified_at) VALUES ($1, $2, $3)', [input.sessionTokenHash, 'password', input.now]);
+      await event(client, { action: 'student.password_session_issued', userId: input.userId });
+    }),
     completeStudentVerification: (input) => transaction(async (client) => {
       const channel = input.channel ?? 'sms';
       const consumed = await client.query('UPDATE verification_challenges SET consumed_at = $2 WHERE id = $1 AND consumed_at IS NULL RETURNING id', [input.challengeId, input.now]);

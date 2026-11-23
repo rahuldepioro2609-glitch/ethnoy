@@ -208,7 +208,7 @@ export function portalVerificationGate(
   }
   if (role === 'candidate' && !verification.sessionVerified) {
     return { ok: false, code: 'STUDENT_VERIFICATION_REQUIRED', message: mode === 'off'
-      ? 'Student sign-in requires a verified one-time code. Please sign in again.'
+      ? 'Please sign in again.'
       : 'Student sign-in requires mobile verification, which is not available yet. Please sign in again when it is.' };
   }
   if (role === 'center') {
@@ -236,11 +236,12 @@ const SESSION_WITH_VERIFICATION_SQL = `SELECT u.id, u.login_id, u.display_name, 
        WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`;
 
 /**
- * Student session evidence that counts: SMS OTP always; email OTP only while AUTH_MOBILE_VERIFICATION
- * is off. Switching back to `required` therefore makes email-verified Student sessions sign in again.
+ * Student session evidence that counts: SMS OTP always; email OTP and password-only sign-in (owner
+ * decision, 2026-11-24) only while AUTH_MOBILE_VERIFICATION is off. Switching back to `required`
+ * therefore makes every Student session without SMS evidence sign in again.
  */
 export function acceptedStudentSessionMethods(mode: MobileVerificationMode = mobileVerificationMode()): string[] {
-  return mode === 'off' ? ['sms_otp', 'email_otp'] : ['sms_otp'];
+  return mode === 'off' ? ['sms_otp', 'email_otp', 'password'] : ['sms_otp'];
 }
 
 const SESSION_LEGACY_SQL = `SELECT u.id, u.login_id, u.display_name, u.role, u.account_status, u.is_super_admin

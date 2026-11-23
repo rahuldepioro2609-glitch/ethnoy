@@ -2739,7 +2739,7 @@ test('AUTH_MOBILE_VERIFICATION: parsing, preflight rule, provider status and the
   assert.equal(providers.providerStatus({ ...providers.DISABLED_SERVICES, mobileVerification: 'off' }).mobileVerification, 'off');
 
   assert.deepEqual(auth.acceptedStudentSessionMethods('required'), ['sms_otp']);
-  assert.deepEqual(auth.acceptedStudentSessionMethods('off'), ['sms_otp', 'email_otp']);
+  assert.deepEqual(auth.acceptedStudentSessionMethods('off'), ['sms_otp', 'email_otp', 'password']);
   const emailOnlyInstitute = { sessionVerified: false, officialMfaVerified: false, institute: { mobileVerified: false, emailVerified: true, institutionalStatus: 'verified' as const, suspended: false } };
   assert.deepEqual(auth.portalVerificationGate('center', emailOnlyInstitute, 'off'), { ok: true });
   assert.equal(auth.portalVerificationGate('center', emailOnlyInstitute, 'required').ok, false, 'mobile still required by default');
@@ -2804,45 +2804,50 @@ test('AUTH_MOBILE_VERIFICATION=off: Student registration sends the code by email
   }
 });
 
-test('AUTH_MOBILE_VERIFICATION=off: Student sign-in sends the code to the verified email (account bucket), or captures an email first', async () => {
+test('AUTH_MOBILE_VERIFICATION=off: an existing Student signs in with email, mobile or Student ID + password alone (no code)', async () => {
   const f = await setup({ services: 'email', mobileVerification: 'off', studentEmail: 'student@example.test', extraStudents: [{ id: 'student-m', loginId: derivedId('+919876543291') }] });
+  const login = (body: Record<string, string>) => call(f.base, 'POST', '/api/auth/login', { surface: 'exam', body: { password: STUDENT_PASSWORD, role: 'candidate', ...body } });
+  const me = (result: { setCookies: string[] }) => call(f.base, 'GET', '/api/auth/me', { surface: 'exam', cookie: `elt_session=${cookieValue(result.setCookies, 'elt_session')}` });
   try {
-    // A Student with a verified email: straight to the code, counted in the account bucket.
-    const login = await studentLogin(f);
-    assert.deepEqual([login.status, login.body.purpose, login.body.channel, login.body.step], [202, 'student_login', 'email', 'code']);
-    assert.equal(f.email.sent.at(-1)!.destination, 'student@example.test');
-    assert.equal(f.emailGuard.reservations.at(-1)!.bucket, 'account', 'ordinary sign-ins do not use the unverified allowance');
-    const ok = await verify(f, verificationCookie(login), f.email.lastCode()!);
-    assert.deepEqual([ok.status, ok.body.status], [200, 'signed_in']);
-    assert.equal(f.store.sessions.at(-1)!.method, 'email_otp');
+    // Verified email (case and spaces do not matter): a session straight away, recorded as 'password'.
+    const byEmail = await login({ email: '  Student@Example.TEST ' });
+    assert.equal(byEmail.status, 200);
+    assert.deepEqual(byEmail.body.user, { id: 'student-1', loginId: 'STUDENT-1', name: 'Synthetic Student', role: 'candidate', isSuperAdmin: false });
+    assert.equal(cookieValue(byEmail.setCookies, 'elt_verification'), undefined, 'no verification challenge');
+    assert.equal(f.store.sessions.at(-1)!.method, 'password');
+    assert.equal((await me(byEmail)).status, 200, 'a password session is accepted while the switch is off');
+    assert.ok(f.store.events.some((event) => event.action === 'student.password_session_issued' && event.userId === 'student-1'));
 
-    // A mobile-first Student without a verified email: the challenge asks for one first.
-    const capture = await mobileLogin(f, '9876543291');
-    assert.deepEqual([capture.status, capture.body.channel, capture.body.step, capture.body.codeSent], [202, 'email', 'destination', false]);
-    const cookie = verificationCookie(capture);
-    const bad = await call(f.base, 'POST', '/api/auth/verification/destination', { surface: 'exam', cookie, body: { email: 'nope' } });
-    assert.deepEqual([bad.status, bad.body.code], [400, 'INVALID_EMAIL']);
-    const set = await call(f.base, 'POST', '/api/auth/verification/destination', { surface: 'exam', cookie, body: { email: 'Mobile.First@Example.test' } });
-    assert.deepEqual([set.status, set.body.step, set.body.codeSent], [200, 'code', true]);
-    assert.equal(f.email.sent.at(-1)!.destination, 'mobile.first@example.test');
-    assert.equal(f.emailGuard.reservations.at(-1)!.bucket, 'unverified', 'a new address is unverified until proven');
-    assert.equal(f.store.contacts.get('student-m:email'), undefined, 'nothing is stored before the code is confirmed');
-    const done = await verify(f, cookie, f.email.lastCode()!);
-    assert.deepEqual([done.status, done.body.status], [200, 'signed_in']);
-    assert.equal(f.store.contacts.get('student-m:email'), 'mobile.first@example.test');
-    assert.equal(f.store.users.get('student-m')!.contactEmail, 'mobile.first@example.test');
-    assert.equal(f.sms.sent.length, 0);
+    // Mobile (no verified email needed) and Student ID work the same way.
+    const byMobile = await login({ mobile: '9876543291' });
+    assert.deepEqual([byMobile.status, (byMobile.body.user as { id: string }).id], [200, 'student-m']);
+    assert.equal((await me(byMobile)).status, 200);
+    const byId = await studentLogin(f);
+    assert.equal(byId.status, 200);
+    assert.equal((await me(byId)).status, 200);
+
+    // Wrong password, unknown or unverified email: one generic answer, no session.
+    const sessions = f.store.sessions.length;
+    for (const body of [{ email: 'student@example.test', password: 'wrong-password-123' }, { email: 'nobody@example.test' }, { email: 'not-an-email' }, { mobile: '9876543299' }]) {
+      const refused = await login(body);
+      assert.deepEqual([refused.status, refused.body.code], [401, 'INVALID_SIGN_IN_CREDENTIALS'], JSON.stringify(body));
+    }
+    assert.equal(f.store.sessions.length, sessions);
+    // Exactly one identifier.
+    assert.equal((await login({ email: 'student@example.test', mobile: '9876543291' })).status, 400);
+    // Nothing is ever sent at sign-in.
+    assert.deepEqual([f.email.sent.length, f.sms.sent.length], [0, 0]);
   } finally {
     await f.close();
   }
 });
 
-test('AUTH_MOBILE_VERIFICATION: email_otp sessions stop counting when the switch is back to required; SMS flows are unchanged', async () => {
+test('AUTH_MOBILE_VERIFICATION: password and email_otp sessions stop counting when the switch is back to required; email sign-in is refused there', async () => {
   const f = await setup({ services: 'both', mobileVerification: 'off', studentEmail: 'student@example.test' });
   try {
     const login = await studentLogin(f);
-    const ok = await verify(f, verificationCookie(login), f.email.lastCode()!);
-    const session = cookieValue(ok.setCookies, 'elt_session')!;
+    assert.equal(login.status, 200);
+    const session = cookieValue(login.setCookies, 'elt_session')!;
     assert.equal((await call(f.base, 'GET', '/api/auth/me', { surface: 'exam', cookie: `elt_session=${session}` })).status, 200);
     // Operator sets AUTH_MOBILE_VERIFICATION=required again (same services, mode switched).
     providers.configureVerificationServices({ ...providers.verificationServices(), mobileVerification: 'required' });
@@ -2854,21 +2859,24 @@ test('AUTH_MOBILE_VERIFICATION: email_otp sessions stop counting when the switch
     // And an email destination is refused for an SMS challenge.
     const wrong = await call(f.base, 'POST', '/api/auth/verification/destination', { surface: 'exam', cookie: verificationCookie(sms), body: { email: 'x@example.test' } });
     assert.deepEqual([wrong.status, wrong.body.code], [400, 'INVALID_MOBILE']);
+    // Email sign-in exists only while the switch is off.
+    const byEmail = await call(f.base, 'POST', '/api/auth/login', { surface: 'exam', body: { email: 'student@example.test', password: STUDENT_PASSWORD, role: 'candidate' } });
+    assert.deepEqual([byEmail.status, byEmail.body.code], [401, 'INVALID_MOBILE_CREDENTIALS']);
   } finally {
     await f.close();
   }
 });
 
-test('AUTH_MOBILE_VERIFICATION=off: sign-in and registration stay closed without an email provider; SMS alone is not enough', async () => {
+test('AUTH_MOBILE_VERIFICATION=off: registration stays closed without an email provider; password sign-in needs none', async () => {
   const f = await setup({ services: 'sms', mobileVerification: 'off' });
   try {
-    const student = await studentLogin(f);
-    assert.deepEqual([student.status, student.body.code], [503, 'EMAIL_PROVIDER_NOT_CONFIGURED']);
     const institute = await instituteLogin(f);
     assert.deepEqual([institute.status, institute.body.code], [503, 'EMAIL_PROVIDER_NOT_CONFIGURED']);
     const register = await call(f.base, 'POST', '/api/auth/register', { surface: 'exam', body: { name: 'New Student', password: STUDENT_PASSWORD, mobile: '9876543292', email: 'a@example.test' } });
     assert.deepEqual([register.status, register.body.code], [503, 'EMAIL_PROVIDER_NOT_CONFIGURED']);
     assert.equal(f.lookups, 0, 'closed before any account lookup');
+    const student = await studentLogin(f);
+    assert.equal(student.status, 200, 'an existing Student still signs in with a password');
     assert.deepEqual([f.sms.sent.length, f.email.sent.length, f.registrations.claims.size], [0, 0, 0]);
   } finally {
     await f.close();
@@ -2907,4 +2915,21 @@ test('AUTH_MOBILE_VERIFICATION=off (PostgreSQL store): email completion stores t
   assert.equal(smsOk.log.find(({ sql }) => sql.startsWith('INSERT INTO users'))!.values[4], null);
   assert.deepEqual(smsOk.log.find(({ sql }) => sql.startsWith('INSERT INTO account_contacts'))!.values.slice(2, 4), ['sms', '+919876543400']);
   assert.equal(smsOk.log.find(({ sql }) => sql.startsWith('INSERT INTO auth_session_verifications'))!.values[1], 'sms_otp');
+});
+
+test('AUTH_MOBILE_VERIFICATION=off (PostgreSQL store): password sessions are written atomically; email lookup uses verified Student contacts only', async () => {
+  const storeModule = await import('./authVerificationStore.js');
+  const scripted = scriptedPool((sql) => (sql.startsWith('SELECT ac.user_id') ? { rows: [{ user_id: 'student-9' }] } : { rowCount: 1 }));
+  const store = storeModule.createPostgresAuthVerificationStore(scripted.pool);
+  const now = new Date();
+  await store.issueStudentPasswordSession({ userId: 'student-9', sessionTokenHash: 'h'.repeat(64), sessionExpiresAt: new Date(now.getTime() + 1000), now });
+  const statements = scripted.log.map(({ sql }) => sql.split(' (')[0]);
+  assert.deepEqual(statements, ['BEGIN', 'INSERT INTO auth_sessions', 'INSERT INTO auth_session_verifications', 'INSERT INTO auth_verification_events', 'COMMIT']);
+  assert.equal(scripted.log[2].values[1], 'password');
+  assert.equal(scripted.log[3].values[1], 'student.password_session_issued');
+
+  assert.deepEqual(await store.findCandidateIdsByVerifiedEmail('student@example.test', 2), ['student-9']);
+  const lookup = scripted.log.at(-1)!;
+  assert.match(lookup.sql, /ac\.channel = 'email' AND lower\(ac\.destination\) = lower\(\$1\) AND ac\.verified_at IS NOT NULL AND u\.role = 'candidate'/);
+  assert.deepEqual(lookup.values, ['student@example.test', 2]);
 });

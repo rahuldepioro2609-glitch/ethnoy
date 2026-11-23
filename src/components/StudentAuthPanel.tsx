@@ -1,5 +1,6 @@
 // AUTH-1: Student sign-in and account creation. Mobile number + password, then a code sent to that
-// mobile (or to the Student's email while the server runs with AUTH_MOBILE_VERIFICATION=off);
+// mobile. While the server runs with AUTH_MOBILE_VERIFICATION=off, registration confirms a code sent
+// to the Student's email, and an existing Student signs in with email or mobile + password alone;
 // "Continue with Google" for accounts that linked Google (also ends with the mobile code).
 // Every option stays visible. When the server reports a provider as unavailable the option is
 // disabled with the reason;
@@ -28,6 +29,8 @@ interface StudentAuthPanelProps {
   initialError: string | null;
   buttonClass: string;
   onChallenge: (challenge: VerificationChallengeView) => void;
+  /** The server issued a session directly (password sign-in while mobile verification is off). */
+  onSignedIn: () => void;
 }
 
 const inputClass = 'w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:opacity-60';
@@ -54,10 +57,12 @@ const GoogleOption: React.FC<{ option: OptionState; label: string; hint?: string
   );
 };
 
-export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, initialError, buttonClass, onChallenge }) => {
+export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, initialError, buttonClass, onChallenge, onSignedIn }) => {
   const { t } = useLanguage();
   const [mode, setMode] = useState<Mode>('sign-in');
   const [mobile, setMobile] = useState('');
+  // Email or mobile, for password sign-in while mobile verification is off.
+  const [identifier, setIdentifier] = useState('');
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
@@ -88,6 +93,11 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
         onChallenge(result.data);
         return;
       }
+      if (emailOnly && path === '/api/auth/login' && result.status === 200 && result.data && typeof result.data.user === 'object') {
+        setPassword('');
+        onSignedIn();
+        return;
+      }
       setError(t('The server did not start a verification. Please try again.'));
     } catch (caught) {
       setError(caught instanceof ApiError ? verificationMessage(caught.code, caught.message) : t('The request could not be completed. Please try again.'));
@@ -105,6 +115,9 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
         : { name: fullName.trim(), mobile: mobile.trim(), password });
     } else if (mode === 'existing-account') {
       void send('/api/auth/login', { loginId: studentId.trim(), password, role: 'candidate' });
+    } else if (emailOnly) {
+      const value = identifier.trim();
+      void send('/api/auth/login', value.includes('@') ? { email: value, password, role: 'candidate' } : { mobile: value, password, role: 'candidate' });
     } else void send('/api/auth/login', { mobile: mobile.trim(), password, role: 'candidate' });
   };
 
@@ -115,10 +128,10 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
       : 'Use your mobile number. We send a one-time code to it; your account works only after the code is confirmed.'
     : mode === 'existing-account'
       ? emailOnly
-        ? 'Enter your existing Student ID and password. Then complete the one-time email verification to finish signing in.'
+        ? 'Enter your existing Student ID and password.'
         : 'Enter your existing Student ID and password. Then verify your mobile number with a one-time code to finish signing in.'
       : emailOnly
-        ? 'Enter your mobile number and password. We then send a one-time code to your email to finish signing in.'
+        ? 'Enter the email or mobile number you registered with, and your password.'
         : 'Enter your mobile number and password. We then send a one-time code to your mobile to finish signing in.';
 
   return (
@@ -141,6 +154,11 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
             <label htmlFor="student-id" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Student ID')}</label>
             <input id="student-id" type="text" autoComplete="username" value={studentId} onChange={(e) => setStudentId(e.target.value)} required maxLength={254} placeholder={t('Enter your existing Student ID')} disabled={mobileOption.state !== 'available'} className={inputClass} />
           </div>
+        ) : mode === 'sign-in' && emailOnly ? (
+          <div>
+            <label htmlFor="student-identifier" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Email or mobile number')}</label>
+            <input id="student-identifier" type="text" autoComplete="username" value={identifier} onChange={(e) => setIdentifier(e.target.value)} required maxLength={254} disabled={mobileOption.state !== 'available'} className={inputClass} />
+          </div>
         ) : (
           <div>
             <label htmlFor="student-mobile" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Mobile number')}</label>
@@ -161,7 +179,7 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
         </div>
         <button type="submit" disabled={!canSubmit} className={`flex w-full items-center justify-center gap-2 rounded-lg ${buttonClass} px-4 py-3 text-sm font-bold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60`}>
           {mode === 'existing-account' ? <IdCard className="h-4 w-4" /> : <Smartphone className="h-4 w-4" />}
-          {t(busy ? 'Please wait…' : mode === 'register' ? 'Create account and send code' : 'Continue and send code')}
+          {t(busy ? 'Please wait…' : mode === 'register' ? 'Create account and send code' : emailOnly ? 'Sign in' : 'Continue and send code')}
         </button>
       </form>
 
@@ -177,8 +195,8 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
       <div className="mt-6 space-y-3 text-center text-sm font-bold">
         {mode !== 'register' && <button type="button" onClick={() => switchMode('register')} className="w-full text-emerald-800 hover:underline">{t('New student? Create an account')}</button>}
         {mode === 'sign-in' && <button type="button" onClick={() => switchMode('existing-account')} className="w-full text-emerald-800 hover:underline">{t('Existing account? Sign in with Student ID')}</button>}
-        {mode === 'register' && <button type="button" onClick={() => switchMode('sign-in')} className="w-full text-emerald-800 hover:underline">{t('Sign in with your mobile number')}</button>}
-        {mode === 'existing-account' && <button type="button" onClick={() => switchMode('sign-in')} className="w-full text-emerald-800 hover:underline">{t('Use mobile number instead')}</button>}
+        {mode === 'register' && <button type="button" onClick={() => switchMode('sign-in')} className="w-full text-emerald-800 hover:underline">{t(emailOnly ? 'Already have an account? Sign in' : 'Sign in with your mobile number')}</button>}
+        {mode === 'existing-account' && <button type="button" onClick={() => switchMode('sign-in')} className="w-full text-emerald-800 hover:underline">{t(emailOnly ? 'Use email or mobile number instead' : 'Use mobile number instead')}</button>}
       </div>
     </>
   );

@@ -484,7 +484,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, surfaceHostn
               ) : role === 'candidate' ? (
                 // AUTH-1: Student sign-in (mobile + password, then OTP; Google; legacy Student ID link).
                 // Every option stays visible; unavailable providers are shown explicitly.
-                <StudentAuthPanel providers={providers} initialError={error} buttonClass={accent.button} onChallenge={setVerification} />
+                <StudentAuthPanel providers={providers} initialError={error} buttonClass={accent.button} onChallenge={setVerification} onSignedIn={() => void finishVerifiedSignIn()} />
               ) : role === 'center' && !isResubmitting && !showSubmissionAccess && signInAvailable(role, providers) === false ? (
                 <div className="space-y-5">
                   <a href="/login" className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#0B2E59]"><ArrowLeft className="h-3.5 w-3.5" /> {t('All login options')}</a>

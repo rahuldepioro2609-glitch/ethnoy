@@ -82,6 +82,7 @@ const MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   STUDENT_VERIFICATION_REQUIRED: 'Please sign in again and confirm the one-time code.',
   INSTITUTE_VERIFICATION_INCOMPLETE: 'Your institute must complete verification before using the portal.',
   INVALID_MOBILE_CREDENTIALS: 'Invalid mobile number or password. If you signed up earlier with a Student ID, use "Existing account?".',
+  INVALID_SIGN_IN_CREDENTIALS: 'Invalid email, mobile number or password. If you signed up earlier with a Student ID, use "Existing account?".',
   ACCOUNT_NOT_CREATED: 'We could not create an account with these details. If you already have an account, sign in instead.',
   VERIFICATION_CONFLICT: 'This verification changed while your request was processed. Please try again.',
   VERIFICATION_NOT_INSTALLED: 'Verification is not available yet. Please try again later.',

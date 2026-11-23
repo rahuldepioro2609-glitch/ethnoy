@@ -274,7 +274,7 @@ test('AUTH_MOBILE_VERIFICATION: the email-OTP migration runs once, after AUTH-1,
   const statements = sql.split(/;\s*(?=\n|$)/).map((statement) => statement.trim().replace(/\s+/g, ' ')).filter(Boolean);
   assert.deepEqual(statements, [
     'ALTER TABLE auth_session_verifications DROP CONSTRAINT IF EXISTS auth_session_verifications_method_check',
-    "ALTER TABLE auth_session_verifications ADD CONSTRAINT auth_session_verifications_method_check CHECK ( method IN ('sms_otp', 'email_otp') )",
+    "ALTER TABLE auth_session_verifications ADD CONSTRAINT auth_session_verifications_method_check CHECK ( method IN ('sms_otp', 'email_otp', 'password') )",
   ]);
 });
 
