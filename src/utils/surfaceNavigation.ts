@@ -8,6 +8,17 @@ export type SurfaceHostnames = Record<PortalSurface, string>;
  */
 export type DisclosedSurfaceHostnames = Partial<Record<PortalSurface, string>>;
 
+/** Keep the Institute link on this machine when using the read-only live Institute preview. */
+export function surfaceHostnamesForLocalInstitutePreview(
+  hostnames: DisclosedSurfaceHostnames,
+  currentHostname: string,
+  previewEnabled: boolean,
+): DisclosedSurfaceHostnames {
+  const hostname = currentHostname.toLowerCase();
+  if (!previewEnabled || !['localhost', '127.0.0.1'].includes(hostname)) return hostnames;
+  return { ...hostnames, marketing: hostname, institution: hostname };
+}
+
 export type InstituteSignOutViewState = 'checking' | 'wrong_surface' | 'signed_out' | 'confirm';
 
 /** A display hint is never enough to sign out; verify both the owning host and its live Institute session. */
