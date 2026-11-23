@@ -30,7 +30,7 @@ import { isPlatformStaffPath } from './utils/staffAccess';
 import { DEFAULT_EXAM_TIME_ZONE, getDateOnlyParts, isRegistrationOpen } from './utils/examSchedule';
 import { LANGUAGE_LOCALES, Language } from './utils/languageLogic';
 import { useLanguage } from './utils/languageContext';
-import { ADMIN_HOME_PATH, instituteSignOutViewState, planSurfaceNavigation, requiredSurfaceForPath, urlForSurface, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
+import { ADMIN_HOME_PATH, instituteSignOutViewState, planSurfaceNavigation, requiredSurfaceForPath, surfaceHostnamesForLocalInstitutePreview, urlForSurface, type DisclosedSurfaceHostnames } from './utils/surfaceNavigation';
 import { clearPortalHintInBrowser, readPortalHintFromBrowser, type PortalHint } from './utils/portalHint';
 
 function mapPublishedExam(exam: Record<string, unknown>, locale: string): ExamItem {
@@ -373,7 +373,14 @@ export default function App() {
     let active = true;
     apiRequest<{ hostnames: DisclosedSurfaceHostnames }>('/api/surface-hostnames')
       .then(({ hostnames }) => {
-        if (active) setSurfaceHostnames(hostnames);
+        const previewEnabled = import.meta.env.DEV
+          && (import.meta.env as ImportMetaEnv & { VITE_ELTNOY_LIVE_PREVIEW?: string }).VITE_ELTNOY_LIVE_PREVIEW === 'true';
+        const routedHostnames = surfaceHostnamesForLocalInstitutePreview(
+          hostnames,
+          window.location.hostname,
+          previewEnabled,
+        );
+        if (active) setSurfaceHostnames(routedHostnames);
       })
       .catch(() => {
         if (active) setSurfaceRoutingFailed(true);

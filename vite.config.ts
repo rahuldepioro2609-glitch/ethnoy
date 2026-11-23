@@ -21,6 +21,7 @@ const livePreviewEnabled = process.env.ELTNOY_LOCAL_LIVE_PREVIEW === '1';
 function livePreviewRequestAllowed(method: string, pathname: string): boolean {
   if (method === 'GET' || method === 'HEAD') {
     return pathname === '/api/auth/providers'
+      || pathname === '/api/surface-hostnames'
       || pathname === '/api/auth/me'
       || pathname === '/api/auth/verification'
       || pathname.startsWith('/api/center/');
@@ -165,6 +166,9 @@ function localSurfaceApiProxy(): Plugin {
 
 export default defineConfig(() => {
   return {
+    define: {
+      'import.meta.env.VITE_ELTNOY_LIVE_PREVIEW': JSON.stringify(livePreviewEnabled ? 'true' : 'false'),
+    },
     plugins: [localSurfaceApiProxy(), react(), tailwindcss()],
     resolve: {
       alias: {
