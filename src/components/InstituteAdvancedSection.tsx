@@ -58,6 +58,15 @@ const dateLabel = (value: unknown): string => {
   return Number.isFinite(time) ? new Date(time).toLocaleDateString('en-IN') : '—';
 };
 
+/** Date and time in India time (check-ins happen on exam day, so the time matters). */
+const dateTimeLabel = (value: unknown): string => {
+  if (typeof value !== 'string' && typeof value !== 'number') return '—';
+  const time = new Date(value).getTime();
+  return Number.isFinite(time)
+    ? new Date(time).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : '—';
+};
+
 const Card: React.FC<React.PropsWithChildren<{ className?: string }>> = ({ children, className = '' }) => (
   <section className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 ${className}`}>
     {children}
@@ -210,7 +219,7 @@ export const InstituteAdvancedSection: React.FC<InstituteAdvancedSectionProps> =
         <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-extrabold text-[#0B2E59]"><CalendarDays className="h-5 w-5 text-blue-700" /> Attendance register</h2><p className="mt-1 text-sm text-slate-500">Attendance entries recorded through your assigned center’s candidate check-in workflow.</p></div><button type="button" onClick={onOpenCheckins} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Record check-in <ArrowRight className="h-4 w-4" /></button></div>
         {checkinsState === 'loading' ? <p role="status" className="mt-5 rounded-xl bg-slate-50 p-5 text-sm text-slate-600">Loading attendance records…</p>
           : checkinsState === 'error' ? <p role="alert" className="mt-5 rounded-xl bg-rose-50 p-5 text-sm text-rose-800">Attendance records could not be loaded. Use Refresh and try again.</p>
-            : recentCheckins.length ? <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[700px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-3">Candidate</th><th className="p-3">Application</th><th className="p-3">Exam</th><th className="p-3">Check-in time</th><th className="p-3">Attendance</th></tr></thead><tbody className="divide-y divide-slate-100">{recentCheckins.map((row, index) => <tr key={text(row.id, `${text(row.application_number)}-${index}`)}><td className="p-3 font-semibold text-slate-900">{text(row.candidate_name)}</td><td className="p-3 font-mono text-slate-600">{text(row.application_number)}</td><td className="p-3 text-slate-600">{text(row.exam_code)}</td><td className="p-3 text-slate-600">{dateLabel(row.checked_in_at ?? row.created_at)}</td><td className="p-3"><span className={`rounded-full px-2.5 py-1 text-xs font-bold capitalize ${statusTone(row.status)}`}>{text(row.status, 'unknown')}</span></td></tr>)}</tbody></table></div>
+            : recentCheckins.length ? <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[700px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-3">Candidate</th><th className="p-3">Application</th><th className="p-3">Exam</th><th className="p-3">Check-in time</th><th className="p-3">Attendance</th></tr></thead><tbody className="divide-y divide-slate-100">{recentCheckins.map((row, index) => <tr key={text(row.id, `${text(row.application_number)}-${index}`)}><td className="p-3 font-semibold text-slate-900">{text(row.candidate_name)}</td><td className="p-3 font-mono text-slate-600">{text(row.application_number)}</td><td className="p-3 text-slate-600">{text(row.exam_code)}</td><td className="p-3 text-slate-600">{dateTimeLabel(row.updated_at ?? row.checked_in_at ?? row.created_at)}</td><td className="p-3"><span className={`rounded-full px-2.5 py-1 text-xs font-bold capitalize ${statusTone(row.status)}`}>{text(row.status, 'unknown')}</span></td></tr>)}</tbody></table></div>
               : <p className="mt-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">No candidate attendance has been recorded for this center.</p>}
       </Card>
     );

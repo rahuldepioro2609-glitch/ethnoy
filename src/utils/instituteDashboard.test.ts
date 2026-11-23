@@ -115,3 +115,23 @@ test('the six months are IST months, oldest first, across a year boundary', () =
   // 30 Nov 19:00 UTC is already 1 Dec in India.
   assert.equal(recentMonthKeys(new Date('2026-11-30T19:00:00Z')).at(-1), '2026-12');
 });
+
+test('Attendance register shows the check-in time from the server row (updated_at), never a blank "—"', async () => {
+  const React = (await import('react')).default;
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { InstituteAdvancedSection } = await import('../components/InstituteAdvancedSection.tsx');
+  // Exactly the columns centerCheckinsQuery returns (server/authorizationQueries.ts).
+  const row = {
+    id: 'c1', status: 'verified', note: null, updated_at: '2026-11-23T04:15:00Z',
+    application_number: 'APP100001', candidate_name: 'Synthetic Candidate', exam_code: 'DEMO-EXAM-1', roll_number: 'R5000',
+  };
+  const html = renderToStaticMarkup(React.createElement(InstituteAdvancedSection, {
+    sectionId: 'institute-attendance', centerCode: 'DEMO-CENTER-01', forms: [], checkins: [row], summary: undefined,
+    workspaceState: 'success', checkinsState: 'success', onCreateForm: () => undefined, onOpenCheckins: () => undefined,
+  }));
+  const cells = [...html.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((match) => match[1].replace(/<[^>]+>/g, ''));
+  const time = cells[3];
+  assert.notEqual(time, '—', 'the check-in time is shown');
+  assert.match(time, /23 Nov 2026/);
+  assert.match(time, /09:45/, '04:15 UTC is 09:45 in India');
+});
