@@ -5,7 +5,7 @@
 // disabled with the reason;
 // nothing here signs anyone in: only a server-started verification can lead to a session.
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Smartphone } from 'lucide-react';
+import { ArrowLeft, IdCard, Smartphone } from 'lucide-react';
 import { ApiError, apiRequestWithMeta } from '../api';
 import { useLanguage } from '../utils/languageContext';
 import {
@@ -20,7 +20,7 @@ import {
   type VerificationChallengeView,
 } from '../utils/authVerification';
 
-type Mode = 'sign-in' | 'register';
+type Mode = 'sign-in' | 'register' | 'existing-account';
 
 interface StudentAuthPanelProps {
   providers: ProviderStatus | null;
@@ -58,6 +58,7 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
   const { t } = useLanguage();
   const [mode, setMode] = useState<Mode>('sign-in');
   const [mobile, setMobile] = useState('');
+  const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
@@ -102,17 +103,23 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
       void send('/api/auth/register', emailOnly
         ? { name: fullName.trim(), mobile: mobile.trim(), email: email.trim(), password }
         : { name: fullName.trim(), mobile: mobile.trim(), password });
+    } else if (mode === 'existing-account') {
+      void send('/api/auth/login', { loginId: studentId.trim(), password, role: 'candidate' });
     } else void send('/api/auth/login', { mobile: mobile.trim(), password, role: 'candidate' });
   };
 
-  const title = mode === 'register' ? 'Create student account' : 'Student sign-in';
+  const title = mode === 'register' ? 'Create student account' : mode === 'existing-account' ? 'Existing student sign-in' : 'Student sign-in';
   const subtitle = mode === 'register'
     ? emailOnly
       ? 'Use your mobile number to sign in. We send a one-time code to your email; your account works only after the code is confirmed.'
       : 'Use your mobile number. We send a one-time code to it; your account works only after the code is confirmed.'
-    : emailOnly
-      ? 'Enter your mobile number and password. We then send a one-time code to your email to finish signing in.'
-      : 'Enter your mobile number and password. We then send a one-time code to your mobile to finish signing in.';
+    : mode === 'existing-account'
+      ? emailOnly
+        ? 'Enter your existing Student ID and password. Then complete the one-time email verification to finish signing in.'
+        : 'Enter your existing Student ID and password. Then verify your mobile number with a one-time code to finish signing in.'
+      : emailOnly
+        ? 'Enter your mobile number and password. We then send a one-time code to your email to finish signing in.'
+        : 'Enter your mobile number and password. We then send a one-time code to your mobile to finish signing in.';
 
   return (
     <>
@@ -129,10 +136,17 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
             <input id="student-name" autoComplete="name" value={fullName} onChange={(e) => setFullName(e.target.value)} required minLength={2} maxLength={120} disabled={mobileOption.state !== 'available'} className={inputClass} />
           </div>
         )}
-        <div>
-          <label htmlFor="student-mobile" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Mobile number')}</label>
-          <input id="student-mobile" type="tel" inputMode="numeric" autoComplete="tel-national" value={mobile} onChange={(e) => setMobile(e.target.value)} required maxLength={16} placeholder="10-digit mobile number" disabled={mobileOption.state !== 'available'} className={inputClass} />
-        </div>
+        {mode === 'existing-account' ? (
+          <div>
+            <label htmlFor="student-id" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Student ID')}</label>
+            <input id="student-id" type="text" autoComplete="username" value={studentId} onChange={(e) => setStudentId(e.target.value)} required maxLength={254} placeholder={t('Enter your existing Student ID')} disabled={mobileOption.state !== 'available'} className={inputClass} />
+          </div>
+        ) : (
+          <div>
+            <label htmlFor="student-mobile" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Mobile number')}</label>
+            <input id="student-mobile" type="tel" inputMode="numeric" autoComplete="tel-national" value={mobile} onChange={(e) => setMobile(e.target.value)} required maxLength={16} placeholder="10-digit mobile number" disabled={mobileOption.state !== 'available'} className={inputClass} />
+          </div>
+        )}
         {mode === 'register' && emailOnly && (
           <div>
             <label htmlFor="student-email" className="mb-1.5 block text-sm font-semibold text-slate-700">{t('Email address')}</label>
@@ -146,19 +160,25 @@ export const StudentAuthPanel: React.FC<StudentAuthPanelProps> = ({ providers, i
           {mode === 'register' && <p className="mt-1 text-xs text-slate-500">{t('Use at least 12 characters. Password recovery is not configured, so do not use a password you use elsewhere.')}</p>}
         </div>
         <button type="submit" disabled={!canSubmit} className={`flex w-full items-center justify-center gap-2 rounded-lg ${buttonClass} px-4 py-3 text-sm font-bold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60`}>
-          <Smartphone className="h-4 w-4" />
+          {mode === 'existing-account' ? <IdCard className="h-4 w-4" /> : <Smartphone className="h-4 w-4" />}
           {t(busy ? 'Please wait…' : mode === 'register' ? 'Create account and send code' : 'Continue and send code')}
         </button>
       </form>
 
-      <div className="my-5 flex items-center gap-3 text-xs font-semibold uppercase tracking-wide text-slate-400"><span className="h-px flex-1 bg-slate-200" />{t('or')}<span className="h-px flex-1 bg-slate-200" /></div>
-      {mode === 'register'
-        ? <GoogleOption option={studentGoogleSignUpOption()} label="Sign up with Google" />
-        : <GoogleOption option={studentGoogleSignInOption(providers)} label="Continue with Google" hint="For accounts that have linked Google. You will still confirm a code sent to your mobile." />}
+      {mode !== 'existing-account' && (
+        <>
+          <div className="my-5 flex items-center gap-3 text-xs font-semibold uppercase tracking-wide text-slate-400"><span className="h-px flex-1 bg-slate-200" />{t('or')}<span className="h-px flex-1 bg-slate-200" /></div>
+          {mode === 'register'
+            ? <GoogleOption option={studentGoogleSignUpOption()} label="Sign up with Google" />
+            : <GoogleOption option={studentGoogleSignInOption(providers)} label="Continue with Google" hint="For accounts that have linked Google. You will still confirm a code sent to your mobile." />}
+        </>
+      )}
 
       <div className="mt-6 space-y-3 text-center text-sm font-bold">
         {mode !== 'register' && <button type="button" onClick={() => switchMode('register')} className="w-full text-emerald-800 hover:underline">{t('New student? Create an account')}</button>}
-        {mode !== 'sign-in' && <button type="button" onClick={() => switchMode('sign-in')} className="w-full text-emerald-800 hover:underline">{t('Sign in with your mobile number')}</button>}
+        {mode === 'sign-in' && <button type="button" onClick={() => switchMode('existing-account')} className="w-full text-emerald-800 hover:underline">{t('Existing account? Sign in with Student ID')}</button>}
+        {mode === 'register' && <button type="button" onClick={() => switchMode('sign-in')} className="w-full text-emerald-800 hover:underline">{t('Sign in with your mobile number')}</button>}
+        {mode === 'existing-account' && <button type="button" onClick={() => switchMode('sign-in')} className="w-full text-emerald-800 hover:underline">{t('Use mobile number instead')}</button>}
       </div>
     </>
   );
