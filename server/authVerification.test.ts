@@ -2828,7 +2828,8 @@ test('AUTH_MOBILE_VERIFICATION=off: an existing Student signs in with email, mob
 
     // Wrong password, unknown or unverified email: one generic answer, no session.
     const sessions = f.store.sessions.length;
-    for (const body of [{ email: 'student@example.test', password: 'wrong-password-123' }, { email: 'nobody@example.test' }, { email: 'not-an-email' }, { mobile: '9876543299' }]) {
+    const refusals: Array<Record<string, string>> = [{ email: 'student@example.test', password: 'wrong-password-123' }, { email: 'nobody@example.test' }, { email: 'not-an-email' }, { mobile: '9876543299' }];
+    for (const body of refusals) {
       const refused = await login(body);
       assert.deepEqual([refused.status, refused.body.code], [401, 'INVALID_SIGN_IN_CREDENTIALS'], JSON.stringify(body));
     }
