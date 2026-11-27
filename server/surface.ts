@@ -617,6 +617,14 @@ export const ROUTE_POLICY: readonly RoutePolicyEntry[] = Object.freeze([
 
   // Super Admin (Admin surface; existing requireSuperAdmin).
   superAdmin('GET', '/api/admin/data-export'),
+  // A-12: audit-log reads are Super Admin only.
+  superAdmin('GET', '/api/admin/audit-events'),
+  // Merit List Engine foundation: Super Admin only (A-04 results, A-07 exports). No publish route.
+  superAdmin('GET', '/api/admin/merit-lists/:examCode/preview'),
+  superAdmin('GET', '/api/admin/merit-lists/:examCode/snapshots'),
+  superAdmin('POST', '/api/admin/merit-lists/:examCode/snapshots'),
+  superAdmin('GET', '/api/admin/merit-lists/snapshots/:snapshotId'),
+  superAdmin('GET', '/api/admin/merit-lists/snapshots/:snapshotId/export'),
   superAdmin('POST', '/api/admin/admit-cards/import'),
   superAdmin('PATCH', '/api/admin/answer-keys/:examCode'),
   superAdmin('PATCH', '/api/admin/online-exams/:examCode'),

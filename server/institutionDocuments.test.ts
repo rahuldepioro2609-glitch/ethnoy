@@ -15,6 +15,7 @@ import { expectedOrigin, type Surface } from './surface.js';
 import { pool } from './db.js';
 import { INSTITUTION_DOCUMENT_CATEGORIES } from '../src/utils/institutionDocuments.js';
 import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
+import { AUDIT_INSERT_SQL } from './audit.js';
 
 const tokens = {
   center: 'C'.repeat(43),
@@ -537,15 +538,19 @@ test('records official remarks as append-only history without inventing a decisi
         return { rows: [{
           id: 'review-id',
           version_id: values?.[1],
+          institution_id: 'synthetic-institution',
           decision_code: values?.[3],
           reviewer_remarks: values?.[4],
           reviewed_at: '2026-11-01T00:00:00Z',
         }] };
       }
+      if (text === AUDIT_INSERT_SQL) return { rows: [] };
+      if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(text)) return { rows: [] };
       throw new Error(`Unexpected review-history query: ${text}`);
     },
+    // A-11: the review and its audit row run on one transaction client.
     async connect() {
-      throw new Error('unexpected');
+      return { query: (text: string, values?: unknown[]) => database.query(text, values), release() {} };
     },
   };
   try {
@@ -563,6 +568,13 @@ test('records official remarks as append-only history without inventing a decisi
     assert.equal(insert.values?.[2], 'super-admin');
     assert.equal(insert.values?.[3], null);
     assert.equal(insert.values?.[4], 'Synthetic verification note.');
+    assert.deepEqual(Object.keys((result.body as { review: object }).review).sort(), ['decision_code', 'id', 'reviewed_at', 'reviewer_remarks', 'version_id'], 'institution_id is not added to the response');
+    // The audit row: same transaction, the version as resource, and never the remarks text.
+    assert.deepEqual(statements.map(({ text }) => (text.includes('INSERT INTO institution_document_review_history') ? 'INSERT review' : text === AUDIT_INSERT_SQL ? 'INSERT audit' : text.split(' ').slice(0, 3).join(' ')))
+      .slice(1), ['BEGIN', 'INSERT review', 'INSERT audit', 'COMMIT']);
+    const audit = statements.find(({ text }) => text === AUDIT_INSERT_SQL)!;
+    assert.deepEqual([audit.values?.[1], audit.values?.[7], audit.values?.[9]], ['document.review_recorded', 'synthetic-institution', '00000000-0000-4000-8000-000000000001']);
+    assert.doesNotMatch(String(audit.values?.[10]), /Synthetic verification note/);
   } finally {
     restoreAuthentication();
     restoreEnvironment();

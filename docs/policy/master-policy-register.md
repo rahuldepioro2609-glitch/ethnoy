@@ -1,6 +1,6 @@
 # ELTNOY master policy register
 
-**Status:** Internal working register. Do not publish or share externally. Last updated 2026-11-14 (sections SM and AU added; code-status notes on sections R and A).
+**Status:** Internal working register. Do not publish or share externally. Last updated 2026-11-27 (section PO added: Product Owner decisions D-01 and D-02; sections AL and ML added: audit log and merit-list foundation implementation records; code-status note on section A). Earlier: 2026-11-14 (sections SM and AU added; code-status notes on sections R and A).
 **Supersedes:** `docs/policy/eltnoy-policy-register.md`. Every entry there is carried over below with its ID unchanged.
 **Companion documents:** `policy-conflict-and-gap-register.md`, `../architecture/data-model-final-proposal.md`.
 
@@ -303,8 +303,8 @@ The source is the client instruction of 2026-11-03 03:17Z ("The client has appro
 | A-08 | All Officials keep the candidate application list and status workflow, but **email and phone are hidden from ordinary Officials** | DISCUSSION_APPROVED | **No** | Official / SA | Applications | Applies to legacy applications. The rule for new opportunity applications is D-10. | V |
 | A-09 | Institution document downloads and document review decisions: Super Admin only | DISCUSSION_APPROVED | **No** | SA | Documents | `institutionDocuments.ts` uses an official-only guard | V |
 | A-10 | **Official management** (create, grant or revoke Super Admin, disable, revoke sessions): Super Admin only, as a separate follow-up milestone. The CLI bootstrap stays for now. | DISCUSSION_APPROVED | Partly (CLI only) | SA | Platform admin | Roadmap milestone 11 | V |
-| A-11 | **Audit trail:** acting Official, action, target, time, and before and after state, for financial, approval, publishing and permission actions. No passwords, tokens, secrets or unnecessary personal data. **Written in the same transaction as the action; an audit failure rolls the action back.** | DISCUSSION_APPROVED | **No** | Eng | All | A new `audit_events` table, shared with the opportunity platform | V |
-| A-12 | Reading the audit log: Super Admin only | DISCUSSION_APPROVED | **No** | SA | Audit | The proposed organization permission `audit.view` conflicts with this (C-03) | V |
+| A-11 | **Audit trail:** acting Official, action, target, time, and before and after state, for financial, approval, publishing and permission actions. No passwords, tokens, secrets or unnecessary personal data. **Written in the same transaction as the action; an audit failure rolls the action back.** | DISCUSSION_APPROVED | **Code only** (2026-11-27, not committed or deployed; see section AL) | Eng | All | A new `audit_events` table, shared with the opportunity platform | V |
+| A-12 | Reading the audit log: Super Admin only | DISCUSSION_APPROVED | **Code only** (2026-11-27, not committed or deployed; see section AL) | SA | Audit | The proposed organization permission `audit.view` conflicts with this (C-03) | V |
 | A-13 | Audit retention: append-only, no automatic deletion this release; retention is a future client decision | DISCUSSION_APPROVED | — | Client | Audit | Append-only triggers | V |
 | A-14 | Helpdesk tickets: Super Admin only | DISCUSSION_APPROVED | **No** | SA | Helpdesk | — | V |
 | A-15 | Linking legacy application ownership: Super Admin only | DISCUSSION_APPROVED | **No** | SA | Applications | Affects `/api/admin/applications/:id/verify-ownership` | V |
@@ -316,7 +316,107 @@ The source is the client instruction of 2026-11-03 03:17Z ("The client has appro
 | A-21 | ~~Restrict candidate personal-data access to Super Admin~~ | SUPERSEDED by A-08 | — | — | — | — | V |
 | A-22 | ~~Don't assume every financial or publishing action becomes Super Admin-only~~ (audit-stage instruction) | SUPERSEDED by A-02 to A-06 | — | — | — | — | V |
 
-**Code-status note (2026-11-16):** A-17 is now enforced: all Officials may create unpublished notice drafts; only Super Admins may publish or unpublish them. Other code-status details below were last reviewed 2026-11-14: commit `df9b93e` (2026-11-04) enforces Super Admin-only access for A-02 (credits), A-03 (withdrawals, maker-checker), A-04 (result corrections; direct POST and imports never publish), A-05, A-06 (interim P3-D1: admit-card import and assignment are Super Admin-only and still publish immediately; the draft step is not built), A-07, A-09, A-14 and A-15, with route tests in `server/adminAuthorization.test.ts` (matrix from line 307). **Not built:** A-08 (contact hiding), A-10, A-11 (`audit_events`), A-12 (general audit viewer), A-16 for admit cards. The "Built?" column above reflects 2026-11-03 except for A-17.
+**Code-status note (2026-11-16):** A-17 is now enforced: all Officials may create unpublished notice drafts; only Super Admins may publish or unpublish them. Other code-status details below were last reviewed 2026-11-14: commit `df9b93e` (2026-11-04) enforces Super Admin-only access for A-02 (credits), A-03 (withdrawals, maker-checker), A-04 (result corrections; direct POST and imports never publish), A-05, A-06 (interim P3-D1: admit-card import and assignment are Super Admin-only and still publish immediately; the draft step is not built), A-07, A-09, A-14 and A-15, with route tests in `server/adminAuthorization.test.ts` (matrix from line 307). **Not built:** A-08 (contact hiding), A-10, A-16 for admit cards. **Update 2026-11-27:** A-11 (`audit_events`) and A-12 (Super Admin audit viewer) now exist in code (worktree `audit-log`, not committed or deployed); see section AL. The "Built?" column above reflects 2026-11-03 except for A-17.
+
+## PO. Product Owner decisions, 2026-11-27
+
+Source: the Product Owner's decisions given in the Claude Code session on 2026-11-27 (**V**). The Product Owner role is played by ChatGPT on the client's behalf. These are recorded verbatim in substance. All other pending decisions in `documentation/CLIENT_DECISIONS.md` were **deferred** until their implementation phase.
+
+| ID | Decision | Status | Effect |
+|---|---|---|---|
+| PO-D-01 | **D-01, Option B:** "Prepare the Audit Log work for its own branch, but hold the Institute Workspace until its author confirms completion and it is safely isolated in its own branch. No merging yet. Integration will happen on a separate integration branch after both workstreams are ready." | IMPLEMENTATION_APPROVED (Product Owner, 2026-11-27) | The `audit-log` work is committed on its own local branch, with no push, merge or deploy. The Workspace stays uncommitted and untouched until its author confirms completion. |
+| PO-D-02 | **D-02, Option B:** "Institutes may prepare exams, admit cards, results and merit-list drafts. ELTNOY Super Admin must review and approve official publication. Institutes must not publish official results or admit cards directly. Preserve A-04 and A-06." | DISCUSSION_APPROVED direction (Product Owner, 2026-11-27); implementation happens in the Workspace integration phase | Resolves F-4 (and the direction of ML-8): Institutes prepare, the Super Admin approves and publishes. **The current Workspace code (direct result publication and admit-card release by an Institute) must be changed to follow this before it ships.** A-04 and A-06 are unchanged. |
+
+## AL. Audit log implementation record (A-11, A-12), 2026-11-27
+
+**Nature of this section:** an implementation record, not new policy. It states what the code does (**V-code**) and lists the decisions it depends on that are still open. No policy status in section A is changed here: A-11 and A-12 stay `DISCUSSION_APPROVED`, and A-13 is unchanged.
+
+**Authority to implement:** the owner's instruction in the Claude Code session of 2026-11-27: "Start with Audit Log (A-11)" (**V**). The owner then accepted the result ("Audit Log A-11 and Super Admin Audit Viewer A-12 are completed") and asked for this record.
+
+**Where the code is:** worktree `.claude/worktrees/audit-log`, branch `audit-log`, based on `1dd6145`. It is **not committed, merged or deployed**. Design source: `docs/architecture/audit-infrastructure-proposal.md` (release 1, reduced scope).
+
+### AL-1. Implemented scope (V-code)
+
+| ID | What the code does | Evidence |
+|---|---|---|
+| AL-1.1 | Table `audit_events`. Migration file 12, before the grants migration. | `server/auditEventsMigration.sql`, `server/migrate.ts` |
+| AL-1.2 | Append-only for every role. Triggers reject `UPDATE`, `DELETE` and `TRUNCATE`, including for the owner role. `eltnoy_app` has `SELECT, INSERT` only. | Migration; `databaseGrantsMigration.sql`; real-PostgreSQL test in `databaseGrants.postgres.integration.test.ts` |
+| AL-1.3 | The database sets a per-row SHA-256 hash on insert, overwriting any client value. This makes rows tamper-evident, not immutable. | Same |
+| AL-1.4 | One writer (`server/audit.ts`). Every action has a contract: category, resource type, retention class, and an allow-list of metadata keys with types. Unknown or wrongly typed keys are refused. | `server/audit.ts`, `server/audit.test.ts` |
+| AL-1.5 | Successful actions are written **in the same transaction** as the action. A failed audit insert rolls the action back (A-11). | `runAuditedTransaction`; route tests |
+| AL-1.6 | 33 actions are recorded, and 2 merit-list actions were added later (section ML):<br>- notices;<br>- admit-card, answer-key, online-exam and result imports and publication;<br>- exams;<br>- institution approval, rejection and resubmission;<br>- institute forms and profile changes, with their decisions;<br>- institutional verification decisions;<br>- applications;<br>- wallet credits and withdrawals (requested, approved, rejected, paid);<br>- check-ins;<br>- helpdesk;<br>- data export;<br>- document review notes;<br>- sign-out;<br>- audit searches. | `server/index.ts`, `server/authVerificationStore.ts`, `server/institutionDocuments.ts`, `server/auditRoutes.ts` |
+| AL-1.7 | Sign-in, MFA and registration events stay in the existing append-only `auth_verification_events`. Staff events stay in `platform_staff_audit_events` and `org_staff_audit_events`. They are not copied into `audit_events`. | — |
+
+### AL-2. Access restrictions (V-code)
+
+| ID | Rule as built |
+|---|---|
+| AL-2.1 | Reading: **Super Admin only** (A-12), on the Admin host only. One read-only route, `GET /api/admin/audit-events`, and the "Audit log" tab. Every other role and host is refused before any query. |
+| AL-2.2 | No route creates, edits or deletes audit events. Only server code writes them. |
+| AL-2.3 | Every search is itself recorded (`audit.searched`), with filter names and the result count, before any row is sent. If that record fails, nothing is sent. |
+| AL-2.4 | Searches need a date range of at most 93 days (default 7). Filters are allow-listed, keyset pagination is used, and pages hold at most 100 rows. |
+| AL-2.5 | An institute's events carry the institution ID from the **session**, never from the request. **Institutions have no read access** (see AL-4, C-03). |
+
+### AL-3. Privacy rules (V-code)
+
+| ID | Rule as built |
+|---|---|
+| AL-3.1 | Never recorded: passwords, one-time codes, tokens, cookies, session hashes, exam answers, scores, scorecards, document contents, email addresses, mobile numbers, dates of birth, helpdesk text and review remarks. Enforced by key allow-lists, a refusal pattern in the writer, and a database CHECK as a backstop. |
+| AL-3.2 | Actor names and login IDs are not copied into rows. The viewer looks them up at read time. |
+| AL-3.3 | Free text recorded is limited to Official decision reasons (`reason_text`, at most 500 characters). Profile changes record field names only, not values. |
+| AL-3.4 | Source IP and user agent are **not** collected. |
+
+### AL-4. Unresolved decisions (all PENDING_CONFIRMATION; not implemented)
+
+| ID | Open question | Source |
+|---|---|---|
+| AL-4.1 | Retention period per retention class, and archival. Until decided: no automatic deletion. | A-13; proposal OD-1 |
+| AL-4.2 | Whether to collect source IP and user agent, for which categories, and whether to disclose it in the privacy notice | Proposal OD-3 |
+| AL-4.3 | Failed sign-in and denial logging, including whether a login ID for an unknown account may be stored | Proposal OD-5 |
+| AL-4.4 | Sealing chain and off-host checkpoint destination (who controls the copy) | Proposal OD-6 |
+| AL-4.5 | Audit export (format, size limits, frequency) | Proposal OD-7 |
+| AL-4.6 | Whether an institution may see its own activity (screenshot S-07 "Activity Log"). This conflicts with A-12. | C-03 |
+| AL-4.7 | Audit events from the accepted P0-4 exam finalization code | C-10 |
+| AL-4.8 | Recording refused or failed actions through a separate writer. **Partly built 2026-11-27 (V-code):** refused withdrawal payments (`maker_checker`, `approver_unknown`, `insufficient_super_admins`) are recorded as `withdrawal.payment_refused` (outcome `denied`) on their own transaction after the rollback. **Also built 2026-11-27:** the proposal §7 failure contracts `wallet.credit_failed` (`duplicate_payment_reference` or `institute_not_eligible`) and `withdrawal.payment_failed` (`duplicate_transfer_reference`), outcome `failed`. Other refusals (authorization denials, published-content refusals, failed sign-ins) wait for AL-4.3 / OD-5. | Proposal §7, §9.3 (no client decision needed for these) |
+| AL-4.9 | Whether the viewer should also show `auth_verification_events` and the staff audit tables | Not yet discussed |
+
+## ML. Merit List Engine foundation: implementation record and open decisions, 2026-11-27
+
+**Nature of this section:** an implementation record (**V-code**) plus the open questions it found. **No ranking, tie-break, cut-off, qualification, category or publication rule is decided here.** Every such rule is listed as `PENDING_CONFIRMATION` below.
+
+**Authority to implement:** the owner's instruction of 2026-11-27: "proceed with the Merit List Engine … implement only the configurable technical foundation where safe, and mark the unresolved business rules as BLOCKED" (**V**). The gap analysis is in `documentation/MERIT_LIST_GAP_ANALYSIS.md`. The code is in worktree `audit-log`, **not committed, merged or deployed**.
+
+**Decisions it relies on:**
+- **R-10:** scoring formula and negative marking unchanged. The engine never changes online-exam scoring.
+- **A-04 / A-16:** result publication and correction stay Super Admin only. The engine never changes results.
+- **A-07:** exports are Super Admin only.
+- **A-11 / A-12:** audit.
+
+### ML-I. Implemented (V-code)
+
+| ID | What the code does |
+|---|---|
+| ML-I.1 | For one exam, orders result records (draft and published) by the imported scorecard's `totalMarksObtained`, highest first (`server/meritList.ts`). |
+| ML-I.2 | Equal totals form an **unresolved tie group** with a shared position range, for example "2–4 (tie)". Roll number fixes only the display order inside a group. No rank number is assigned. |
+| ML-I.3 | Arithmetic checks, reported but never corrected: identity, section sums, maximum sums, marks above maximum, unreadable scorecards (left out of the order), and imported ranks that contradict the marks order. |
+| ML-I.4 | Append-only **draft** versions (`merit_list_snapshots`). There is no published state, and the same inputs (fingerprint) can't be saved twice. Saving must match the previewed fingerprint, and runs under a per-exam lock in one transaction. |
+| ML-I.5 | Stored entries hold application and roll numbers, totals, positions, tie groups and issue codes. Never names, dates of birth, categories or section marks. |
+| ML-I.6 | Super Admin only, Admin host only: preview, version history, save, and CSV export (formula-safe). Saving and exporting are audited (`merit_list.snapshot_created`, `merit_list.exported`), the export before any data is sent. |
+| ML-I.7 | No route approves, publishes, finalises, breaks ties, applies cut-offs or ranks by category. Institutes and Students have no merit route. |
+
+### ML-D. Decisions needed (all PENDING_CONFIRMATION; not implemented)
+
+| ID | Open question | Source |
+|---|---|---|
+| ML-1 | Tie-break order (for example: a named section's marks, fewer wrong answers, age, application time) | Client report R-10 and screenshot S-18 ("Apply Tie-Break Rules"); no rule given |
+| ML-2 | Rank numbering for ties: competition (1, 2, 2, 4) or dense (1, 2, 2, 3) | — |
+| ML-3 | Qualification criterion per exam type (marks, percentage or top-N; inclusive or exclusive) | S-18 ("Qualified / Not Qualified") |
+| ML-4 | Cut-off method (entered or computed; per category) | S-18 ("Cut-off Management") |
+| ML-5 | Category-wise merit: categories, any reservation percentages, PwD, and whether reserved candidates also appear in the general list | S-18 ("Category Wise Merit") |
+| ML-6 | Merit-list approval and publication: who approves, maker-checker, link to result publication, withdrawal | S-18 ("Result Publish"); A-04 covers results only |
+| ML-7 | Re-evaluation and objections: who, deadlines, effect on a published list | S-18 ("Re-evaluation / Objection") |
+| ML-8 | Whether Institutes may build merit lists for their own exams | Project audit F-4 |
+| ML-9 | Negative marking for online exams. Currently forbidden by R-10. | R-10 |
 
 ## P. Product direction and design (2026-11-03)
 

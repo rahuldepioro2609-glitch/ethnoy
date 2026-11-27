@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { expectedOrigin, type Surface } from './surface.js';
 import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
+import { AUDIT_INSERT_SQL } from './audit.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 
@@ -133,6 +134,8 @@ function installSyntheticDatabase(options: {
     created_at: fixedDecisionAt,
   };
   const history: Array<Record<string, unknown>> = [];
+  // A-11 audit rows written in the decision transaction (rolled back with it).
+  const audits: Array<{ action: string; organizationId: unknown; metadata: Record<string, unknown> }> = [];
   const capabilities = [{
     institution_id: institution.id,
     revoked_at: null as Date | null,
@@ -168,6 +171,7 @@ function installSyntheticDatabase(options: {
     let releaseLock: (() => void) | undefined;
     let previousStatus: string | undefined;
     let historyLengthBefore = 0;
+    let auditsLengthBefore = 0;
     let capabilitiesBefore: typeof capabilities = [];
     let cyclesBefore: typeof cycles = [];
 
@@ -178,6 +182,7 @@ function installSyntheticDatabase(options: {
           if (locked) {
             if (previousStatus !== undefined) institution.account_status = previousStatus;
             history.splice(historyLengthBefore);
+            audits.splice(auditsLengthBefore);
             capabilities.splice(0, capabilities.length, ...capabilitiesBefore.map((entry) => ({ ...entry })));
             cycles.splice(0, cycles.length, ...cyclesBefore.map((entry) => ({ ...entry })));
             releaseLock?.();
@@ -199,6 +204,7 @@ function installSyntheticDatabase(options: {
           locked = true;
           previousStatus = institution.account_status;
           historyLengthBefore = history.length;
+          auditsLengthBefore = audits.length;
           capabilitiesBefore = capabilities.map((entry) => ({ ...entry }));
           cyclesBefore = cycles.map((entry) => ({ ...entry }));
           return {
@@ -223,6 +229,10 @@ function installSyntheticDatabase(options: {
             decision_reason: values[5],
             decision_at: fixedDecisionAt,
           });
+          return { rows: [] };
+        }
+        if (text === AUDIT_INSERT_SQL) {
+          audits.push({ action: String(values[1]), organizationId: values[7], metadata: JSON.parse(String(values[10])) });
           return { rows: [] };
         }
         if (text.includes('to_regclass')) {
@@ -260,6 +270,7 @@ function installSyntheticDatabase(options: {
   return {
     institution,
     history,
+    audits,
     capabilities,
     cycles,
     get connectionCount() { return connectionCount; },
@@ -290,6 +301,10 @@ test('official approval and rejection record the complete decision history trans
           decision_at: fixedDecisionAt,
         }]);
         assert.equal(database.institution.account_status, decision);
+        assert.deepEqual(database.audits, [{
+          action: 'institution.status_changed', organizationId: 'synthetic-institute',
+          metadata: { previous_status: 'pending', new_status: decision, reason_text: reason },
+        }], 'one A-11 audit row, in the same transaction');
         assert.ok(database.capabilities[0].revoked_at instanceof Date);
         assert.equal(database.cycles[0].status, 'closed');
         assert.ok(database.cycles[0].closed_at instanceof Date);
@@ -332,6 +347,7 @@ test('capability revocation failure rolls back the institution decision and audi
     );
     assert.equal(database.institution.account_status, 'pending');
     assert.equal(database.history.length, 0);
+    assert.equal(database.audits.length, 0, 'the A-11 audit row rolls back with the decision');
     assert.equal(database.capabilities[0].revoked_at, null);
     assert.equal(database.cycles[0].status, 'open');
   } finally {

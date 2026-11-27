@@ -50,6 +50,10 @@ export const MIGRATION_FILES = [
   'organizationStaffMigration.sql',
   // AUTH_MOBILE_VERIFICATION=off: allows the 'email_otp' Student session method (needs file 5).
   'studentEmailOtpMigration.sql',
+  // A-11/A-12/A-13: append-only platform audit trail (written by server/audit.ts).
+  'auditEventsMigration.sql',
+  // Merit List Engine foundation: append-only draft merit-list versions (documentation/MERIT_LIST_GAP_ANALYSIS.md).
+  'meritListMigration.sql',
   'databaseGrantsMigration.sql',
 ] as const;
 

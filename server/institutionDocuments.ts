@@ -7,6 +7,7 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import rateLimit from 'express-rate-limit';
 import { type AuthenticatedRequest, requireAuth, requireRoles, requireSuperAdmin } from './auth.js';
 import { pool } from './db.js';
+import { auditActor, recordAuditEvent } from './audit.js';
 import { INSTITUTION_DOCUMENT_CATEGORIES, type InstitutionDocumentCategory } from '../src/utils/institutionDocuments.js';
 
 export const SUPPORTED_DOCUMENT_MEDIA_TYPES = [
@@ -706,15 +707,37 @@ export function createInstitutionDocumentsRouter(
       response.status(404).json({ error: 'Institution document version not found.' });
       return;
     }
-    const { rows } = await database.query(
-      `INSERT INTO institution_document_review_history
-       (id, version_id, institution_id, reviewer_user_id, decision_code, reviewer_remarks)
-       SELECT $1, v.id, v.institution_id, $3, $4, $5
-       FROM institution_document_versions v WHERE v.id = $2
-       RETURNING id, version_id, decision_code, reviewer_remarks, reviewed_at`,
-      [randomUUID(), request.params.versionId, reviewer.id,
-        decisionCode ?? null, remarks],
-    );
+    // A-11: the review and its audit event commit together. Remarks stay in the review history only.
+    const client = await database.connect();
+    let rows: Record<string, unknown>[];
+    try {
+      await client.query('BEGIN');
+      ({ rows } = await client.query(
+        `INSERT INTO institution_document_review_history
+         (id, version_id, institution_id, reviewer_user_id, decision_code, reviewer_remarks)
+         SELECT $1, v.id, v.institution_id, $3, $4, $5
+         FROM institution_document_versions v WHERE v.id = $2
+         RETURNING id, version_id, decision_code, reviewer_remarks, reviewed_at, institution_id`,
+        [randomUUID(), request.params.versionId, reviewer.id,
+          decisionCode ?? null, remarks],
+      ));
+      if (rows[0]) {
+        await recordAuditEvent(client, {
+          action: 'document.review_recorded', actor: auditActor(request), organizationId: String(rows[0].institution_id),
+          resourceId: String(rows[0].version_id), metadata: typeof decisionCode === 'string' ? { decision_code: decisionCode } : {},
+        });
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+    if (rows[0]) {
+      const { institution_id: _institutionId, ...review } = rows[0];
+      rows = [review];
+    }
     if (!rows[0]) {
       response.status(404).json({ error: 'Institution document version not found.' });
       return;
