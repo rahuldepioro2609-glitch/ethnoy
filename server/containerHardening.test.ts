@@ -2,7 +2,8 @@
 // Dockerfile, docker-compose.yml, .dockerignore and .gitignore. No Docker command is run.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -136,5 +137,38 @@ test('.gitignore: synthetic credential paths are ignored, application and migrat
   for (const path of ['server/databaseCredentials.ts', 'server/databaseGrantsMigration.sql', 'server/migrate.ts', 'server/schema.sql',
     'docker-compose.yml', 'Dockerfile', '.env.example', 'public/assets/eltnoy-logo.png', 'src/main.tsx']) {
     assert.ok(!ignored(path), `${path} must not be ignored`);
+  }
+});
+
+test('Dockerfile: every src/ file the API imports at runtime is copied into the runtime image', () => {
+  // The runtime stage copies server/ and only the named src/ files. A server import of a src/
+  // file that is not copied builds and passes every test from the checkout, then crashes the
+  // container at start with ERR_MODULE_NOT_FOUND (2026-11-28: src/utils/workspaceQuestions.ts).
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const copied = new Set(
+    [...runtime.matchAll(/^COPY --from=build \/app\/(src\/\S+) \.\/(\S+)$/gm)].map((match) => {
+      assert.equal(match[1], match[2], `runtime COPY keeps the path: ${match[0]}`);
+      return match[1];
+    }),
+  );
+  const importsOf = (file: string) =>
+    [...readFileSync(`${root}${file}`, 'utf8').matchAll(/^(?:import|export)\s(?!type\s)[^;]*?from\s+['"](\.{1,2}\/[^'"]+)['"]/gm)]
+      .map((match) => match[1]);
+  const resolve = (from: string, specifier: string) =>
+    path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier)).replace(/\.js$/, '.ts');
+  const serverFiles = readdirSync(`${root}server`)
+    .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
+    .map((name) => `server/${name}`);
+  const needed = new Set<string>();
+  const queue = serverFiles.flatMap((file) => importsOf(file).map((spec) => resolve(file, spec)).filter((target) => target.startsWith('src/')));
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (needed.has(file)) continue;
+    needed.add(file);
+    queue.push(...importsOf(file).map((spec) => resolve(file, spec)));
+  }
+  assert.ok(needed.size > 0, 'the API imports shared src/ files');
+  for (const file of needed) {
+    assert.ok(copied.has(file), `${file} is imported by the API at runtime but not copied into the runtime image`);
   }
 });

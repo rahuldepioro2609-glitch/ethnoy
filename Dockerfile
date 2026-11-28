@@ -35,6 +35,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/src/utils/examSchedule.ts ./src/utils/examSchedule.ts
 COPY --from=build /app/src/utils/institutionDocuments.ts ./src/utils/institutionDocuments.ts
+COPY --from=build /app/src/utils/workspaceExams.ts ./src/utils/workspaceExams.ts
+COPY --from=build /app/src/utils/workspaceQuestions.ts ./src/utils/workspaceQuestions.ts
 
 USER 10001:10001
 EXPOSE 4000
