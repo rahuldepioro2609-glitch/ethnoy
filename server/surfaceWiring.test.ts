@@ -76,11 +76,13 @@ test('wiring: every route, router, static and SPA fallback layer comes after rou
   const handlers = STACK.stack
     .map((layer, position) => ({ layer, position }))
     .filter(({ layer }) => layer.route || layer.name === 'router' || layer.name === 'serveStatic' || layer.name === 'bound dispatch');
-  // 63 top-level routes (+ the SPA fallback when dist/ exists) and 9 mounted routers: the 2
+  // 63 top-level routes (+ the SPA fallback when dist/ exists) and 13 mounted routers: the 2
   // institution-document routers, since SM-1 2 Platform Staff and 3 Organization Staff routers, since
-  // AUTH-1 the verification router, and since SM-2 the institutional-verification admin router.
+  // AUTH-1 the verification router, since SM-2 the institutional-verification admin router, since
+  // A-12 the Super Admin audit-log viewer router and the merit-list router, and the Institute
+  // Workspace router and its D-02 Super Admin review router.
   assert.ok(handlers.filter(({ layer }) => layer.route && layer.route.path !== '*').length >= 63, 'top-level routes found');
-  assert.equal(handlers.filter(({ layer }) => layer.name === 'router').length, 9, 'all mounted routers found');
+  assert.equal(handlers.filter(({ layer }) => layer.name === 'router').length, 13, 'all mounted routers found');
   for (const { layer, position } of handlers) {
     assert.ok(position > policy, `${layer.route?.path ?? layer.name} registered before the gate`);
   }

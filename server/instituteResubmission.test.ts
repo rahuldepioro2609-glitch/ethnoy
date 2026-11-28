@@ -6,6 +6,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { expectedOrigin, type Surface } from './surface.js';
 import { RecordingEmailProvider, RecordingSmsProvider, testServices, VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
 import { configureVerificationServices, DISABLED_SERVICES } from './verificationProviders.js';
+import { AUDIT_INSERT_SQL } from './audit.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:5432/test';
 
@@ -174,6 +175,7 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
     created_at: fixedSubmissionAt,
   };
   const resubmissions: Array<Record<string, unknown>> = [];
+  const audits: Array<{ action: string; actorUserId: unknown; organizationId: unknown }> = [];
   const cycles: Array<Record<string, unknown>> = [];
   const capabilities: Array<Record<string, unknown>> = [];
   const priorDecisionHistory = [{
@@ -246,6 +248,7 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
       let previousStatus: string | undefined;
       let institutionSnapshot: typeof institution | undefined;
       let resubmissionCountBefore = 0;
+      let auditCountBefore = 0;
       let locked = false;
 
       return {
@@ -256,6 +259,7 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
               if (institutionSnapshot) Object.assign(institution, institutionSnapshot);
               institution.account_status = previousStatus ?? institution.account_status;
               resubmissions.splice(resubmissionCountBefore);
+              audits.splice(auditCountBefore);
               releaseLock?.();
               locked = false;
             }
@@ -276,6 +280,7 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
             previousStatus = institution.account_status;
             institutionSnapshot = { ...institution };
             resubmissionCountBefore = resubmissions.length;
+            auditCountBefore = audits.length;
             return { rows: values[0] === institution.id
               ? [{ id: institution.id, account_status: institution.account_status }]
               : [] };
@@ -309,6 +314,10 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
               new_status: 'pending',
               submitted_at: fixedSubmissionAt,
             });
+            return { rows: [] };
+          }
+          if (text === AUDIT_INSERT_SQL) {
+            audits.push({ action: String(values[1]), actorUserId: values[5], organizationId: values[7] });
             return { rows: [] };
           }
           if (text.includes('UPDATE institution_submission_cycles')) {
@@ -361,6 +370,7 @@ function installSyntheticDatabase(options: { status?: string; rejectSubmissionIn
     ready,
     institution,
     resubmissions,
+    audits,
     cycles,
     capabilities,
     priorDecisionHistory,
@@ -421,6 +431,7 @@ test('rejected institution corrects details and resubmits using the existing acc
     assert.equal(typeof database.capabilities[0].token, 'undefined');
     assert.equal(database.priorDecisionHistory[0].new_status, 'rejected');
     assert.equal(database.connectionCount, 1);
+    assert.deepEqual(database.audits, [{ action: 'institution.resubmitted', actorUserId: 'synthetic-institute', organizationId: 'synthetic-institute' }]);
   } finally {
     database.restore();
   }

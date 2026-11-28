@@ -18,6 +18,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { expectedOrigin, type Surface } from './surface.js';
 import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
+import { AUDIT_INSERT_SQL } from './audit.js';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:1/p03_route_tests';
 
@@ -80,8 +81,19 @@ const mutablePool = pool as unknown as {
 const originalQuery = mutablePool.query;
 const originalConnect = mutablePool.connect;
 
+/** An A-11 audit row as written by server/audit.ts (AUDIT_INSERT_SQL parameter order). */
+interface AuditRow {
+  category: string; action: string; outcome: string; reasonCode: string | null; actorType: string; actorUserId: string | null;
+  actorRole: string; organizationId: string | null; resourceType: string; resourceId: string | null;
+  metadata: Record<string, unknown>; via: 'pool' | 'client';
+}
+
 function installDatabase(handler?: ScriptedHandler) {
   const calls: RecordedCall[] = [];
+  // Audit inserts are kept out of `calls` (so business-statement assertions stay exact) and only
+  // count once their transaction commits; a ROLLBACK discards them, as PostgreSQL would.
+  const pendingAudits = new Map<number, AuditRow[]>();
+  const audits: AuditRow[] = [];
   let connects = 0;
   let releases = 0;
   const run = async (text: string, values: unknown[], via: 'pool' | 'client', clientId: number): Promise<QueryResult> => {
@@ -89,6 +101,20 @@ function installDatabase(handler?: ScriptedHandler) {
       const session = SESSIONS.get(String(values[0]));
       return { rows: session ? [session] : [], rowCount: session ? 1 : 0 };
     }
+    if (text === AUDIT_INSERT_SQL) {
+      const [category, action, outcome, reasonCode, actorType, actorUserId, actorRole, organizationId, resourceType, resourceId, metadata] = values;
+      const row: AuditRow = {
+        category: String(category), action: String(action), outcome: String(outcome), reasonCode: reasonCode === null ? null : String(reasonCode), actorType: String(actorType),
+        actorUserId: actorUserId === null ? null : String(actorUserId), actorRole: String(actorRole),
+        organizationId: organizationId === null ? null : String(organizationId), resourceType: String(resourceType),
+        resourceId: resourceId === null ? null : String(resourceId), metadata: JSON.parse(String(metadata)), via,
+      };
+      if (via === 'pool') audits.push(row);
+      else pendingAudits.set(clientId, [...(pendingAudits.get(clientId) ?? []), row]);
+      return { rows: [], rowCount: 1 };
+    }
+    if (via === 'client' && text === 'COMMIT') audits.push(...(pendingAudits.get(clientId) ?? []));
+    if (via === 'client' && (text === 'COMMIT' || text === 'ROLLBACK')) pendingAudits.delete(clientId);
     calls.push({ text, values, via });
     const result = await handler?.(text, values, via, clientId);
     return result ?? { rows: [], rowCount: 0 };
@@ -106,6 +132,8 @@ function installDatabase(handler?: ScriptedHandler) {
   };
   return {
     calls,
+    /** Committed A-11 audit rows, in write order. */
+    audits: () => audits,
     connects: () => connects,
     releases: () => releases,
     statements: () => calls.map((call) => call.text),
@@ -325,6 +353,17 @@ const MATRIX: MatrixEntry[] = [
   { method: 'post', path: '/api/admin/institute-verifications/:institutionId/restore', policy: 'super_admin', ref: 'AUTH-1 / SM-2 institute suspension (Super Admin only)', params: { institutionId: OPAQUE_ID } },
   // Super Admin only
   { method: 'get', path: '/api/admin/data-export', policy: 'super_admin', ref: 'A-07 (preserved)' },
+  { method: 'get', path: '/api/admin/audit-events', policy: 'super_admin', ref: 'A-12 (audit reads: Super Admin only)' },
+  { method: 'get', path: '/api/admin/merit-lists/:examCode/preview', policy: 'super_admin', ref: 'Merit foundation (A-04 marks are Super Admin only)', params: { examCode: 'DEMO-1' } },
+  { method: 'get', path: '/api/admin/merit-lists/:examCode/snapshots', policy: 'super_admin', ref: 'Merit foundation (A-04)', params: { examCode: 'DEMO-1' } },
+  { method: 'post', path: '/api/admin/merit-lists/:examCode/snapshots', policy: 'super_admin', ref: 'Merit foundation (A-04)', params: { examCode: 'DEMO-1' } },
+  { method: 'get', path: '/api/admin/merit-lists/snapshots/:snapshotId', policy: 'super_admin', ref: 'Merit foundation (A-04)', params: { snapshotId: OPAQUE_ID } },
+  { method: 'get', path: '/api/admin/merit-lists/snapshots/:snapshotId/export', policy: 'super_admin', ref: 'Merit foundation (A-07 exports)', params: { snapshotId: OPAQUE_ID } },
+  { method: 'get', path: '/api/admin/institute-workspace/review-queue', policy: 'super_admin', ref: 'D-02 (Super Admin reviews Institute drafts)' },
+  { method: 'post', path: '/api/admin/institute-workspace/exams/:id/decision', policy: 'super_admin', ref: 'D-02 (exam approval and publication)', params: { id: OPAQUE_ID } },
+  { method: 'get', path: '/api/admin/institute-workspace/exams/:id/results', policy: 'super_admin', ref: 'D-02 / A-04', params: { id: OPAQUE_ID } },
+  { method: 'post', path: '/api/admin/institute-workspace/exams/:id/results/decision', policy: 'super_admin', ref: 'D-02 / A-04 (result publication)', params: { id: OPAQUE_ID } },
+  { method: 'post', path: '/api/admin/institute-workspace/exams/:id/admit-cards/decision', policy: 'super_admin', ref: 'D-02 / A-06 (admit-card release)', params: { id: OPAQUE_ID } },
   { method: 'post', path: '/api/admin/admit-cards/import', policy: 'super_admin', ref: 'A-06 / P3-D1 (interim)' },
   { method: 'put', path: '/api/admin/applications/:id/admit-card', policy: 'super_admin', ref: 'A-06 / P3-D1 (interim)', params: { id: 'app-1' } },
   { method: 'patch', path: '/api/admin/answer-keys/:examCode', policy: 'super_admin', ref: 'A-05', params: { examCode: 'EXAM1' } },
@@ -505,7 +544,11 @@ test('A-17: every Official creates notices as unpublished drafts', async () => {
 
     assert.equal(outcome.status, 201);
     assert.equal((outcome.body.notice as Record<string, unknown>).is_published, false);
-    assert.equal(db.calls.length, 1);
+    // One business statement, in one transaction with its A-11 audit row.
+    assert.deepEqual(db.statements().map((text) => (text.includes('INSERT INTO portal_notices') ? 'INSERT notice' : text)), ['BEGIN', 'INSERT notice', 'COMMIT']);
+    assert.deepEqual(db.audits().map(({ action, actorUserId, actorRole, metadata }) => ({ action, actorUserId, actorRole, published: metadata.is_published })), [
+      { action: 'notice.created', actorUserId: ACCOUNTS[account].row.id, actorRole: account === 'official' ? 'official' : 'super_admin', published: false },
+    ]);
   }
 });
 
@@ -528,7 +571,10 @@ test('A-17: Super Admin can publish a notice', async () => {
 
   assert.equal(outcome.status, 200);
   assert.equal((outcome.body.notice as Record<string, unknown>).is_published, true);
-  assert.equal(db.calls.length, 1);
+  assert.deepEqual(db.statements().map((text) => (text.includes('UPDATE portal_notices') ? 'UPDATE notice' : text)), ['BEGIN', 'UPDATE notice', 'COMMIT']);
+  assert.deepEqual(db.audits().map(({ action, resourceId, actorRole, metadata }) => ({ action, resourceId, actorRole, metadata })), [
+    { action: 'notice.publication_changed', resourceId: 'synthetic-notice', actorRole: 'super_admin', metadata: { is_published: true } },
+  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -655,9 +701,12 @@ test('withdrawals: the approver cannot pay their own approval; no debit is writt
     assert.equal(sim.debits().length, 0);
     assert.equal(sim.state().status, 'approved');
     assert.ok(!db.statements().includes(WITHDRAWAL_SQL.insertDebit));
-    assert.ok(db.statements().includes('ROLLBACK'));
-    assert.ok(!db.statements().includes('COMMIT'));
-    assert.equal(db.releases(), 1);
+    // The payment transaction rolls back; the refusal is then recorded on its own transaction (AL-4.8).
+    assert.deepEqual(db.statements().filter((text) => ['BEGIN', 'COMMIT', 'ROLLBACK'].includes(text)), ['BEGIN', 'ROLLBACK', 'BEGIN', 'COMMIT']);
+    assert.equal(db.releases(), 2);
+    assert.deepEqual(db.audits().map(({ action, outcome, metadata }) => ({ action, outcome, metadata })), [
+      { action: 'withdrawal.payment_refused', outcome: 'denied', metadata: { amount_paise: 150000, approver_user_id: ACCOUNTS.superA.row.id } },
+    ]);
   });
 });
 
@@ -1176,4 +1225,83 @@ test('answer-key routes reject unauthenticated and non-candidate requests before
       assert.equal(db.calls.length, 0, `${path}: no business query before the guards pass`);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// A-11: audit rows carry the institution from the session, never from the request
+// ---------------------------------------------------------------------------
+
+test('A-11: an Institute action is audited under its own session id, whatever the request body claims', async () => {
+  const { outcome, db } = await withDatabase((text) => {
+    if (text.includes('AS balance_paise')) return { rows: [{ balance_paise: '500000', reserved_paise: '0' }], rowCount: 1 };
+    if (text.includes('INSERT INTO institute_withdrawals')) {
+      return { rows: [{ id: 'synthetic-withdrawal', amount_paise: '1000', status: 'pending', transfer_reference: null }], rowCount: 1 };
+    }
+    return undefined;
+  }, async (db) => ({
+    outcome: await invoke('post', '/api/center/withdrawals', {
+      account: 'center',
+      body: { amountPaise: 1000, instituteId: 'another-institute', organizationId: 'another-institute' },
+    }),
+    db,
+  }));
+  assert.equal(outcome.status, 201);
+  assert.deepEqual(db.audits().map(({ action, actorUserId, actorRole, organizationId, resourceId, metadata }) => ({ action, actorUserId, actorRole, organizationId, resourceId, metadata })), [{
+    action: 'withdrawal.requested', actorUserId: 'synthetic-center', actorRole: 'center',
+    organizationId: 'synthetic-center', resourceId: 'synthetic-withdrawal', metadata: { amount_paise: 1000 },
+  }]);
+});
+
+test('A-11 / AL-4.8: a refused payment writes no success row, only one denied row with its reason', async () => {
+  const { db } = await withDatabase((text) => {
+    if (text === WITHDRAWAL_SQL.lock) {
+      return { rows: [{ id: 'withdrawal-1', institute_id: 'synthetic-institute', amount_paise: '150000', status: 'approved', reviewed_by: ACCOUNTS.superA.row.id }], rowCount: 1 };
+    }
+    return undefined;
+  }, async (db) => ({
+    outcome: await invoke('patch', '/api/admin/institute-withdrawals/:id', { account: 'superA', params: { id: 'withdrawal-1' }, body: { status: 'paid', transferReference: 'UTR-SYNTHETIC-9' } }),
+    db,
+  }));
+  assert.deepEqual(db.audits().map(({ action, outcome, reasonCode }) => ({ action, outcome, reasonCode })), [{ action: 'withdrawal.payment_refused', outcome: 'denied', reasonCode: 'maker_checker' }]);
+});
+
+// ---------------------------------------------------------------------------
+// Proposal §7 failure events: recorded after the rollback; the answer is unchanged
+// ---------------------------------------------------------------------------
+
+for (const [label, duplicate, reason] of [
+  ['a duplicate payment reference', true, 'duplicate_payment_reference'],
+  ['an institute that is not eligible', false, 'institute_not_eligible'],
+] as const) {
+  test(`credits: ${label} answers 409 and records wallet.credit_failed (${reason})`, async () => {
+    const { outcome, db } = await withDatabase((text) => {
+      if (text.includes('INSERT INTO institute_wallet_entries')) return { rows: [], rowCount: 0 };
+      if (text.includes('AS exists')) return { rows: [{ exists: duplicate }], rowCount: 1 };
+      return undefined;
+    }, async (db) => ({
+      outcome: await invoke('post', '/api/admin/institutes/:id/credits', {
+        account: 'superA', params: { id: 'synthetic-institute' }, body: { amountPaise: 5000, description: 'Synthetic credit', paymentReference: 'UTR-DUP-1' },
+      }),
+      db,
+    }));
+    assert.equal(outcome.status, 409);
+    assert.equal(outcome.body.error, 'Institute was not found or this payment reference has already been credited.', 'the answer does not reveal which');
+    assert.deepEqual(db.audits().map(({ action, outcome: result, reasonCode, organizationId, metadata }) => ({ action, result, reasonCode, organizationId, metadata })), [{
+      action: 'wallet.credit_failed', result: 'failed', reasonCode: reason, organizationId: 'synthetic-institute',
+      metadata: { amount_paise: 5000, payment_reference: 'UTR-DUP-1' },
+    }]);
+  });
+}
+
+test('withdrawals: a duplicate transfer reference answers 409, writes no debit and records withdrawal.payment_failed', async () => {
+  const sim = withdrawalSimulator(withdrawal(), { existingTransferReferences: ['UTR-TAKEN-1'] });
+  await withDatabase(sim.handler, async (db) => {
+    const outcome = await pay('superB', 'UTR-TAKEN-1');
+    assert.equal(outcome.status, 409);
+    assert.equal(sim.debits().length, 0);
+    assert.equal(sim.state().status, 'approved');
+    assert.deepEqual(db.audits().map(({ action, outcome: result, reasonCode, resourceId }) => ({ action, result, reasonCode, resourceId })), [
+      { action: 'withdrawal.payment_failed', result: 'failed', reasonCode: 'duplicate_transfer_reference', resourceId: 'withdrawal-1' },
+    ]);
+  });
 });

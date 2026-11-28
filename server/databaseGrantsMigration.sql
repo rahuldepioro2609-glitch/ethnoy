@@ -145,6 +145,11 @@ BEGIN
     ('account_contacts',                     'SELECT, INSERT',         ARRAY['destination', 'verified_at']),
     ('auth_session_verifications',           'SELECT, INSERT',         NULL),
     ('auth_verification_events',             'SELECT, INSERT',         NULL),
+    -- A-11 platform audit trail (auditEventsMigration.sql): append-only, so INSERT and SELECT only.
+    -- SELECT serves the Super Admin viewer; A-12 (Super Admin only) is enforced by the API routes.
+    ('audit_events',                         'SELECT, INSERT',         NULL),
+    -- Merit List Engine foundation (meritListMigration.sql): append-only draft versions.
+    ('merit_list_snapshots',                 'SELECT, INSERT',         NULL),
     ('google_identities',                    'SELECT, INSERT',         NULL),
     ('institute_verifications',              'SELECT, INSERT',         ARRAY['mobile_destination', 'mobile_verified_at', 'email_destination', 'email_verified_at', 'updated_at', 'institutional_status', 'institutional_decided_at', 'institutional_decided_by', 'suspended_at', 'suspended_by']),
     ('oauth_states',                         'SELECT, INSERT',         ARRAY['consumed_at']),
@@ -180,6 +185,35 @@ BEGIN
     ('org_staff_member_roles',             'SELECT, INSERT',         ARRAY['revoked_at', 'revoked_by']),
     ('org_staff_sessions',                 'SELECT, INSERT',         ARRAY['revoked_at']),
     ('org_staff_audit_events',             'SELECT, INSERT',         NULL),
+    -- Institute Workspace (Sections 01-17).
+    ('institute_branches',                 'SELECT, INSERT',         ARRAY['status', 'coordinator_name', 'coordinator_email', 'updated_at']),
+    -- D-02 (2026-11-27): approval and publication columns (approved_by, release_status, released_at,
+    -- final_approved_by, published_at) are assigned only by the Super Admin review routes
+    -- (server/instituteWorkspaceAdmin.ts); Institute routes never write them.
+    ('institute_exams',                    'SELECT, INSERT',         ARRAY['lifecycle_status', 'status_reason', 'approved_by', 'updated_at']),
+    ('institute_exam_broadcasts',          'SELECT, INSERT',         NULL),
+    ('institute_app_forms',                'SELECT, INSERT',         ARRAY['status', 'updated_at']),
+    ('institute_candidate_applications',   'SELECT, INSERT',         ARRAY['review_status', 'review_reason', 'reviewer_id', 'updated_at']),
+    ('institute_verification_logs',        'SELECT, INSERT',         NULL),
+    ('institute_fee_transactions',         'SELECT, INSERT',         NULL),
+    ('institute_fee_refunds',              'SELECT, INSERT',         ARRAY['status', 'approved_by', 'updated_at']),
+    ('institute_admit_card_templates',     'SELECT, INSERT',         NULL),
+    ('institute_hall_tickets',             'SELECT, INSERT',         ARRAY['release_status', 'released_at']),
+    ('institute_questions',                'SELECT, INSERT',         ARRAY['moderation_status', 'reviewed_by', 'updated_at']),
+    ('institute_paper_blueprints',         'SELECT, INSERT',         ARRAY['is_locked', 'locked_by', 'locked_at']),
+    ('institute_cbt_sessions',             'SELECT, INSERT',         NULL),
+    ('institute_cbt_incidents',            'SELECT, INSERT',         ARRAY['review_status', 'review_reason', 'reviewed_by']),
+    ('institute_exam_results',             'SELECT, INSERT',         ARRAY['candidate_name', 'raw_score', 'max_score', 'percentage', 'qualifying_status', 'evaluation_status', 'version', 'final_approved_by', 'published_at', 'updated_at']),
+    ('institute_result_appeals',           'SELECT, INSERT',         NULL),
+    ('institute_saved_reports',            'SELECT, INSERT',         NULL),
+    ('institute_attendance_logs',          'SELECT, INSERT',         NULL),
+    ('institute_interviews',               'SELECT, INSERT',         ARRAY['status', 'scheduled_date', 'start_time', 'end_time', 'panel_name', 'panelist_names', 'updated_at']),  -- cancel and reschedule
+    ('institute_interview_scorecards',     'SELECT, INSERT',         NULL),
+    ('institute_interview_changes',        'SELECT, INSERT',         NULL),  -- append-only history
+    ('institute_training_courses',         'SELECT, INSERT',         NULL),
+    ('institute_training_sessions',        'SELECT, INSERT',         NULL),
+    ('institute_training_enrollments',     'SELECT, INSERT',         NULL),  -- certificates refused until verifiable (R-13)
+    ('institute_support_tickets',          'SELECT, INSERT',         NULL),  -- tickets refused until an ELTNOY queue reads them
     -- Legacy Render tables absent from current source. Preserve them without granting the app access.
     ('answer_key_objection_windows',        '',                       NULL),
     ('answer_key_objections',               '',                       NULL),

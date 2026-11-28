@@ -153,9 +153,11 @@ From `server/migrate.ts`, `MIGRATION_FILES`:
 | 9 | `platformStaffMigration.sql` | SM-1: separate Platform Staff identities, sessions and append-only audit |
 | 10 | `organizationStaffMigration.sql` | SM-1: tenant-scoped Organization Staff identities, invitations, roles, sessions and append-only audit |
 | 11 | `studentEmailOtpMigration.sql` | `AUTH_MOBILE_VERIFICATION=off` (owner decision, 2026-11-23): allows the `email_otp` and `password` Student session methods in `auth_session_verifications_method_check`. Constraint only, no data. Needs file 5 |
-| 12 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` least-privilege grants for every table above, **always last** |
+| 12 | `auditEventsMigration.sql` | A-11/A-12/A-13: the append-only platform audit trail `audit_events` (§3.13). Triggers reject every `UPDATE`, `DELETE` and `TRUNCATE`, and the database sets a SHA-256 row hash. No foreign keys and no sequences. Table and indexes only, no data |
+| 13 | `meritListMigration.sql` | Merit List Engine foundation: `merit_list_snapshots`, append-only draft merit-list versions (§3.14). Draft-only; unique per exam and version and per exam and input fingerprint. Table only, no data |
+| 14 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` least-privilege grants for every table above, **always last** |
 
-`npm run db:migrate` runs all twelve on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run. The Platform Staff and Organization Staff routes use the two Staff migrations in this list; those schemas still require runtime PostgreSQL rehearsal before release.
+`npm run db:migrate` runs all fourteen on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run. The Platform Staff and Organization Staff routes use the two Staff migrations in this list; those schemas still require runtime PostgreSQL rehearsal before release.
 
 **Prerequisites for any run:** the role bootstrap (§2) on that database; the run as `eltnoy_migrator` (sessions act as `eltnoy_owner`) through the deployment wrapper; for an existing database, a verified backup and restore first (§6) and the application stopped (§3.4), because creating the AUTH-1 foreign keys briefly blocks writes to `users` and `auth_sessions`.
 
@@ -182,7 +184,7 @@ Evidence [TESTED-ISOLATED] (the five pre-AUTH-1 files):
 | State | `db:migrate` run as | Result | Evidence |
 |---|---|---|---|
 | **Before the cutover: no `eltnoy_*` roles on the cluster** | The superuser (previous Compose; the UD-1-B Compose cannot connect before the bootstrap) | Files 1–10 apply. **File 4 makes `institution_documents` immutable immediately.** File 11 (grants) is a no-op with a NOTICE. | [TESTED-ISOLATED] OD-P2-W, OD-P3 (files 1–4 and the grants file); files 5–10 [PROPOSED] |
-| Roles exist, database bootstrapped | `eltnoy_migrator` (sessions act as `eltnoy_owner`) | All twelve apply, including the AUTH-1, Student email and Student registration migrations; grants are set exactly | [TESTED-ISOLATED] P1A (as the migrator login), OD-P2, for the five pre-AUTH-1 files; files 5–10 not yet rehearsed [PROPOSED] |
+| Roles exist, database bootstrapped | `eltnoy_migrator` (sessions act as `eltnoy_owner`) | All fourteen apply, including the AUTH-1, Student email and Student registration migrations; grants are set exactly | [TESTED-ISOLATED] P1A (as the migrator login), OD-P2, for the five pre-AUTH-1 files; files 5–10 not yet rehearsed [PROPOSED] |
 | Roles exist, **this database not bootstrapped** (for example a new database on the same cluster) | The superuser | **Refused**: "objects not owned by eltnoy_owner", whole run rolled back | [TESTED-ISOLATED] OD-P4 |
 | Any state | `eltnoy_app` | Refused ("permission denied for schema public"), rolled back | [TESTED-ISOLATED] P1A, OD-P2-W |
 
@@ -839,7 +841,7 @@ COMMIT;
 - [ ] UD-2 resolved: break-glass custodians named.
 - [ ] UD-3 resolved: secret store, backup encryption, location, schedule and retention.
 - [ ] Encrypted backup taken and **restored into a separate database**; §6.3 validation passed.
-- [ ] Full cutover rehearsed on that **restored copy of production**: bootstrap, `\password`, twelve-file `db:migrate` (including the AUTH-1 and Student registration/email migrations) as `eltnoy_migrator`, API as `eltnoy_app`, functional smoke tests for every role, zero `42501` errors.
+- [ ] Full cutover rehearsed on that **restored copy of production**: bootstrap, `\password`, fourteen-file `db:migrate` (including the AUTH-1 and Student registration/email migrations) as `eltnoy_migrator`, API as `eltnoy_app`, functional smoke tests for every role, zero `42501` errors.
 - [ ] Impact on any other database in the cluster assessed (cluster-wide effects, §0).
 - [ ] Stakeholders aware that `institution_documents` rows become immutable after migration file 4 (UD-11).
 - [ ] At least two active Super Admins identified (P3-D3), with the promotion approvals on file.
@@ -1087,3 +1089,53 @@ Ownership and mode checks do not make a file immutable: the operator and root ca
   - **Base-image provenance.** The Dockerfile `FROM node:22-bookworm-slim` is fetched during builds and is not digest-pinned (I-5 / separate change).
   - **Digest pinning.** The locally built API image is identified by tag, not digest, so a rebuild under the same tag replaces what `api_admin` runs. `NGINX_IMAGE` and `POSTGRES_IMAGE` digests must still be operator-verified (deployment blocker, §14.7).
   - **Runtime behaviour.** The actual Compose behaviour of `pull_policy: build` / `never` under `up`, `run`, `pull` and `--pull` is a P1-F item, to be checked against a disposable project. No pull or build command was run.
+
+### 3.13 Platform audit trail (A-11, A-12, A-13)
+
+- **What is recorded:** administrative, institute, publishing, payment and approval actions, each **in the same transaction as the action** (an audit failure rolls the action back). This covers:
+  - notices;
+  - imports and publishing of admit cards, answer keys, online exams and results;
+  - exams;
+  - Official institute approval and rejection, and institute resubmission;
+  - institute forms and profile changes, with their Official decisions;
+  - institutional verification, rejection, suspension and restoration;
+  - wallet credits and withdrawals (requested, approved, rejected, paid);
+  - application status changes and ownership links;
+  - admit-card assignment and check-ins;
+  - helpdesk status changes;
+  - the Super Admin data export;
+  - document review notes;
+  - sign-out.
+
+  Sign-in, MFA and registration events stay in their existing append-only table `auth_verification_events`. Staff changes stay in `platform_staff_audit_events` and `org_staff_audit_events`.
+- **What is never recorded:** passwords, one-time codes, tokens, cookies, session hashes, exam answers, scores, scorecards, document contents, email addresses, mobile numbers, dates of birth, helpdesk text and review remarks. Every action has an allow-list of metadata keys (`server/audit.ts`), and a database CHECK refuses secret-looking keys as a second layer. Source IP and user agent are **not** collected (open decision OD-3).
+- **Who can read it:** Super Admins only, on the Admin host: `GET /api/admin/audit-events` and the "Audit log" tab (A-12).
+  - Searches need a date range of at most 93 days (default 7) and return at most 100 rows per page.
+  - Each search is itself recorded (`audit.searched`), with the filter names and the result count, before any row is sent.
+  - Institutions have **no** read access (C-03 needs a client decision).
+- **Integrity:** append-only by trigger for every role, the owner included. `eltnoy_app` has `SELECT, INSERT` only. A per-row SHA-256 hash makes edits by a database operator detectable when the hash is recomputed. It is tamper-evident, not immutable. The sealing chain and off-host checkpoints (OD-6) are not built.
+- **Refused and failed money actions:** each is recorded on its own transaction after the rollback, never changing the answer:
+  - a withdrawal payment refused by maker-checker, a missing approver or too few Super Admins: `withdrawal.payment_refused` (outcome `denied`, with a reason code);
+  - a credit that wrote nothing: `wallet.credit_failed` (`duplicate_payment_reference` or `institute_not_eligible`);
+  - a payment rolled back on a duplicate transfer reference: `withdrawal.payment_failed`.
+
+   If that record cannot be written, the API logs `audit.write_failed`, which carries no amounts or IDs. Watch for that event.
+- **Retention:** no automatic deletion (A-13). The retention period is a pending client decision (OD-1).
+- **Deploy:** needs `migrate`. Take a backup first, as for every migration.
+
+### 3.14 Merit List Engine foundation (draft merit lists)
+
+- **What it does:** for one exam, orders the result records (draft and published) by the total marks in their imported scorecards. It also:
+  - checks each scorecard's arithmetic: identity, section sums, maxima, and imported ranks against the marks order;
+  - shows equal totals as an **unresolved tie group** with a shared position range;
+  - saves the reviewed order as an append-only **draft version**.
+- **What it does not do (pending client decisions ML-1 to ML-9, `documentation/MERIT_LIST_GAP_ANALYSIS.md`):** it does not break ties, number tied ranks, apply cut-offs or qualification criteria, or rank by category. It does not approve, publish or finalise a merit list, and it never changes results or marks. Online-exam scoring is unchanged (R-10).
+- **Who:** Super Admin only, Admin host only (Admin dashboard → "Merit lists"). Ordinary Officials, Institutes and Students have no route.
+- **Safety:**
+  - Saving runs in one transaction under a per-exam advisory lock.
+  - The save is refused if the results changed since the preview (fingerprint), or if the same inputs are already saved.
+  - Each save and each CSV export writes an A-11 audit event in the same transaction; an export is recorded before the file is sent.
+  - Versions are never changed or deleted.
+  - Stored entries hold application and roll numbers, totals, positions, tie groups and issue codes, never names, dates of birth or categories.
+- **Limit:** exams with more than 20,000 result records are refused (413) until a batch job exists.
+- **Deploy:** needs `migrate`. Take a backup first.
