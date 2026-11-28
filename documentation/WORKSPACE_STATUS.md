@@ -1,13 +1,13 @@
 # Institute Workspace: development status
 
-**Updated:** 2026-11-28 (final verification and integration readiness, prompt 14/14).
+**Updated:** 2026-11-28 (integration step 4: `eltnoy-integration` merges `audit-log` and `institute-workspace`).
 
-- **Location:** the main checkout (`vps-deploy` at `1dd6145`), as **uncommitted** changes.
+- **Location:** committed on `institute-workspace` (`b7efeda`, on `1dd6145`) and integrated with `audit-log` on the local branch `eltnoy-integration` (merge commits `72e0db9` and `7b14e50`). Nothing is pushed, merged into `vps-deploy`/`main`, or deployed.
 - **D-01 Option B:** the Workspace stays held until it is complete and isolated on its own branch. Nothing has been committed, branched, merged, pushed or deployed.
 
 ## Final status (2026-11-28)
 
-**Institute-side Workspace: implementation complete for the approved scope, not yet integrated or deployed.** Every Workspace section has a screen backed by real API routes, or an explicit "not available" notice (CBT centre). Nothing is committed: under D-01 the work stays held until it is moved to its own branch and integrated with `audit-log`.
+**Institute-side Workspace: implementation complete for the approved scope; integrated with `audit-log` on `eltnoy-integration`; not deployed.** Every Workspace section has a screen backed by real API routes, or an explicit "not available" notice (CBT centre). Nothing is committed: under D-01 the work stays held until it is moved to its own branch and integrated with `audit-log`.
 
 | Module | State |
 |---|---|
@@ -15,7 +15,7 @@
 | Super Admin review (D-02): exam approve, request changes, publish; results approve (reviewed versions), publish, return; admit cards release, revoke | **Done** |
 | CBT centre | **Honest notice only**: no online delivery exists |
 | Candidate-visible effect of publication, online CBT, training progress and certificates, payments, report export, paper tender, notifications | **Deferred or awaiting a decision** (below) |
-| Audit events for Workspace actions (A-11) | **Not done**: integration task once `audit-log` is merged |
+| Audit events for Workspace actions (A-11) | **Not done**: proposal below, awaiting approval |
 
 **Routes reachable through the API that have no screen** (each is either honest, refused, or waiting for a decision; none is used by a screen):
 - `GET /api/center/overview`, `GET/POST/PATCH /api/center/branches`: real records;
@@ -146,7 +146,7 @@ The audit trail (A-11) is on branch `audit-log`. It is **not** copied here. At i
 | `server/databaseGrants.test.ts` | Same line: 54 (audit-log) vs 77 (here) | **79** = 52 base + 2 audit-log + 25 Workspace |
 | `server/databaseGrants.postgres.integration.test.ts` | Same manifest assertion line; both add constants and tests | `[...base, AUDIT_TABLE, MERIT_TABLE, ...WORKSPACE_TABLES]`, message "… + audit_events + merit_list_snapshots + 25 Institute Workspace tables"; keep all tests from both sides. Audit-log's version also fixes the stale `AUTH C1.8` MFA test that fails here. |
 | `server/databaseGrantsMigration.sql` | Rows added in different places | Keep both blocks; no table appears twice |
-| `server/surfaceWiring.test.ts` | Same line: 11 vs 11 | **13** mounted routers (base 9 + 2 + 2) |
+| `server/surfaceWiring.test.ts` | Same line: 11 vs 11 (git merged it silently as 11) | **13** mounted routers (base 9 + 2 + 2) — confirmed on `eltnoy-integration` |
 | `server/surface.ts`, `server/index.ts` | Adjacent additions (imports, mounts, policy entries); `audit-log` also wraps existing routes in audited transactions | Keep both; no Workspace route is in `audit-log` |
 | `server/adminAuthorization.test.ts` | Both add admin route entries; `audit-log` adds audit capture to the test harness | Keep both |
 | `src/components/RolePortal.tsx`, `src/utils/adminPermissions.ts`, `.test.ts` | Same tab type, list and hidden-tab assertion | Union: `audit-log`, `merit-lists`, `institute-reviews`; hidden list keeps all |
@@ -155,13 +155,46 @@ The audit trail (A-11) is on branch `audit-log`. It is **not** copied here. At i
 **Safe integration sequence (not performed; needs approval at each step):**
 1. ~~Decide on `InstituteZonePage.tsx` and keep `.claude/` out of every commit.~~ **Done 2026-11-28:** the page was moved to the backup folder; `.claude/launch.json` is ignored locally.
 2. ~~Move the 6 untracked `documentation/*.md` copies out of the checkout.~~ **Done 2026-11-28:** re-checked first: 4 were identical to `audit-log`; the working copy of `CLIENT_DECISIONS.md` only had the superseded undecided F-4 line, and `PROJECT_AUDIT.md` only a trailing blank line. Each was copied to `../eltnoy-workspace-backup-2026-11-27/documentation-untracked-2026-11-28/`, verified byte for byte, then removed. No untracked path in the checkout now exists on `audit-log`, and the untracked files are exactly the 19 Workspace files plus this document. `npm test` afterwards: 1,252 tests, 0 failed.
-3. Create a branch `institute-workspace` from `1dd6145`, stage the Workspace files explicitly (never `git add .`), commit, and run the full checks on that branch.
-4. Create a separate integration branch from `vps-deploy`; merge `audit-log`, then `institute-workspace`; resolve the conflicts as in the table.
-5. Run `npm test`, `tsc`, build and the disposable PostgreSQL runner on the integration branch (expect 79 tables, 13 routers; `AUTH C1.8` should pass with `audit-log`'s fix).
+3. ~~Create `institute-workspace`~~ **Done:** `b7efeda`, 33 files, explicit staging, full checks passed.
+4. ~~Integration branch~~ **Done:** `eltnoy-integration` (`72e0db9`, `7b14e50`); see "Integration result".
+5. ~~Full checks on the integration branch~~ **Done:** 79 tables, 13 routers, `AUTH C1.8` passes, PostgreSQL 39/39.
 6. Wire the Workspace audit events (section above) into `audit-log`'s `runAuditedTransaction`/`recordAuditEvent`, with tests, before any deployment.
 7. Only then: review, PR into `vps-deploy`, and a deployment per the runbook.
 
 **Risk: moderate.** The conflicts are mechanical and well understood (counts, ordering, lists), and there are no schema, route or tab name clashes. The real work is step 6: the Workspace writes no audit events today.
+
+### Integration result (step 4, 2026-11-28)
+
+| Step | Commit | Result |
+|---|---|---|
+| Branch `eltnoy-integration` from `vps-deploy` | `1dd6145` | |
+| Merge `audit-log` (`--no-ff`) | `72e0db9` | No conflicts (tree identical to `audit-log`). `npm test` 1,240 / 0 failed; PostgreSQL 36/36 (the `AUTH C1.8` MFA test passes with `audit-log`'s fix); tsc, build pass. |
+| Merge `institute-workspace` (`--no-ff`) | `7b14e50` | 11 files conflicted, all expected; resolved by combining both sides (table above). One **policy conflict** surfaced: `audit-log`'s A-12 test refused the Workspace route `GET /api/center/staff/audit` (Institute read of staff audit events). With approval it was **removed** (no screen or test used it; C-03 open). |
+| Final checks | | `npm test` 1,303 tests: 1,257 passed, **0 failed**, 46 skipped; focused Workspace + Super Admin + audit + merit tests 90/90; PostgreSQL **39/39** (79-table catalog, MFA, `audit_events`, `merit_list_snapshots`, 3 Workspace tests); tsc, build, `git diff --check` pass. |
+
+Verified on the merged branch: the audit, merit-list, Workspace and Workspace review routers are mounted (13 router layers in total); migrations end `studentEmailOtp → auditEvents → meritList → instituteWorkspace → databaseGrants`; 79 tables in the manifest, the unit test and the PostgreSQL catalog; `institute_interview_changes` and `audit_events` are SELECT, INSERT only; every `AUTH C1.8` test is byte-identical to `audit-log`'s; `documentation/` now holds `audit-log`'s versions (including the D-01/D-02 record) plus this file.
+
+### Proposed Workspace audit events (proposal only; not implemented)
+
+Built on `audit-log`'s writer (`server/audit.ts`): each action gets an `AUDIT_CONTRACTS` entry (category, resource type, retention, allow-listed metadata); each write moves into `runAuditedTransaction(pool, …)` and calls `recordAuditEvent(client, …)` with `auditActor(request)`, `organizationId` = the Institute and `resourceId` = the record id, so the event commits or rolls back with the action. Metadata carries codes, counts, statuses and reasons only: never names, contact details, named scores or question content (the writer also refuses keys such as `answer`, `email`, `mobile`).
+
+| Action | Category / retention | Metadata (allow-list) |
+|---|---|---|
+| `workspace_exam.created`, `workspace_exam.status_changed` | exam / governance | `exam_code`, `previous_status`, `new_status`, `reason_text` |
+| `workspace_exam.approved`, `.changes_requested`, `.published` (Super Admin) | publishing / governance | `exam_code`, `reason_text` |
+| `workspace_results.written`, `.marked_ready` | exam / governance | `exam_code`, `roll_number`, `version`, `corrected` |
+| `workspace_results.approved`, `.published`, `.returned` (Super Admin) | publishing / governance | `exam_code`, `row_count` |
+| `workspace_admit_cards.generated` | exam / governance | `exam_code`, `row_count` |
+| `workspace_admit_cards.released`, `.revoked` (Super Admin) | publishing / governance | `exam_code`, `row_count` |
+| `workspace_application.created`, `.reviewed` | application, review / governance | `application_number`, `previous_status`, `new_status`, `reason_text` |
+| `workspace_question.created`, `.moderated`; `workspace_paper.locked` | exam / governance | `previous_status`, `new_status`, `question_count`, `total_marks` |
+| `workspace_attendance.marked` | exam / governance | `exam_code`, `status`, `reason_text` |
+| `workspace_interview.scheduled`, `.cancelled`, `.rescheduled`; `workspace_scorecard.submitted` | review / governance | `scheduled_date`, `previous_date`, `new_date`, `reason_text` |
+| `workspace_training.course_created`, `.learner_enrolled`, `.session_scheduled` | operations / operational | `module_count`, `session_date` |
+| `workspace_cbt_incident.reviewed`; `workspace_refund.withdrawn` | review / governance; finance / financial | `review_status`, `reason_text` |
+| Refusals worth recording (D-02 403s, `EXAM_NOT_APPROVED`, `RESULTS_CHANGED`) | as above, outcome `denied` | `reason_code`, via `recordRefusedAuditEvent` |
+
+Questions for approval: every Institute action or only D-02 and decision points; the retention class for training records; whether refusals are recorded. Each event gets tests that it is written in the same transaction and that a failed audit insert rolls the action back.
 
 ## Tests (2026-11-28, main checkout, dummy `DATABASE_URL`)
 
