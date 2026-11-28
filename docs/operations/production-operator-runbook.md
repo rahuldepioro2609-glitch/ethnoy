@@ -155,9 +155,10 @@ From `server/migrate.ts`, `MIGRATION_FILES`:
 | 11 | `studentEmailOtpMigration.sql` | `AUTH_MOBILE_VERIFICATION=off` (owner decision, 2026-11-23): allows the `email_otp` and `password` Student session methods in `auth_session_verifications_method_check`. Constraint only, no data. Needs file 5 |
 | 12 | `auditEventsMigration.sql` | A-11/A-12/A-13: the append-only platform audit trail `audit_events` (§3.13). Triggers reject every `UPDATE`, `DELETE` and `TRUNCATE`, and the database sets a SHA-256 row hash. No foreign keys and no sequences. Table and indexes only, no data |
 | 13 | `meritListMigration.sql` | Merit List Engine foundation: `merit_list_snapshots`, append-only draft merit-list versions (§3.14). Draft-only; unique per exam and version and per exam and input fingerprint. Table only, no data |
-| 14 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` least-privilege grants for every table above, **always last** |
+| 14 | `instituteWorkspaceMigration.sql` | Institute Workspace (D-01, D-02): 25 new `institute_*` tables: branches, exams and broadcasts, application forms, applications and verification logs, fees and refunds, admit-card templates and hall tickets, questions and paper blueprints, CBT sessions and incidents, results and appeals, attendance, interviews (scorecards, changes), training (courses, sessions, enrolments), saved reports and support tickets. All are keyed to the Institute, with unique indexes against duplicate entries. Tables and indexes only, no data. First applied in production on 2026-11-28 |
+| 15 | `databaseGrantsMigration.sql` | OD-P2/P4: `eltnoy_app` least-privilege grants for every table above, **always last** |
 
-`npm run db:migrate` runs all fourteen on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run. The Platform Staff and Organization Staff routes use the two Staff migrations in this list; those schemas still require runtime PostgreSQL rehearsal before release.
+`npm run db:migrate` runs all fifteen on **one connection, in one transaction**, under advisory lock `7342519086`. If any file fails, every change from the run is rolled back. There is no migration ledger; every file is safe to re-run. The Platform Staff and Organization Staff routes use the two Staff migrations in this list; those schemas still require runtime PostgreSQL rehearsal before release.
 
 **Prerequisites for any run:** the role bootstrap (§2) on that database; the run as `eltnoy_migrator` (sessions act as `eltnoy_owner`) through the deployment wrapper; for an existing database, a verified backup and restore first (§6) and the application stopped (§3.4), because creating the AUTH-1 foreign keys briefly blocks writes to `users` and `auth_sessions`.
 
@@ -184,7 +185,7 @@ Evidence [TESTED-ISOLATED] (the five pre-AUTH-1 files):
 | State | `db:migrate` run as | Result | Evidence |
 |---|---|---|---|
 | **Before the cutover: no `eltnoy_*` roles on the cluster** | The superuser (previous Compose; the UD-1-B Compose cannot connect before the bootstrap) | Files 1–10 apply. **File 4 makes `institution_documents` immutable immediately.** File 11 (grants) is a no-op with a NOTICE. | [TESTED-ISOLATED] OD-P2-W, OD-P3 (files 1–4 and the grants file); files 5–10 [PROPOSED] |
-| Roles exist, database bootstrapped | `eltnoy_migrator` (sessions act as `eltnoy_owner`) | All fourteen apply, including the AUTH-1, Student email and Student registration migrations; grants are set exactly | [TESTED-ISOLATED] P1A (as the migrator login), OD-P2, for the five pre-AUTH-1 files; files 5–10 not yet rehearsed [PROPOSED] |
+| Roles exist, database bootstrapped | `eltnoy_migrator` (sessions act as `eltnoy_owner`) | All fifteen apply, including the AUTH-1, Student email and Student registration migrations; grants are set exactly | [TESTED-ISOLATED] P1A (as the migrator login), OD-P2, for the five pre-AUTH-1 files; files 5–10 not yet rehearsed [PROPOSED] |
 | Roles exist, **this database not bootstrapped** (for example a new database on the same cluster) | The superuser | **Refused**: "objects not owned by eltnoy_owner", whole run rolled back | [TESTED-ISOLATED] OD-P4 |
 | Any state | `eltnoy_app` | Refused ("permission denied for schema public"), rolled back | [TESTED-ISOLATED] P1A, OD-P2-W |
 
@@ -841,7 +842,7 @@ COMMIT;
 - [ ] UD-2 resolved: break-glass custodians named.
 - [ ] UD-3 resolved: secret store, backup encryption, location, schedule and retention.
 - [ ] Encrypted backup taken and **restored into a separate database**; §6.3 validation passed.
-- [ ] Full cutover rehearsed on that **restored copy of production**: bootstrap, `\password`, fourteen-file `db:migrate` (including the AUTH-1 and Student registration/email migrations) as `eltnoy_migrator`, API as `eltnoy_app`, functional smoke tests for every role, zero `42501` errors.
+- [ ] Full cutover rehearsed on that **restored copy of production**: bootstrap, `\password`, fifteen-file `db:migrate` (including the AUTH-1 and Student registration/email migrations) as `eltnoy_migrator`, API as `eltnoy_app`, functional smoke tests for every role, zero `42501` errors.
 - [ ] Impact on any other database in the cluster assessed (cluster-wide effects, §0).
 - [ ] Stakeholders aware that `institution_documents` rows become immutable after migration file 4 (UD-11).
 - [ ] At least two active Super Admins identified (P3-D3), with the promotion approvals on file.
