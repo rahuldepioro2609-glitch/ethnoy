@@ -33,6 +33,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Application files stay owned by root: neither runtime identity can modify them.
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
+COPY --from=build /app/src/utils/examConfig.ts ./src/utils/examConfig.ts
 COPY --from=build /app/src/utils/examSchedule.ts ./src/utils/examSchedule.ts
 COPY --from=build /app/src/utils/institutionDocuments.ts ./src/utils/institutionDocuments.ts
 COPY --from=build /app/src/utils/workspaceExams.ts ./src/utils/workspaceExams.ts

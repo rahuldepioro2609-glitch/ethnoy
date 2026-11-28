@@ -20,7 +20,7 @@
     "test:official-auth-foundation": "node --import tsx --test server/officialAuthFoundation.test.ts",
     "test:official-auth-foundation:postgres": "node --import tsx --test server/officialAuthFoundation.postgres.integration.test.ts",
     "start:verifier": "tsx server/verifier/main.ts",
-    "test": "node --import tsx --test src/data/*.test.ts src/utils/*.test.ts src/components/ui/*.test.tsx server/*.test.ts",
+    "test": "node --import tsx --test src/data/*.test.ts src/utils/*.test.ts src/components/ui/*.test.tsx src/components/workspace/examWizard/*.test.tsx server/*.test.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

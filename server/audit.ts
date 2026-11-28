@@ -89,7 +89,10 @@ export const AUDIT_CONTRACTS = Object.freeze({
   // Institute Workspace (D-02; documentation/WORKSPACE_STATUS.md). organizationId is the Institute. Codes,
   // counts, statuses and reasons only: never candidate names, contact details, scores with names, or
   // question content.
-  'workspace_exam.created': { category: 'exam', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', new_status: 'string' }, required: ['exam_code'] },
+  'workspace_exam.created': { category: 'exam', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', new_status: 'string', exam_type: 'string' }, required: ['exam_code'] },
+  // Edits to a draft or returned examination: the names of the changed columns ('exam_config' for the wizard
+  // configuration), never their values.
+  'workspace_exam.updated': { category: 'exam', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', changed_fields: 'string[]', previous_status: 'string', new_status: 'string', exam_type: 'string' }, required: ['changed_fields', 'new_status'] },
   'workspace_exam.status_changed': { category: 'exam', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', previous_status: 'string', new_status: 'string', reason_text: 'string' }, required: ['new_status'] },
   'workspace_exam.approved': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', previous_status: 'string', new_status: 'string' }, required: ['exam_code'] },
   'workspace_exam.changes_requested': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', previous_status: 'string', new_status: 'string', reason_text: 'string' }, required: ['exam_code'] },

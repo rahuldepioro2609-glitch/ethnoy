@@ -85,9 +85,25 @@
 | Online CBT delivery for Institute exams | Needs a product decision: whether candidates take Institute exams online on ELTNOY, how they reach them (the same open question as candidate access to results and admit cards), and which proctoring data may be recorded. Until then the CBT tables stay empty. |
 | Paper tender (S-14/S-15) | Sending papers to ELTNOY for review and upload. Blocked by F-5 (who at ELTNOY reviews papers and who may read them before the exam). The screen says it isn't available yet. |
 | Question Bank: single account | The same Institute account writes and approves its questions; there is no separate reviewer role (staff roles wait for Q117–Q119). A rejection has no stored reason because the table has no column for one. |
-| Custom application form builder (`/api/center/app-forms`) | No screen. It waits for decision D-11 (form-builder data model), and no candidate page uses these forms yet. |
+| Custom application form builder (`/api/center/app-forms`) | No screen. The Create Examination wizard (below) now configures each examination's application form in `institute_exams.exam_config_json` instead; these older routes are unchanged. No candidate page uses either yet. |
 | `InstituteZonePage.tsx` | **Resolved 2026-11-28 (integration step 1):** moved out of the repository. It was unused, never committed, made no API calls and promised unapproved fees (₹150–₹250 per slot, ₹180/candidate, wallet credit in 72 hours). A byte-identical copy is in `../eltnoy-workspace-backup-2026-11-27/`. |
 | `.claude/launch.json` | Created on 2026-11-27 by another process. Not part of the Workspace. Now ignored locally (`.git/info/exclude`, never committed) next to `.claude/worktrees/`, so it can't be staged by mistake. |
+
+## Create Examination wizard (2026-11-29, on `eltnoy-integration`, uncommitted)
+
+Built on the Product Owner's brief and reference designs (2026-11-28): the Institute configures a notice and the application form applicants will fill in later. It replaces the single "New examination" form in Exam Management.
+
+| Part | What it does |
+|---|---|
+| Steps | 1 Exam details (9 types, 6 modes, dates, description, instructions) · 2 Form configuration (sections: add, hide, reorder; fields: show, required, label, placeholder, help text, options, length or value limits; custom fields; Aadhaar off by default, alternative IDs; live applicant preview) · 3 Eligibility & academic (age with date and category relaxation, gender, category, nationality, domicile, states, districts, percentage, CGPA, subjects, qualification, PwD, ex-serviceman, experience, medical fitness, employment type; qualifications Class 10 to professional with the details asked; hospital posts with qualifications and council registration) · 4 Application setup (late deadline, correction window, admit card and result dates; category-wise fee and late fee, correction fee, exemption notes; documents with formats and size; declaration) · 5 Preview & submit (summary with Edit links, examination notice preview, applicant form preview) |
+| Presets | One per type, including Hospital Recruitment (Staff Nurse and Medical Officer posts, registration certificate) and B.Sc Nursing-style entrance (Class 12 PCB, minimum 45%). A preset only pre-fills; everything is editable and validated like any other configuration. |
+| Storage | One additive column, `institute_exams.exam_config_json` (jsonb, default `{}`, CHECK: a JSON object of at most 65,536 bytes). Settings only, never applicant data. Versioned (`version: 1`), validated by one strict shared schema (`src/utils/examConfig.ts`) on the server: unknown properties are refused at every level. The exact type and mode stay in the configuration; the existing `category` and `mode` columns get the nearest existing value (database lists unchanged), and `fee_paise` the General / UR fee. |
+| Routes | `POST /api/center/exams` accepts `config` (strict body). New `GET /api/center/exams/:id` and `PATCH /api/center/exams/:id` (Institute only, tenant-scoped): edit only while `draft` or `needs_changes`; compare-and-set on status and the loaded version (`EXAM_CHANGED`); the exam code is fixed; submitting moves to `pending_approval` only, through the D-02 transition rule. New `GET /api/admin/institute-workspace/exams/:id` (Super Admin, read-only) shows the full notice and form in the review panel. |
+| Audit | `workspace_exam.created` gains `exam_type`; new `workspace_exam.updated` records the names of changed columns (`exam_config` for the configuration), previous and new status, never values. |
+| Grants | `institute_exams` UPDATE columns now also cover the edited columns; `exam_code`, `institute_id`, `created_by`, `created_at` stay unchangeable by the API (PostgreSQL test). |
+| Drafts | Saved to the server (first save creates the draft). Unsaved changes are also kept in the browser tab (sessionStorage) and offered for restore. |
+| Not available (stated on screen) | No applicant can apply, upload or pay through ELTNOY for Institute examinations yet (candidate access, document storage and payments F-6 are open decisions). Fees are configuration only; no payment method is offered. Eligibility is shown to applicants, never decided automatically. |
+| Policy note | The brief asks for custom fields and sections, which goes beyond the earlier "D-11 pending" note on form limits and validation formats. The Product Owner should record this in the policy register; no register entry was written here. |
 
 ## Audit integration points (P1-8)
 
@@ -235,5 +251,5 @@ Built on `audit-log`'s writer (`server/audit.ts`): each action gets an `AUDIT_CO
 
 1. Integration as above, including the Workspace audit events (A-11).
 2. Security review of the integrated branch (route policy, grants, Institute host only for `institution(...)` routes, Admin host only for the Super Admin routes).
-3. Production backup, then `migrate` per the runbook: `instituteWorkspaceMigration.sql` (25 tables, all new, so the unique indexes cannot meet existing duplicates) and the grants migration.
+3. Production backup, then `migrate` per the runbook: `instituteWorkspaceMigration.sql` (25 tables, all new, so the unique indexes cannot meet existing duplicates) and the grants migration. **Done 2026-11-28.** The Create Examination wizard needs `migrate` again: it adds the `exam_config_json` column (additive, default `{}`) and new column grants.
 4. Deploy, then smoke-check one synthetic Institute flow and one Super Admin review on the live hosts.

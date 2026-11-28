@@ -84,7 +84,7 @@ const exam = (status: string): Handler => (text) => (text === WORKSPACE_ADMIN_SQ
 
 test('every route is Super Admin only and under /admin/institute-workspace', () => {
   const routes = (createInstituteWorkspaceAdminRouter().stack as Array<{ route?: { path: string; stack: Array<{ handle: unknown }> } }>).filter((item) => item.route);
-  assert.equal(routes.length, 5);
+  assert.equal(routes.length, 6);
   for (const { route } of routes) {
     assert.match(route!.path, /^\/admin\/institute-workspace\//);
     assert.equal(route!.stack[0].handle, requireAuth);
@@ -279,4 +279,21 @@ test('A-11: every Super Admin decision writes its audit event in the same transa
     return text === WORKSPACE_ADMIN_SQL.decideExam ? { rows: [{ id: EXAM }] } : undefined;
   }, () => call('post', '/admin/institute-workspace/exams/:id/decision', { params: { id: EXAM }, body: { decision: 'publish' }, handler: exam('approved') })), /synthetic audit failure/);
   assert.deepEqual(statements, ['BEGIN', 'DECIDE', 'AUDIT', 'ROLLBACK'], 'no publication without its audit event');
+});
+
+test('exam review detail: the Super Admin sees the examination and its configuration, read-only', async () => {
+  const config = { version: 1, basics: { examType: 'entrance' } };
+  const found = await call('get', '/admin/institute-workspace/exams/:id', {
+    params: { id: EXAM }, handler: (text) => (text === WORKSPACE_ADMIN_SQL.examDetail ? { rows: [{ id: EXAM, exam_code: 'NUR-2027', exam_config_json: config }] } : undefined),
+  });
+  assert.equal(found.status, 200);
+  assert.deepEqual((found.body?.exam as { exam_config_json: unknown }).exam_config_json, config);
+  assert.ok(found.queries.every((q) => /^SELECT/.test(q.text.trim())), 'no write');
+  assert.match(WORKSPACE_ADMIN_SQL.examDetail, /exam_config_json/);
+  assert.doesNotMatch(WORKSPACE_ADMIN_SQL.examDetail, /candidate|applicant|email|mobile/i, 'no applicant data is read');
+  const missing = await call('get', '/admin/institute-workspace/exams/:id', { params: { id: EXAM } });
+  assert.equal(missing.status, 404);
+  const invalid = await call('get', '/admin/institute-workspace/exams/:id', { params: { id: 'nope' } });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.queries.length, 0);
 });

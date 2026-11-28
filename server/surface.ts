@@ -584,6 +584,8 @@ export const ROUTE_POLICY: readonly RoutePolicyEntry[] = Object.freeze([
   institution('PATCH', '/api/center/branches/:id'),
   institution('GET', '/api/center/exams'),
   institution('POST', '/api/center/exams'),
+  institution('GET', '/api/center/exams/:id'),
+  institution('PATCH', '/api/center/exams/:id'),
   institution('POST', '/api/center/exams/:id/transition'),
   institution('GET', '/api/center/exams/:id/broadcasts'),
   institution('POST', '/api/center/exams/:id/broadcasts'),
@@ -678,6 +680,7 @@ export const ROUTE_POLICY: readonly RoutePolicyEntry[] = Object.freeze([
   superAdmin('GET', '/api/admin/merit-lists/snapshots/:snapshotId/export'),
   // D-02 (2026-11-27): Super Admin review and publication of Institute Workspace drafts.
   superAdmin('GET', '/api/admin/institute-workspace/review-queue'),
+  superAdmin('GET', '/api/admin/institute-workspace/exams/:id'),
   superAdmin('POST', '/api/admin/institute-workspace/exams/:id/decision'),
   superAdmin('GET', '/api/admin/institute-workspace/exams/:id/results'),
   superAdmin('POST', '/api/admin/institute-workspace/exams/:id/results/decision'),

@@ -7,6 +7,8 @@ import { auditActor, recordAuditEvent, recordRefusedAuditEvent, type AuditAction
 import { providerStatus } from './verificationProviders.js';
 import { questionShapeError } from '../src/utils/workspaceQuestions.js';
 import { isValidTimeZone } from '../src/utils/examSchedule.js';
+import { isInstituteEditableExam } from '../src/utils/workspaceExams.js';
+import { examCategoryFor, examConfigDateIssues, examDbModeFor, examConfigSchema, examConfigTooLarge } from '../src/utils/examConfig.js';
 
 function asyncRoute(handler: (request: Request, response: Response) => Promise<void>): express.RequestHandler {
   return (request, response, next: NextFunction) => {
@@ -27,6 +29,15 @@ function sendValidationError(response: Response, error: z.ZodError): void {
 
 function isUndefinedTableError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code: string }).code === '42P01';
+}
+
+/** JSON text with object keys sorted at every level, for comparing a request with a jsonb column. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -566,11 +577,14 @@ export function createInstituteWorkspaceRouter(): Router {
     response.json({ exams: listRes.rows, summary: countsRes.rows[0] });
   }));
 
-  const createExamSchema = z.object({
-    examCode: z.string().trim().min(2).max(40).regex(/^[A-Za-z0-9_-]+$/),
+  // Fields an Institute prepares for an examination. With a wizard configuration (`config`, validated by the
+  // shared strict schema in src/utils/examConfig.ts), the existing category, mode and fee columns are derived
+  // from it: the nearest existing category for the examination type, the nearest existing mode for the exact
+  // mode, and the General / UR fee. The exact type and mode stay in the configuration. Unknown fields are refused.
+  const examDetailsShape = {
     title: z.string().trim().min(3).max(160),
-    category: z.enum(['Scholarship', 'Recruitment', 'Admission', 'Mock', 'Certification', 'Other']),
-    mode: z.enum(['Online CBT', 'Offline', 'Hybrid']),
+    category: z.enum(['Scholarship', 'Recruitment', 'Admission', 'Mock', 'Certification', 'Other']).optional(),
+    mode: z.enum(['Online CBT', 'Offline', 'Hybrid']).optional(),
     eligibility: z.string().trim().min(2).max(300),
     academicYear: z.string().trim().min(4).max(20).default('2026-27'),
     appOpenDate: z.string().date(),
@@ -579,14 +593,47 @@ export function createInstituteWorkspaceRouter(): Router {
     // Admit cards copy the exam time, so it must be a real 24-hour time; the time zone must be a real IANA zone.
     examTime: z.string().regex(CLOCK_TIME).default('10:00'),
     durationMinutes: z.coerce.number().int().min(10).max(600),
+    feePaise: z.coerce.number().int().min(0).max(100_000_000).default(0),
+    instructions: z.string().trim().max(4000).default(''),
+    config: examConfigSchema.optional(),
+    submitForApproval: z.boolean().optional(),
+  };
+  const createExamSchema = z.object({
+    ...examDetailsShape,
+    examCode: z.string().trim().min(2).max(40).regex(/^[A-Za-z0-9_-]+$/),
     timezone: z.string().trim().min(2).max(64).refine(isValidTimeZone, 'Choose a valid time zone, for example Asia/Kolkata.').default('Asia/Kolkata'),
     sessionsInfo: z.string().trim().max(300).default(''),
-    feePaise: z.coerce.number().int().min(0).max(100_000_000).default(0),
     refundPolicy: z.string().trim().max(500).default(''),
-    instructions: z.string().trim().max(4000).default(''),
     approvalMode: z.enum(['single', 'dual']).default('single'),
-    submitForApproval: z.boolean().optional(),
-  });
+  }).strict();
+  // The exam code is fixed once created (admit cards, results and the audit trail refer to it).
+  const updateExamSchema = z.object({
+    ...examDetailsShape,
+    expectedUpdatedAt: z.string().datetime({ offset: true }),
+  }).strict();
+
+  type ExamDetails = z.infer<typeof updateExamSchema> | z.infer<typeof createExamSchema>;
+
+  /** Category, mode and fee stored in the exam columns: derived from the configuration when there is one. */
+  function examColumns(d: ExamDetails): { category: string; mode: string; feePaise: number } | null {
+    if (d.config) {
+      return { category: examCategoryFor(d.config.basics.examType), mode: examDbModeFor(d.config.basics.mode), feePaise: d.config.fees.categories.general.fee };
+    }
+    return d.category && d.mode ? { category: d.category, mode: d.mode, feePaise: d.feePaise } : null;
+  }
+
+  /** Date and size rules shared by create and edit; returns the first problem, or null. */
+  function examDetailsProblem(d: ExamDetails): string | null {
+    if (d.appCloseDate < d.appOpenDate) return 'Application closing date must be on or after the opening date.';
+    if (d.examDate < d.appCloseDate) return 'Exam date must be on or after the application closing date.';
+    if (!examColumns(d)) return 'Choose a category and a mode for the examination.';
+    if (d.config) {
+      if (examConfigTooLarge(d.config)) return 'The examination configuration is too large. Remove some text or entries.';
+      const [issue] = examConfigDateIssues(d.config, { appOpenDate: d.appOpenDate, appCloseDate: d.appCloseDate, examDate: d.examDate });
+      if (issue) return issue;
+    }
+    return null;
+  }
 
   router.post('/center/exams', ...guards, asyncRoute(async (request, response) => {
     const parsed = createExamSchema.safeParse(request.body);
@@ -595,14 +642,12 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const d = parsed.data;
-    if (d.appCloseDate < d.appOpenDate) {
-      response.status(400).json({ error: 'Application closing date must be on or after the opening date.' });
+    const problem = examDetailsProblem(d);
+    if (problem) {
+      response.status(400).json({ error: problem });
       return;
     }
-    if (d.examDate < d.appCloseDate) {
-      response.status(400).json({ error: 'Exam date must be on or after the application closing date.' });
-      return;
-    }
+    const { category, mode, feePaise } = examColumns(d)!;
     const instituteId = instituteIdOf(request);
     const initialStatus = d.submitForApproval ? 'pending_approval' : 'draft';
     try {
@@ -610,13 +655,14 @@ export function createInstituteWorkspaceRouter(): Router {
         `INSERT INTO institute_exams
          (id, institute_id, exam_code, title, category, mode, eligibility, academic_year,
           app_open_date, app_close_date, exam_date, exam_time, duration_minutes, timezone,
-          sessions_info, fee_paise, refund_policy, instructions, approval_mode, lifecycle_status, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$2)
+          sessions_info, fee_paise, refund_policy, instructions, approval_mode, lifecycle_status, created_by, exam_config_json)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$2,$21::jsonb)
          RETURNING *`,
-        [randomUUID(), instituteId, d.examCode.toUpperCase(), d.title, d.category, d.mode, d.eligibility,
+        [randomUUID(), instituteId, d.examCode.toUpperCase(), d.title, category, mode, d.eligibility,
           d.academicYear, d.appOpenDate, d.appCloseDate, d.examDate, d.examTime, d.durationMinutes,
-          d.timezone, d.sessionsInfo, d.feePaise, d.refundPolicy, d.instructions, d.approvalMode, initialStatus],
-        (row) => ({ action: 'workspace_exam.created', resourceId: String(row.id), metadata: { exam_code: String(row.exam_code), new_status: initialStatus } }),
+          d.timezone, d.sessionsInfo, feePaise, d.refundPolicy, d.instructions, d.approvalMode, initialStatus,
+          JSON.stringify(d.config ?? {})],
+        (row) => ({ action: 'workspace_exam.created', resourceId: String(row.id), metadata: { exam_code: String(row.exam_code), new_status: initialStatus, exam_type: d.config?.basics.examType } }),
       );
       response.status(201).json({ exam: rows[0] });
     } catch (error) {
@@ -626,6 +672,92 @@ export function createInstituteWorkspaceRouter(): Router {
       }
       throw error;
     }
+  }));
+
+  // One examination with plain dates (YYYY-MM-DD) and its configuration, for editing in the wizard.
+  const EXAM_FOR_EDIT_SQL = `SELECT id, exam_code, title, category, mode, eligibility, academic_year,
+         to_char(app_open_date, 'YYYY-MM-DD') AS app_open_date, to_char(app_close_date, 'YYYY-MM-DD') AS app_close_date,
+         to_char(exam_date, 'YYYY-MM-DD') AS exam_date, exam_time, duration_minutes, fee_paise::text AS fee_paise,
+         instructions, lifecycle_status, status_reason, exam_config_json,
+         to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at
+       FROM institute_exams WHERE id = $1 AND institute_id = $2`;
+
+  router.get('/center/exams/:id', ...guards, asyncRoute(async (request, response) => {
+    if (!z.string().uuid().safeParse(request.params.id).success) { sendNotFound(response, 'Examination'); return; }
+    const { rows } = await pool.query(EXAM_FOR_EDIT_SQL, [request.params.id, instituteIdOf(request)]);
+    if (!rows[0]) { sendNotFound(response, 'Examination'); return; }
+    response.json({ exam: rows[0] });
+  }));
+
+  // Edit an examination while it is still the Institute's to change: a draft, or one ELTNOY returned for
+  // changes. Saving can also submit it for review (D-02: never approval or publication). Compare-and-set on the
+  // status and on the version the Institute loaded, so a concurrent edit or Super Admin decision is never
+  // overwritten.
+  router.patch('/center/exams/:id', ...guards, asyncRoute(async (request, response) => {
+    if (!z.string().uuid().safeParse(request.params.id).success) { sendNotFound(response, 'Examination'); return; }
+    const parsed = updateExamSchema.safeParse(request.body);
+    if (!parsed.success) {
+      sendValidationError(response, parsed.error);
+      return;
+    }
+    const d = parsed.data;
+    const problem = examDetailsProblem(d);
+    if (problem) {
+      response.status(400).json({ error: problem });
+      return;
+    }
+    const instituteId = instituteIdOf(request);
+    const { rows: currentRows } = await pool.query(EXAM_FOR_EDIT_SQL, [request.params.id, instituteId]);
+    const current = currentRows[0];
+    if (!current) { sendNotFound(response, 'Examination'); return; }
+    const currentStatus = String(current.lifecycle_status);
+    if (!isInstituteEditableExam(currentStatus)) {
+      response.status(409).json({ error: 'Only a draft, or an examination ELTNOY returned for changes, can be edited.', code: 'EXAM_NOT_EDITABLE' });
+      return;
+    }
+    const { category, mode, feePaise } = examColumns(d)!;
+    const next: Record<string, unknown> = {
+      title: d.title, category, mode, eligibility: d.eligibility, academic_year: d.academicYear,
+      app_open_date: d.appOpenDate, app_close_date: d.appCloseDate, exam_date: d.examDate, exam_time: d.examTime,
+      duration_minutes: d.durationMinutes, fee_paise: String(feePaise), instructions: d.instructions,
+    };
+    const changedFields = Object.keys(next).filter((key) => String(current[key] ?? '') !== String(next[key]));
+    const nextConfig = d.config ?? (current.exam_config_json as Record<string, unknown>);
+    // jsonb returns object keys in its own order, so compare with sorted keys.
+    if (canonicalJson(nextConfig) !== canonicalJson(current.exam_config_json)) changedFields.push('exam_config');
+    const newStatus = d.submitForApproval ? 'pending_approval' : currentStatus;
+    // D-02: submitting is the only status change an edit can make, through the same rule as the transition route.
+    if (newStatus !== currentStatus && !isInstituteExamTransition(currentStatus, newStatus)) {
+      await auditPublicationRefused(request, 'exam', newStatus, String(current.id));
+      sendPublicationForbidden(response, 'examination approval and');
+      return;
+    }
+    if (changedFields.length === 0 && newStatus === currentStatus) {
+      response.json({ exam: current, unchanged: true });
+      return;
+    }
+    const rows = await auditedQuery(request,
+      `UPDATE institute_exams
+       SET title = $5, category = $6, mode = $7, eligibility = $8, academic_year = $9, app_open_date = $10,
+           app_close_date = $11, exam_date = $12, exam_time = $13, duration_minutes = $14, fee_paise = $15,
+           instructions = $16, exam_config_json = $17::jsonb, lifecycle_status = $18, updated_at = now()
+       WHERE id = $1 AND institute_id = $2 AND lifecycle_status = $3
+         AND date_trunc('milliseconds', updated_at) = date_trunc('milliseconds', $4::timestamptz)
+       RETURNING id, exam_code, lifecycle_status`,
+      [current.id, instituteId, currentStatus, d.expectedUpdatedAt, d.title, category, mode, d.eligibility, d.academicYear,
+        d.appOpenDate, d.appCloseDate, d.examDate, d.examTime, d.durationMinutes, feePaise, d.instructions,
+        JSON.stringify(nextConfig), newStatus],
+      () => ({
+        action: 'workspace_exam.updated', resourceId: String(current.id),
+        metadata: { exam_code: String(current.exam_code), changed_fields: changedFields, previous_status: currentStatus, new_status: newStatus, exam_type: d.config?.basics.examType },
+      }),
+    );
+    if (!rows[0]) {
+      response.status(409).json({ error: 'The examination changed since you opened it. Reload it and make your changes again.', code: 'EXAM_CHANGED' });
+      return;
+    }
+    const { rows: fresh } = await pool.query(EXAM_FOR_EDIT_SQL, [current.id, instituteId]);
+    response.json({ exam: fresh[0] ?? rows[0] });
   }));
 
   router.post('/center/exams/:id/transition', ...guards, asyncRoute(async (request, response) => {

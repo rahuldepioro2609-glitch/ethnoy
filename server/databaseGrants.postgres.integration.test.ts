@@ -2243,6 +2243,17 @@ test('INSTITUTE WORKSPACE: one admit card per application; attendance marks are 
       assert.equal(await one(`SELECT has_column_privilege('eltnoy_app', '${table}', '${column}', 'UPDATE')`), true, `${table}.${column} (Super Admin review routes)`);
     }
     assert.equal(await one("SELECT has_table_privilege('eltnoy_app', 'institute_exam_results', 'DELETE')"), false, 'results are never deleted by the API');
+
+    // Create Examination wizard: the additive configuration column, its CHECK and the draft-edit grants.
+    assert.equal(await one("SELECT exam_config_json = '{}'::jsonb FROM institute_exams WHERE id = 'it-ws-exam'"), true, 'existing examinations get an empty configuration');
+    assert.equal(await probe(`UPDATE institute_exams SET title = 'IT Workspace exam (edited)', category = 'Recruitment', mode = 'Hybrid', eligibility = 'Edited',
+      academic_year = '2027-28', app_open_date = '2027-01-02', app_close_date = '2027-01-11', exam_date = '2027-01-21', exam_time = '11:00', duration_minutes = 90,
+      fee_paise = 50000, instructions = 'Edited', exam_config_json = '{"version": 1}'::jsonb, updated_at = now() WHERE id = 'it-ws-exam'`), null, 'the API role edits a draft');
+    for (const column of ['exam_code', 'institute_id', 'created_by', 'created_at', 'id']) {
+      assert.match(await probe(`UPDATE institute_exams SET ${column} = ${column} WHERE id = 'it-ws-exam'`) ?? 'succeeded', /permission denied/, `${column} cannot be changed by the API`);
+    }
+    assert.match(await probe("UPDATE institute_exams SET exam_config_json = '[]'::jsonb WHERE id = 'it-ws-exam'") ?? 'succeeded', /institute_exams_config_shape_check/, 'the configuration is a JSON object');
+    assert.match(await probe(`UPDATE institute_exams SET exam_config_json = jsonb_build_object('blob', repeat('x', 70000)) WHERE id = 'it-ws-exam'`) ?? 'succeeded', /institute_exams_config_shape_check/, 'the configuration size is limited');
   } finally {
     await q('ROLLBACK');
   }

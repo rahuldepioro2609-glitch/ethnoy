@@ -360,6 +360,7 @@ const MATRIX: MatrixEntry[] = [
   { method: 'get', path: '/api/admin/merit-lists/snapshots/:snapshotId', policy: 'super_admin', ref: 'Merit foundation (A-04)', params: { snapshotId: OPAQUE_ID } },
   { method: 'get', path: '/api/admin/merit-lists/snapshots/:snapshotId/export', policy: 'super_admin', ref: 'Merit foundation (A-07 exports)', params: { snapshotId: OPAQUE_ID } },
   { method: 'get', path: '/api/admin/institute-workspace/review-queue', policy: 'super_admin', ref: 'D-02 (Super Admin reviews Institute drafts)' },
+  { method: 'get', path: '/api/admin/institute-workspace/exams/:id', policy: 'super_admin', ref: 'D-02 (Super Admin reviews the exam and its configuration)', params: { id: OPAQUE_ID } },
   { method: 'post', path: '/api/admin/institute-workspace/exams/:id/decision', policy: 'super_admin', ref: 'D-02 (exam approval and publication)', params: { id: OPAQUE_ID } },
   { method: 'get', path: '/api/admin/institute-workspace/exams/:id/results', policy: 'super_admin', ref: 'D-02 / A-04', params: { id: OPAQUE_ID } },
   { method: 'post', path: '/api/admin/institute-workspace/exams/:id/results/decision', policy: 'super_admin', ref: 'D-02 / A-04 (result publication)', params: { id: OPAQUE_ID } },

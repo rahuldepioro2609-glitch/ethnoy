@@ -81,6 +81,13 @@ export const WORKSPACE_ADMIN_SQL = Object.freeze({
      HAVING count(*) FILTER (WHERE h.release_status IN ('generated', 'released')) > 0
       ORDER BY e.exam_code LIMIT 200`,
   exam: 'SELECT id, institute_id, exam_code, lifecycle_status FROM institute_exams WHERE id = $1',
+  // Everything the Institute prepared, for review before a decision: the exam columns and its wizard
+  // configuration (settings only; no applicant data exists in it).
+  examDetail: `SELECT e.id, u.display_name AS institute_name, e.exam_code, e.title, e.category, e.mode, e.eligibility, e.academic_year,
+            to_char(e.app_open_date, 'YYYY-MM-DD') AS app_open_date, to_char(e.app_close_date, 'YYYY-MM-DD') AS app_close_date,
+            to_char(e.exam_date, 'YYYY-MM-DD') AS exam_date, e.exam_time, e.duration_minutes, e.timezone, e.fee_paise::text AS fee_paise,
+            e.instructions, e.lifecycle_status, e.status_reason, e.exam_config_json, e.updated_at
+       FROM institute_exams e JOIN users u ON u.id = e.institute_id WHERE e.id = $1`,
   examResults: `SELECT id, roll_number, candidate_name, raw_score, max_score, percentage, qualifying_status, evaluation_status, version, updated_at
        FROM institute_exam_results WHERE exam_id = $1 ORDER BY roll_number LIMIT 2000`,
   decideExam: `UPDATE institute_exams
@@ -241,6 +248,20 @@ export function createInstituteWorkspaceAdminRouter(): Router {
     });
     if (!rows[0]) {
       response.status(409).json({ error: 'The examination changed while your request was processed. Reload and try again.', code: 'EXAM_CHANGED' });
+      return;
+    }
+    response.json({ exam: rows[0] });
+  }));
+
+  router.get('/admin/institute-workspace/exams/:id', ...GUARDS, route(async (request, response) => {
+    const id = idSchema.safeParse(request.params.id);
+    if (!id.success) {
+      response.status(400).json({ error: 'Invalid examination id.' });
+      return;
+    }
+    const { rows } = await pool.query(WORKSPACE_ADMIN_SQL.examDetail, [id.data]);
+    if (!rows[0]) {
+      response.status(404).json({ error: 'Examination not found.' });
       return;
     }
     response.json({ exam: rows[0] });

@@ -41,6 +41,17 @@ const ACTIONS: Readonly<Partial<Record<ExamLifecycleStatus, readonly InstituteEx
   cancelled: [{ to: 'archived', label: 'Archive', needsReason: false }],
 });
 
+/**
+ * Exam states in which the Institute may still edit the examination and its configuration (PATCH
+ * /api/center/exams/:id): its own draft, or one ELTNOY returned for changes. Shared with the server, which
+ * enforces it with a compare-and-set on the status.
+ */
+export const INSTITUTE_EDITABLE_EXAM_STATES = Object.freeze(['draft', 'needs_changes'] as const);
+
+export function isInstituteEditableExam(status: string): boolean {
+  return (INSTITUTE_EDITABLE_EXAM_STATES as readonly string[]).includes(status);
+}
+
 export function instituteExamActions(status: string): readonly InstituteExamAction[] {
   return ACTIONS[status as ExamLifecycleStatus] ?? [];
 }

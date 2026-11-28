@@ -190,7 +190,7 @@ BEGIN
     -- D-02 (2026-11-27): approval and publication columns (approved_by, release_status, released_at,
     -- final_approved_by, published_at) are assigned only by the Super Admin review routes
     -- (server/instituteWorkspaceAdmin.ts); Institute routes never write them.
-    ('institute_exams',                    'SELECT, INSERT',         ARRAY['lifecycle_status', 'status_reason', 'approved_by', 'updated_at']),
+    ('institute_exams',                    'SELECT, INSERT',         ARRAY['lifecycle_status', 'status_reason', 'approved_by', 'updated_at', 'title', 'category', 'mode', 'eligibility', 'academic_year', 'app_open_date', 'app_close_date', 'exam_date', 'exam_time', 'duration_minutes', 'fee_paise', 'instructions', 'exam_config_json']),
     ('institute_exam_broadcasts',          'SELECT, INSERT',         NULL),
     ('institute_app_forms',                'SELECT, INSERT',         ARRAY['status', 'updated_at']),
     ('institute_candidate_applications',   'SELECT, INSERT',         ARRAY['review_status', 'review_reason', 'reviewer_id', 'updated_at']),

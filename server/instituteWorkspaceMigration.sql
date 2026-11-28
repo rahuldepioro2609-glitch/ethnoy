@@ -468,3 +468,18 @@ CREATE TABLE IF NOT EXISTS institute_support_tickets (
 );
 CREATE INDEX IF NOT EXISTS institute_support_tickets_idx
   ON institute_support_tickets(institute_id, status, created_at DESC);
+
+-- Create Examination wizard (2026-11-28): the examination's configuration as the Institute prepared it:
+-- which applicant fields the future applicant form asks for (required, optional or hidden), qualifications,
+-- eligibility, required documents, category-wise fees (configuration only; nothing is paid), dates and form
+-- settings. It holds settings, never applicant data. Validated by the API (src/utils/examConfig.ts, strict
+-- schema); the database adds a type and size limit. Additive: existing examinations get '{}' (no configuration).
+ALTER TABLE institute_exams ADD COLUMN IF NOT EXISTS exam_config_json jsonb NOT NULL DEFAULT '{}'::jsonb;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'institute_exams_config_shape_check' AND conrelid = 'institute_exams'::regclass) THEN
+    ALTER TABLE institute_exams ADD CONSTRAINT institute_exams_config_shape_check
+      CHECK (jsonb_typeof(exam_config_json) = 'object' AND octet_length(exam_config_json::text) <= 65536);
+  END IF;
+END
+$$;

@@ -6,6 +6,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, apiRequest, apiRequestWithMeta } from '../../api';
 import { Button, Card, DataTable, EmptyState, ErrorState, LoadingState, StatusBadge, TextField } from '../ui';
 import { examStatusLabel, isOfficialExamState } from '../../utils/workspaceExams';
+import { draftFromExam, type ExamForEdit, type WizardDraft } from '../../utils/examWizard';
+import { ApplicantFormPreview } from '../workspace/examWizard/ApplicantFormPreview';
+import { NoticePreview } from '../workspace/examWizard/StepPreview';
 
 interface QueueExam { id: string; institute_name: string; exam_code: string; title: string; category: string; mode: string; lifecycle_status: string; exam_date: string; updated_at: string }
 interface QueueResultGroup { exam_id: string; exam_code: string; title: string; institute_name: string; ready_for_review: number; approved: number; published: number; exam_status: string }
@@ -57,6 +60,19 @@ export const InstituteWorkspaceReviewPanel: React.FC = () => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [viewing, setViewing] = useState<{ group: QueueResultGroup; rows: ResultRow[] | null; error: string | null } | null>(null);
+  // The full examination (notice and applicant form configuration) the Super Admin is reviewing.
+  const [examView, setExamView] = useState<{ exam: QueueExam; draft: WizardDraft | null; error: string | null; tab: 'notice' | 'form' } | null>(null);
+  const examViewRequest = useRef(0);
+  const viewExam = async (exam: QueueExam) => {
+    const request = ++examViewRequest.current;
+    setExamView({ exam, draft: null, error: null, tab: 'notice' });
+    try {
+      const data = await apiRequest<{ exam: ExamForEdit & { exam_config_json: unknown } }>(`/api/admin/institute-workspace/exams/${encodeURIComponent(exam.id)}`);
+      if (request === examViewRequest.current) setExamView({ exam, draft: draftFromExam(data.exam), error: null, tab: 'notice' });
+    } catch (error) {
+      if (request === examViewRequest.current) setExamView({ exam, draft: null, error: errorText(error), tab: 'notice' });
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -167,6 +183,7 @@ export const InstituteWorkspaceReviewPanel: React.FC = () => {
               { key: 'status', header: 'Status', render: (row) => <StatusBadge status={row.lifecycle_status === 'approved' ? 'approved' : 'pending'} label={row.lifecycle_status === 'approved' ? 'Approved, not published' : 'Awaiting review'} /> },
               { key: 'actions', header: 'Decision', render: (row) => (
                 <div className="flex flex-wrap gap-1">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => void viewExam(row)}>View</Button>
                   {row.lifecycle_status === 'pending_approval' && <>
                     <Button type="button" size="sm" onClick={() => setPending({ kind: 'exam', exam: row, decision: 'approve', reason: '' })}>Approve</Button>
                     <Button type="button" size="sm" variant="secondary" onClick={() => setPending({ kind: 'exam', exam: row, decision: 'request_changes', reason: '' })}>Request changes</Button>
@@ -178,6 +195,29 @@ export const InstituteWorkspaceReviewPanel: React.FC = () => {
           />
         )}
       </Card>
+
+      {examView && (
+        <Card title={`${examView.exam.exam_code}: examination as prepared by ${examView.exam.institute_name}`} headingLevel={3} description="Read-only. The application form is configuration only; no applicant has applied through ELTNOY.">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant={examView.tab === 'notice' ? 'primary' : 'secondary'} onClick={() => setExamView({ ...examView, tab: 'notice' })}>Examination notice</Button>
+            <Button type="button" size="sm" variant={examView.tab === 'form' ? 'primary' : 'secondary'} onClick={() => setExamView({ ...examView, tab: 'form' })}>Applicant form</Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setExamView(null)}>Close</Button>
+          </div>
+          {!examView.draft && !examView.error && <LoadingState label="Loading the examination…" />}
+          {examView.error && <ErrorState title="The examination could not be loaded" description={examView.error} />}
+          {examView.draft?.legacy && (
+            <div className="space-y-1 text-sm">
+              <p className="text-xs text-amber-800">This examination has no form configuration (created before the form designer). Only its saved details are shown.</p>
+              <p><span className="font-semibold">Title:</span> {examView.draft.title}</p>
+              <p><span className="font-semibold">Applications:</span> {examView.draft.appOpenDate} to {examView.draft.appCloseDate} · <span className="font-semibold">Exam:</span> {examView.draft.examDate} {examView.draft.examTime}</p>
+              <p><span className="font-semibold">Eligibility:</span> {examView.draft.eligibilitySummary}</p>
+              {examView.draft.instructions && <p className="whitespace-pre-line"><span className="font-semibold">Instructions:</span> {examView.draft.instructions}</p>}
+            </div>
+          )}
+          {examView.draft && !examView.draft.legacy && examView.tab === 'notice' && <NoticePreview draft={examView.draft} />}
+          {examView.draft && examView.tab === 'form' && (examView.draft.legacy ? <p className="text-sm text-slate-600">No applicant form was configured.</p> : <ApplicantFormPreview config={examView.draft.config} title={examView.draft.title} />)}
+        </Card>
+      )}
 
       <Card title="Results" headingLevel={3} description="Results an institute marked ready for review, or that you approved and have not yet published. Open the results to approve them: only the versions you see are approved." padded={false}>
         {queue.results.length === 0 ? <EmptyState title="No results waiting" /> : (

@@ -997,7 +997,7 @@ test('A-11 coverage: every Institute write route is either audited or refused ou
   // Refused before any write (nothing to record, or recorded as a D-02 refusal).
   const REFUSED = ['PATCH /center/admit-cards/:id/release', 'POST /center/exams/:id/broadcasts', 'POST /center/tickets', 'PATCH /center/tickets/:id', 'POST /center/training/enrollments/:id/certificate'];
   const AUDITED = [
-    'POST /center/branches', 'PATCH /center/branches/:id', 'POST /center/exams', 'POST /center/exams/:id/transition', 'POST /center/app-forms', 'PATCH /center/app-forms/:id',
+    'POST /center/branches', 'PATCH /center/branches/:id', 'POST /center/exams', 'PATCH /center/exams/:id', 'POST /center/exams/:id/transition', 'POST /center/app-forms', 'PATCH /center/app-forms/:id',
     'POST /center/applications', 'POST /center/applications/:id/review', 'POST /center/payments/refunds', 'PATCH /center/payments/refunds/:id',
     'POST /center/admit-cards/templates', 'POST /center/admit-cards/generate', 'POST /center/questions', 'PATCH /center/questions/:id/moderate',
     'POST /center/paper-blueprints', 'POST /center/paper-blueprints/:id/lock', 'POST /center/cbt-incidents/:id/review', 'POST /center/results',
@@ -1007,4 +1007,169 @@ test('A-11 coverage: every Institute write route is either audited or refused ou
   ];
   // POST /center/reports/preview only reads; it is listed so a new write route cannot slip past this check.
   assert.deepEqual(writes, [...REFUSED, ...AUDITED, 'POST /center/reports/preview'].sort(), 'a new write route must be audited (or refused) and listed here');
+});
+
+// ---------------------------------------------------------------------------
+// Create Examination wizard: configuration (settings only), draft editing, D-02 submission
+// ---------------------------------------------------------------------------
+
+const { examConfigPreset } = await import('../src/utils/examConfig.js');
+
+const wizardBody = (overrides: Record<string, unknown> = {}) => {
+  const config = examConfigPreset('hospital_recruitment');
+  config.basics.mode = 'offline_omr';
+  config.fees.categories.general.fee = 50_000;
+  config.fees.categories.sc.fee = 25_000;
+  return {
+    examCode: 'snr-2027', title: 'Staff Nurse Recruitment 2027', academicYear: '2026-27', appOpenDate: '2027-02-01', appCloseDate: '2027-02-20',
+    examDate: '2027-03-15', examTime: '10:00', durationMinutes: 120, eligibility: 'GNM or B.Sc Nursing with registration', instructions: '',
+    config, submitForApproval: false, ...overrides,
+  };
+};
+
+const EDIT_ROW = (status: string, config: unknown = examConfigPreset('hospital_recruitment')) => ({
+  id: EXAM, exam_code: 'SNR-2027', title: 'Staff Nurse Recruitment 2027', category: 'Recruitment', mode: 'Offline', eligibility: 'GNM or B.Sc Nursing with registration',
+  academic_year: '2026-27', app_open_date: '2027-02-01', app_close_date: '2027-02-20', exam_date: '2027-03-15', exam_time: '10:00',
+  duration_minutes: 120, fee_paise: '0', instructions: '', lifecycle_status: status, status_reason: '', exam_config_json: config,
+  updated_at: '2026-11-28T10:00:00.000Z',
+});
+const isEditSelect = (text: string) => text.startsWith('SELECT id, exam_code, title, category');
+
+test('wizard create: the configuration is validated and stored; category, mode and fee columns are derived from it', async () => {
+  const body = wizardBody();
+  const result = await call('post', '/center/exams', {
+    body, handler: (text, values) => (text.startsWith('INSERT INTO institute_exams') ? { rows: [{ id: values[0], exam_code: values[2], lifecycle_status: values[19] }] } : undefined),
+  });
+  assert.equal(result.status, 201);
+  const insert = result.queries.find((query) => query.text.startsWith('INSERT INTO institute_exams'))!;
+  assert.equal(insert.values[1], INSTITUTE, 'the Institute comes from the session');
+  assert.equal(insert.values[2], 'SNR-2027');
+  assert.equal(insert.values[4], 'Recruitment', 'hospital recruitment maps to the existing Recruitment category');
+  assert.equal(insert.values[5], 'Offline', 'Offline OMR maps to the existing Offline mode');
+  assert.equal(insert.values[15], 50_000, 'the fee column is the General / UR fee');
+  assert.equal(insert.values[19], 'draft');
+  assert.deepEqual(JSON.parse(String(insert.values[20])), body.config, 'the exact configuration is stored');
+  assert.deepEqual(result.audits.map((row) => [row.action, row.metadata.exam_type, row.metadata.new_status]), [['workspace_exam.created', 'hospital_recruitment', 'draft']]);
+});
+
+test('wizard create: unknown fields, invalid configuration and inconsistent dates are refused before any write', async () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['unknown top-level field', wizardBody({ publishNow: true })],
+    ['unknown configuration field', wizardBody({ config: { ...wizardBody().config, applicants: [] } })],
+    ['locked field switched off', (() => { const body = wizardBody(); body.config.form.sections[0].fields.find((field) => field.key === 'email')!.required = false; return body; })()],
+    ['result before the exam', (() => { const body = wizardBody(); body.config.dates.resultDate = '2027-03-01'; return body; })()],
+    ['no category or mode without a configuration', (() => { const { config: _config, ...rest } = wizardBody(); return rest; })()],
+  ];
+  for (const [name, body] of cases) {
+    const result = await call('post', '/center/exams', { body });
+    assert.equal(result.status, 400, name);
+    assert.equal(result.queries.length, 0, `${name}: nothing written`);
+    assert.equal(result.audits.length, 0, name);
+  }
+});
+
+test('wizard create: submitting goes to ELTNOY review (pending_approval), never further', async () => {
+  const result = await call('post', '/center/exams', {
+    body: wizardBody({ submitForApproval: true }),
+    handler: (text, values) => (text.startsWith('INSERT INTO institute_exams') ? { rows: [{ id: values[0], exam_code: values[2], lifecycle_status: values[19] }] } : undefined),
+  });
+  assert.equal(result.status, 201);
+  assert.equal(result.queries[0].values[19], 'pending_approval');
+});
+
+test('wizard read: one examination, scoped to the session Institute', async () => {
+  const found = await call('get', '/center/exams/:id', { params: { id: EXAM }, handler: (text) => (isEditSelect(text) ? { rows: [EDIT_ROW('draft')] } : undefined) });
+  assert.equal(found.status, 200);
+  assert.deepEqual(found.queries[0].values, [EXAM, INSTITUTE]);
+  assert.match(found.queries[0].text, /WHERE id = \$1 AND institute_id = \$2/);
+  const foreign = await call('get', '/center/exams/:id', { params: { id: FOREIGN } });
+  assert.equal(foreign.status, 404, "another Institute's examination is not found");
+  const invalid = await call('get', '/center/exams/:id', { params: { id: 'not-a-uuid' } });
+  assert.equal(invalid.status, 404);
+  assert.equal(invalid.queries.length, 0);
+});
+
+const editBody = (overrides: Record<string, unknown> = {}) => {
+  const { examCode: _code, ...rest } = wizardBody();
+  return { ...rest, expectedUpdatedAt: '2026-11-28T10:00:00.000Z', ...overrides };
+};
+
+test('wizard edit: a draft is updated with compare-and-set; the audit lists changed field names, never values', async () => {
+  const body = editBody({ title: 'Staff Nurse Recruitment 2027 (Revised)' });
+  const result = await call('patch', '/center/exams/:id', {
+    params: { id: EXAM }, body,
+    handler: (text) => (isEditSelect(text) ? { rows: [EDIT_ROW('draft')] } : text.startsWith('UPDATE institute_exams') ? { rows: [{ id: EXAM, exam_code: 'SNR-2027', lifecycle_status: 'draft' }] } : undefined),
+  });
+  assert.equal(result.status, 200);
+  const update = result.queries.find((query) => query.text.startsWith('UPDATE institute_exams'))!;
+  assert.match(update.text, /WHERE id = \$1 AND institute_id = \$2 AND lifecycle_status = \$3/);
+  assert.match(update.text, /date_trunc\('milliseconds', updated_at\) = date_trunc\('milliseconds', \$4::timestamptz\)/);
+  assert.deepEqual(update.values.slice(0, 4), [EXAM, INSTITUTE, 'draft', '2026-11-28T10:00:00.000Z']);
+  assert.equal(update.values[17], 'draft', 'saving does not change the status');
+  assert.deepEqual(result.audits.length, 1);
+  const audit = result.audits[0];
+  assert.equal(audit.action, 'workspace_exam.updated');
+  assert.deepEqual([...(audit.metadata.changed_fields as string[])].sort(), ['exam_config', 'fee_paise', 'title']);
+  assert.equal(JSON.stringify(audit.metadata).includes('Revised'), false, 'no values in the audit trail');
+  assert.equal(JSON.stringify(audit.metadata).includes('Nursing'), false);
+});
+
+test('wizard edit: only a draft or an examination returned for changes can be edited', async () => {
+  for (const status of ['pending_approval', 'approved', 'published', 'registration_open', 'closed', 'cancelled', 'archived']) {
+    const result = await call('patch', '/center/exams/:id', {
+      params: { id: EXAM }, body: editBody(), handler: (text) => (isEditSelect(text) ? { rows: [EDIT_ROW(status)] } : undefined),
+    });
+    assert.equal(result.status, 409, status);
+    assert.equal(result.body?.code, 'EXAM_NOT_EDITABLE', status);
+    assert.equal(result.queries.some((query) => query.text.startsWith('UPDATE')), false, `${status}: nothing written`);
+    assert.equal(result.audits.length, 0);
+  }
+});
+
+test("wizard edit: another Institute's examination is not found; a stale version is refused", async () => {
+  const foreign = await call('patch', '/center/exams/:id', { params: { id: FOREIGN }, body: editBody() });
+  assert.equal(foreign.status, 404);
+  assert.deepEqual(foreign.queries[0].values, [FOREIGN, INSTITUTE]);
+  assert.equal(foreign.queries.some((query) => query.text.startsWith('UPDATE')), false);
+
+  const stale = await call('patch', '/center/exams/:id', {
+    params: { id: EXAM }, body: editBody({ title: 'Changed title' }),
+    handler: (text) => (isEditSelect(text) ? { rows: [EDIT_ROW('draft')] } : undefined), // the UPDATE matches no row
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body?.code, 'EXAM_CHANGED');
+  assert.equal(stale.audits.length, 0, 'no audit event without a change');
+});
+
+test('wizard edit: the exam code cannot change and the request must name the version it edits', async () => {
+  for (const body of [{ ...editBody(), examCode: 'OTHER' }, (() => { const { expectedUpdatedAt: _version, ...rest } = editBody(); return rest; })()]) {
+    const result = await call('patch', '/center/exams/:id', { params: { id: EXAM }, body });
+    assert.equal(result.status, 400);
+    assert.equal(result.queries.length, 0);
+  }
+});
+
+test('wizard edit: submitting a draft or a returned examination sends it for review; an unchanged save writes nothing', async () => {
+  for (const status of ['draft', 'needs_changes']) {
+    const result = await call('patch', '/center/exams/:id', {
+      params: { id: EXAM }, body: editBody({ submitForApproval: true }),
+      handler: (text) => (isEditSelect(text) ? { rows: [EDIT_ROW(status, wizardBody().config)] } : text.startsWith('UPDATE institute_exams') ? { rows: [{ id: EXAM, exam_code: 'SNR-2027', lifecycle_status: 'pending_approval' }] } : undefined),
+    });
+    assert.equal(result.status, 200, status);
+    const update = result.queries.find((query) => query.text.startsWith('UPDATE institute_exams'))!;
+    assert.equal(update.values[17], 'pending_approval', status);
+    assert.equal(result.audits[0].metadata.previous_status, status);
+    assert.equal(result.audits[0].metadata.new_status, 'pending_approval');
+  }
+  // PostgreSQL returns jsonb object keys in its own order: reverse every object's keys to simulate it.
+  const reorder = (value: unknown): unknown => Array.isArray(value) ? value.map(reorder)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value as Record<string, unknown>).reverse().map(([key, item]) => [key, reorder(item)])) : value;
+  const same = { ...EDIT_ROW('draft', reorder(wizardBody().config)), fee_paise: '50000' };
+  const unchanged = await call('patch', '/center/exams/:id', {
+    params: { id: EXAM }, body: editBody(), handler: (text) => (isEditSelect(text) ? { rows: [same] } : undefined),
+  });
+  assert.equal(unchanged.status, 200);
+  assert.equal(unchanged.body?.unchanged, true);
+  assert.equal(unchanged.queries.some((query) => query.text.startsWith('UPDATE')), false);
+  assert.equal(unchanged.audits.length, 0);
 });
