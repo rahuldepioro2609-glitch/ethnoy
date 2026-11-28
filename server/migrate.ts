@@ -54,6 +54,8 @@ export const MIGRATION_FILES = [
   'auditEventsMigration.sql',
   // Merit List Engine foundation: append-only draft merit-list versions (documentation/MERIT_LIST_GAP_ANALYSIS.md).
   'meritListMigration.sql',
+  // Institute Workspace (25 tables); before the grants migration, which must stay last.
+  'instituteWorkspaceMigration.sql',
   'databaseGrantsMigration.sql',
 ] as const;
 

@@ -116,7 +116,7 @@ test('grant manifest covers exactly the tables created by the migrations', async
   for (const table of PRESERVED_UNGRANTED_LEGACY_TABLES) {
     assert.deepEqual(manifest.get(table), { privileges: [], updateColumns: [] }, `${table} stays inaccessible to the API`);
   }
-  assert.equal(tables.size, 54, '24 existing tables, 7 AUTH-1 tables, the AUTH C1 claims table, 6 MFA tables, 14 Staff tables, audit_events and merit_list_snapshots');
+  assert.equal(tables.size, 79, '24 existing tables, 7 AUTH-1 tables, the AUTH C1 claims table, 6 MFA tables, 14 Staff tables, audit_events, merit_list_snapshots and 25 Institute Workspace tables');
 });
 
 // AUTH C1.8, MFA Phase 2 (adminMfaMigration.sql): exactly these six entries. No DELETE, no table-wide

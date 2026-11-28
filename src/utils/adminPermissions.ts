@@ -82,7 +82,7 @@ export const SUPER_ADMIN_ONLY_TEXT = {
 export const ADMIN_DASHBOARD_TABS = [
   'overview', 'institutes', 'institution-documents', 'exams', 'notices', 'admit-cards', 'online-exams',
   'answer-keys', 'applications', 'feedback', 'attempts', 'results', 'data-export', 'platform-staff',
-  'institute-verification', 'audit-log', 'merit-lists',
+  'institute-verification', 'audit-log', 'merit-lists', 'institute-reviews',
 ] as const;
 
 export type AdminDashboardTab = (typeof ADMIN_DASHBOARD_TABS)[number];
@@ -100,6 +100,8 @@ export function canSeeAdminTab(user: PermissionSubject | null | undefined, tab: 
   if (tab === 'audit-log') return isSuperAdminOfficial(user);
   // Merit lists show marks, which ordinary Officials do not see (A-04): Super Admin only.
   if (tab === 'merit-lists') return isSuperAdminOfficial(user);
+  // D-02: reviewing and publishing Institute-prepared work is Super Admin only (the server enforces it too).
+  if (tab === 'institute-reviews') return isSuperAdminOfficial(user);
   return true;
 }
 

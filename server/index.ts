@@ -82,6 +82,8 @@ import { createInstituteVerificationAdminRouter } from './instituteVerificationA
 import { auditActor, recordAuditEvent, recordRefusedAuditEvent, runAuditedTransaction } from './audit.js';
 import { createAuditRouter } from './auditRoutes.js';
 import { createMeritListRouter } from './meritListRoutes.js';
+import { createInstituteWorkspaceRouter } from './instituteWorkspace.js';
+import { createInstituteWorkspaceAdminRouter } from './instituteWorkspaceAdmin.js';
 import {
   createInstitutionSubmissionRouter,
   createSubmissionCycle,
@@ -3213,6 +3215,9 @@ const organizationStaff = createOrgStaffRouters({ store: createPostgresOrgStaffS
 app.use('/api', organizationStaff.ownerRouter);
 app.use('/api', organizationStaff.staffRouter);
 app.use('/api', organizationStaff.adminRouter);
+app.use('/api', createInstituteWorkspaceRouter());
+// D-02: Super Admin review and official publication of Institute-prepared work (Admin host only).
+app.use('/api', createInstituteWorkspaceAdminRouter());
 if (existsSync(builtClient)) {
   app.use(express.static(builtClient));
   app.get('*', (request, response, next) => {

@@ -269,15 +269,24 @@ test('bootstrap + every wired migration (one transaction, as the owner) + idempo
 const AUDIT_TABLE = 'audit_events';
 /** Merit List Engine foundation (meritListMigration.sql): append-only draft versions. */
 const MERIT_TABLE = 'merit_list_snapshots';
+/** Institute Workspace (instituteWorkspaceMigration.sql): the 25 tables, listed explicitly. */
+const WORKSPACE_TABLES = [
+  'institute_admit_card_templates', 'institute_app_forms', 'institute_attendance_logs', 'institute_branches',
+  'institute_candidate_applications', 'institute_cbt_incidents', 'institute_cbt_sessions', 'institute_exam_broadcasts',
+  'institute_exam_results', 'institute_exams', 'institute_fee_refunds', 'institute_fee_transactions', 'institute_hall_tickets',
+  'institute_interview_changes', 'institute_interview_scorecards', 'institute_interviews', 'institute_paper_blueprints', 'institute_questions',
+  'institute_result_appeals', 'institute_saved_reports', 'institute_support_tickets', 'institute_training_courses',
+  'institute_training_enrollments', 'institute_training_sessions', 'institute_verification_logs',
+];
 
 test('catalog privileges for eltnoy_app equal the manifest exactly', { skip }, async () => {
   const sql = (await readServerFile('databaseGrantsMigration.sql')).replace(/--[^\n]*/g, '');
   const rows = [...sql.matchAll(/\('(\w+)',\s*'([A-Z, ]+)',\s*(NULL(?:::text\[\])?|ARRAY\[([^\]]*)\](?:::text\[\])?)\)/g)];
   // Derived, not hard-coded: the manifest must list exactly the 24 pre-AUTH-1 tables, the AUTH-1,
-  // claims, MFA and Staff tables, and exactly the tables the wired migrations created here.
+  // claims, MFA, Staff, audit, merit-list and Institute Workspace tables, and exactly the tables the wired migrations created here.
   const manifestTables = rows.map(([, table]) => table).sort();
   assert.equal(new Set(manifestTables).size, manifestTables.length, 'no table is listed twice');
-  assert.deepEqual(manifestTables, [...PRE_AUTH1_TABLES, ...Object.keys(AUTH1_GRANTS), C1_CLAIMS_TABLE, ...Object.keys(MFA_GRANTS), ...Object.keys(STAFF_GRANTS), AUDIT_TABLE, MERIT_TABLE].sort(), 'manifest = 24 existing + 7 AUTH-1 + 1 AUTH C1 + 6 MFA + 14 Staff tables + audit_events + merit_list_snapshots');
+  assert.deepEqual(manifestTables, [...PRE_AUTH1_TABLES, ...Object.keys(AUTH1_GRANTS), C1_CLAIMS_TABLE, ...Object.keys(MFA_GRANTS), ...Object.keys(STAFF_GRANTS), AUDIT_TABLE, MERIT_TABLE, ...WORKSPACE_TABLES].sort(), 'manifest = 24 existing + 7 AUTH-1 + 1 AUTH C1 + 6 MFA + 14 Staff tables + audit_events + merit_list_snapshots + 25 Institute Workspace tables');
   // Sorted in JS on both sides: the database collation may order underscores differently.
   // Legacy Render tables may be absent from a fresh database; if present, each remains manifest-listed.
   const catalogTables = (await q("SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')")).map((r) => String(r.relname)).sort();
@@ -2191,5 +2200,171 @@ test('merit_list_snapshots: eltnoy_app can insert and read; versions are immutab
     assert.equal(await one("SELECT version FROM merit_list_snapshots WHERE id = 'it-merit-1'"), 1);
   } finally {
     await q('ROLLBACK');
+  }
+});
+
+// Institute Workspace (instituteWorkspaceMigration.sql), D-02 and data-integrity rules on a real
+// database. Everything runs in one transaction that is rolled back.
+test('INSTITUTE WORKSPACE: one admit card per application; attendance marks are permanent; no settings table; Super Admin columns granted', { skip }, async () => {
+  const probe = async (sql: string, params?: unknown[]): Promise<string | null> => {
+    await q('SAVEPOINT ws_probe');
+    try {
+      await q('SET LOCAL ROLE eltnoy_app');
+      await q(sql, params);
+      await q('RESET ROLE');
+      await q('RELEASE SAVEPOINT ws_probe');
+      return null;
+    } catch (error) {
+      await q('ROLLBACK TO SAVEPOINT ws_probe');
+      await q('RESET ROLE');
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+  await q('BEGIN');
+  try {
+    await q("INSERT INTO users (id, login_id, display_name, role, password_hash) VALUES ('it-ws-inst', 'IT-WS-INST', 'IT Workspace institute', 'center', '!synthetic')");
+    assert.equal(await probe(`INSERT INTO institute_exams (id, institute_id, exam_code, title, category, mode, eligibility, app_open_date, app_close_date, exam_date, duration_minutes)
+      VALUES ('it-ws-exam', 'it-ws-inst', 'IT-WS-1', 'IT Workspace exam', 'Mock', 'Offline', 'Synthetic', '2027-01-01', '2027-01-10', '2027-01-20', 60)`), null, 'the API role prepares an exam');
+    assert.equal(await probe(`INSERT INTO institute_candidate_applications (id, institute_id, exam_id, application_number, candidate_name)
+      VALUES ('it-ws-app', 'it-ws-inst', 'it-ws-exam', 'IT-WS-APP-1', 'Synthetic Candidate')`), null);
+    const ticket = (id: string, roll: string) => `INSERT INTO institute_hall_tickets (id, institute_id, exam_id, application_id, roll_number, candidate_name, exam_date, qr_token_hash)
+      VALUES ('${id}', 'it-ws-inst', 'it-ws-exam', 'it-ws-app', '${roll}', 'Synthetic Candidate', '2027-01-20', '${'a'.repeat(64)}')`;
+    assert.equal(await probe(ticket('it-ws-t1', 'IT-ROLL-1')), null, 'first admit card');
+    assert.match(await probe(ticket('it-ws-t2', 'IT-ROLL-2')) ?? 'succeeded', /institute_hall_tickets_application_idx/, 'a second card for the same application is refused even with a new roll number');
+
+    assert.equal(await probe(`INSERT INTO institute_attendance_logs (id, institute_id, exam_id, roll_number, candidate_name, status, source, reason)
+      VALUES ('it-ws-mark', 'it-ws-inst', 'it-ws-exam', 'IT-ROLL-1', 'Synthetic Candidate', 'present', 'manual', 'Synthetic')`), null);
+    assert.match(await probe("UPDATE institute_attendance_logs SET status = 'absent' WHERE id = 'it-ws-mark'") ?? 'succeeded', /permission denied/, 'a mark cannot be edited');
+    assert.match(await probe("DELETE FROM institute_attendance_logs WHERE id = 'it-ws-mark'") ?? 'succeeded', /permission denied/, 'a mark cannot be deleted');
+
+    assert.equal(await one("SELECT to_regclass('public.institute_settings') IS NULL"), true, 'the unimplemented settings table does not exist');
+    for (const [table, column] of [['institute_exams', 'approved_by'], ['institute_hall_tickets', 'release_status'], ['institute_hall_tickets', 'released_at'],
+      ['institute_exam_results', 'final_approved_by'], ['institute_exam_results', 'published_at']]) {
+      assert.equal(await one(`SELECT has_column_privilege('eltnoy_app', '${table}', '${column}', 'UPDATE')`), true, `${table}.${column} (Super Admin review routes)`);
+    }
+    assert.equal(await one("SELECT has_table_privilege('eltnoy_app', 'institute_exam_results', 'DELETE')"), false, 'results are never deleted by the API');
+  } finally {
+    await q('ROLLBACK');
+  }
+});
+
+test('INSTITUTE WORKSPACE: one Training enrolment per learner per course, also under concurrent requests (eltnoy_app)', { skip }, async () => {
+  const { TRAINING_SQL } = await import('./instituteWorkspace.js');
+  const { db, end } = appDatabase();
+  const institute = `it-ws-tr-${randomUUID().slice(0, 8)}`;
+  const course = randomUUID();
+  const otherCourse = randomUUID();
+  await q("INSERT INTO users (id, login_id, display_name, role, password_hash) VALUES ($1, upper($1), 'IT Training institute', 'center', '!synthetic')", [institute]);
+  try {
+    for (const id of [course, otherCourse]) {
+      await db.query(TRAINING_SQL.insertCourse, [id, institute, 'IT Synthetic Course', 'General', 3]);
+    }
+    const enrol = (courseId: string, name: string, email: string) => db.query(TRAINING_SQL.insertEnrollment, [randomUUID(), institute, courseId, name, email]);
+
+    // Eight simultaneous requests for the same learner: exactly one row is written; the rest insert nothing.
+    const racing = await Promise.all(Array.from({ length: 8 }, () => enrol(course, 'IT Learner', 'it.learner@example.test')));
+    assert.equal(racing.reduce((sum, result) => sum + (result.rowCount ?? 0), 0), 1, 'one enrolment wins the race');
+    const count = async (courseId: string) => Number((await q('SELECT count(*)::int AS n FROM institute_training_enrollments WHERE course_id = $1', [courseId]))[0].n);
+    assert.equal(await count(course), 1);
+
+    assert.equal((await enrol(course, 'IT Learner Renamed', 'IT.Learner@Example.test')).rowCount, 0, 'the same email in another case is the same learner');
+    assert.equal((await enrol(otherCourse, 'IT Learner', 'it.learner@example.test')).rowCount, 1, 'the same learner may join another course');
+    assert.equal((await enrol(course, 'IT Learner', 'it.other@example.test')).rowCount, 1, 'a same-named learner with another email is a different person');
+
+    const noEmail = await Promise.all(Array.from({ length: 4 }, () => enrol(course, 'IT Walk-in', '')));
+    assert.equal(noEmail.reduce((sum, result) => sum + (result.rowCount ?? 0), 0), 1, 'without an email, a repeated name is refused, also concurrently');
+    assert.equal((await enrol(course, '  it walk-in ', '')).rowCount, 0, 'name comparison ignores case and surrounding spaces');
+    assert.equal(await count(course), 3);
+  } finally {
+    await end();
+    await q('DELETE FROM users WHERE id = $1', [institute]); // cascades to the synthetic course and enrolments
+  }
+});
+
+test('INSTITUTE WORKSPACE: interview cancel and reschedule through the real routes as eltnoy_app (conflicts, concurrency, freed slots, history, ownership)', { skip }, async () => {
+  const [{ createInstituteWorkspaceRouter, INTERVIEW_SQL }, dbModule] = await Promise.all([import('./instituteWorkspace.js'), import('./db.js')]);
+  const { db, end } = appDatabase();
+  // The routes use the shared pool; point it at this disposable database (as eltnoy_app) for this test only.
+  const shared = dbModule.pool as unknown as { connect: unknown; query: unknown };
+  const original = { connect: shared.connect, query: shared.query };
+  shared.connect = db.connect;
+  shared.query = db.query;
+  const router = createInstituteWorkspaceRouter();
+  const invoke = (method: 'get' | 'post', path: string, user: string, params: Record<string, string> = {}, body: unknown = {}) => new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+    const layer = (router.stack as Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (req: unknown, res: unknown, next: (error?: unknown) => void) => unknown }> } }>)
+      .find((item) => item.route?.path === path && item.route.methods[method]);
+    if (!layer) { reject(new Error(`${method} ${path}`)); return; }
+    let status = 200;
+    const res = { status(code: number) { status = code; return res; }, set() { return res; }, json(value: Record<string, unknown>) { resolve({ status, body: value }); return res; } };
+    Promise.resolve(layer.route!.stack.at(-1)!.handle({ params, body, query: {}, user: { id: user, role: 'center', isSuperAdmin: false } }, res, (error) => (error ? reject(error) : resolve({ status, body: {} })))).catch(reject);
+  });
+  const institute = `it-ws-iv-${randomUUID().slice(0, 8)}`;
+  const other = `it-ws-iv2-${randomUUID().slice(0, 8)}`;
+  for (const id of [institute, other]) await q("INSERT INTO users (id, login_id, display_name, role, password_hash) VALUES ($1, upper($1), 'IT Interview institute', 'center', '!synthetic')", [id]);
+  const day = '2099-06-01';
+  const book = (panelName: string, panelistNames: string, startTime: string, endTime: string) =>
+    invoke('post', '/center/interviews', institute, {}, { candidateName: 'IT Candidate', panelName, panelistNames, scheduledDate: day, startTime, endTime });
+  try {
+    const a = await book('Panel A', 'IT Asha, IT Bala', '10:00', '10:30');
+    assert.equal(a.status, 201);
+    const aId = String((a.body.interview as { id: string }).id);
+    const b = await book('Panel B', 'IT Chitra', '12:00', '12:30');
+    const bId = String((b.body.interview as { id: string }).id);
+
+    // A different panel that shares a panelist cannot overlap.
+    const shared = await book('Panel C', 'it bala', '10:15', '10:45');
+    assert.deepEqual([shared.status, shared.body.code], [409, 'PANEL_CONFLICT'], 'shared panelist across panels');
+
+    // Seven concurrent claims on one panelist's 14:00 slot: one reschedule and six new bookings. Exactly one wins.
+    const racers = await Promise.all([
+      invoke('post', '/center/interviews/:id/reschedule', institute, { id: bId }, { scheduledDate: day, startTime: '14:00', endTime: '14:30', panelistNames: 'IT Devi', reason: 'IT race reschedule' }),
+      ...Array.from({ length: 6 }, (_, i) => book(`Panel R${i}`, 'IT Devi', '14:00', '14:30')),
+    ]);
+    assert.equal(racers.filter((r) => r.status === 200 || r.status === 201).length, 1, 'one claim on the slot succeeds');
+    assert.ok(racers.every((r) => [200, 201, 409].includes(r.status)));
+    const devi = await q(`SELECT count(*)::int AS n FROM institute_interviews WHERE institute_id = $1 AND scheduled_date = $2 AND status <> 'cancelled' AND panelist_names ILIKE '%IT Devi%' AND start_time = '14:00'`, [institute, day]);
+    assert.equal(devi[0].n, 1);
+
+    // Ownership: another Institute's cancel and reschedule look like unknown interviews.
+    assert.equal((await invoke('post', '/center/interviews/:id/cancel', other, { id: aId }, { reason: 'IT foreign cancel' })).status, 404);
+    assert.equal((await invoke('post', '/center/interviews/:id/reschedule', other, { id: aId }, { scheduledDate: day, startTime: '16:00', endTime: '16:30', reason: 'IT foreign move' })).status, 404);
+
+    // Cancel A: its slot (and panelist IT Bala) is free again.
+    const cancelled = await invoke('post', '/center/interviews/:id/cancel', institute, { id: aId }, { reason: 'IT candidate withdrew' });
+    assert.equal(cancelled.status, 200);
+    assert.equal((await book('Panel C', 'IT Bala', '10:15', '10:45')).status, 201, 'the cancelled slot is available again');
+    assert.equal((await invoke('post', '/center/interviews/:id/cancel', institute, { id: aId }, { reason: 'IT cancel twice' })).body.code, 'INTERVIEW_CANCELLED');
+
+    // History: earlier details kept; the API role cannot rewrite or delete it.
+    const history = await q('SELECT action, reason, previous_json, new_json FROM institute_interview_changes WHERE institute_id = $1 ORDER BY created_at', [institute]);
+    const cancelRow = history.find((row) => row.action === 'cancelled')!;
+    assert.deepEqual([cancelRow.reason, cancelRow.previous_json.startTime, cancelRow.previous_json.panelistNames, cancelRow.new_json], ['IT candidate withdrew', '10:00', 'IT Asha, IT Bala', null]);
+    const e = await book('Panel E', 'IT Esha', '16:00', '16:30');
+    const eId = String((e.body.interview as { id: string }).id);
+    const moved = await invoke('post', '/center/interviews/:id/reschedule', institute, { id: eId }, { scheduledDate: '2099-06-02', startTime: '17:00', endTime: '17:45', panelName: 'Panel F', reason: 'IT panel moved' });
+    assert.equal(moved.status, 200);
+    const [movedRow] = await q("SELECT to_char(scheduled_date, 'YYYY-MM-DD') AS d, start_time, panel_name FROM institute_interviews WHERE id = $1", [eId]);
+    assert.deepEqual([movedRow.d, movedRow.start_time, movedRow.panel_name], ['2099-06-02', '17:00', 'Panel F']);
+    const [eHistory] = await q("SELECT reason, previous_json, new_json FROM institute_interview_changes WHERE interview_id = $1 AND action = 'rescheduled'", [eId]);
+    assert.deepEqual([eHistory.reason, eHistory.previous_json.scheduledDate, eHistory.previous_json.startTime, eHistory.previous_json.panelName], ['IT panel moved', day, '16:00', 'Panel E'], 'the earlier date, time and panel are kept');
+    assert.deepEqual([eHistory.new_json.scheduledDate, eHistory.new_json.startTime, eHistory.new_json.endTime], ['2099-06-02', '17:00', '17:45']);
+    assert.equal((await book('Panel E', 'IT Esha', '16:00', '16:30')).status, 201, 'the slot it left is free again');
+    for (const sql of ["UPDATE institute_interview_changes SET reason = 'rewritten'", 'DELETE FROM institute_interview_changes']) {
+      const error = await db.query(sql).then(() => null, (e: Error) => e.message);
+      assert.match(error ?? 'succeeded', /permission denied/, sql);
+    }
+
+    // A held interview (it has a scorecard) can no longer be cancelled or rescheduled.
+    const heldId = randomUUID();
+    await q(`INSERT INTO institute_interviews (id, institute_id, candidate_name, panel_name, scheduled_date, start_time, end_time) VALUES ($1, $2, 'IT Held', 'Panel H', '2020-01-01', '09:00', '09:30')`, [heldId, institute]);
+    await q(`INSERT INTO institute_interview_scorecards (id, institute_id, interview_id, panelist_name, subject_score, communication_score, pedagogy_score, problem_solving_score) VALUES ($1, $2, $3, 'IT Asha', 7, 7, 7, 7)`, [randomUUID(), institute, heldId]);
+    assert.equal((await invoke('post', '/center/interviews/:id/cancel', institute, { id: heldId }, { reason: 'IT late cancel' })).body.code, 'INTERVIEW_HELD');
+    assert.equal((await invoke('post', '/center/interviews/:id/reschedule', institute, { id: heldId }, { scheduledDate: day, startTime: '18:00', endTime: '18:30', reason: 'IT late move' })).body.code, 'INTERVIEW_HELD');
+    assert.ok(INTERVIEW_SQL.current.includes('FOR UPDATE'));
+  } finally {
+    shared.connect = original.connect;
+    shared.query = original.query;
+    await end();
+    await q('DELETE FROM users WHERE id = ANY($1)', [[institute, other]]); // cascades to the synthetic interviews and history
   }
 });
