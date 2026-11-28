@@ -79,6 +79,8 @@ import { compareAgainstDummyHash } from './staffCommon.js';
 import { beginAdminMfaSignIn, createAdminMfaEnrolConfirmHandler, createAdminMfaEnrolStartHandler, createAdminMfaVerifyHandler, sendAdminMfaError } from './adminMfa.js';
 import { createOrgStaffRouters, createPostgresOrgStaffStore } from './organizationStaff.js';
 import { createInstituteVerificationAdminRouter } from './instituteVerificationAdmin.js';
+import { createInstituteWorkspaceRouter } from './instituteWorkspace.js';
+import { createInstituteWorkspaceAdminRouter } from './instituteWorkspaceAdmin.js';
 import {
   createInstitutionSubmissionRouter,
   createSubmissionCycle,
@@ -2956,6 +2958,9 @@ const organizationStaff = createOrgStaffRouters({ store: createPostgresOrgStaffS
 app.use('/api', organizationStaff.ownerRouter);
 app.use('/api', organizationStaff.staffRouter);
 app.use('/api', organizationStaff.adminRouter);
+app.use('/api', createInstituteWorkspaceRouter());
+// D-02: Super Admin review and official publication of Institute-prepared work (Admin host only).
+app.use('/api', createInstituteWorkspaceAdminRouter());
 if (existsSync(builtClient)) {
   app.use(express.static(builtClient));
   app.get('*', (request, response, next) => {

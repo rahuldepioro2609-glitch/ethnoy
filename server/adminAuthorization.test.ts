@@ -325,6 +325,11 @@ const MATRIX: MatrixEntry[] = [
   { method: 'post', path: '/api/admin/institute-verifications/:institutionId/restore', policy: 'super_admin', ref: 'AUTH-1 / SM-2 institute suspension (Super Admin only)', params: { institutionId: OPAQUE_ID } },
   // Super Admin only
   { method: 'get', path: '/api/admin/data-export', policy: 'super_admin', ref: 'A-07 (preserved)' },
+  { method: 'get', path: '/api/admin/institute-workspace/review-queue', policy: 'super_admin', ref: 'D-02 (Super Admin reviews Institute drafts)' },
+  { method: 'post', path: '/api/admin/institute-workspace/exams/:id/decision', policy: 'super_admin', ref: 'D-02 (exam approval and publication)', params: { id: OPAQUE_ID } },
+  { method: 'get', path: '/api/admin/institute-workspace/exams/:id/results', policy: 'super_admin', ref: 'D-02 / A-04', params: { id: OPAQUE_ID } },
+  { method: 'post', path: '/api/admin/institute-workspace/exams/:id/results/decision', policy: 'super_admin', ref: 'D-02 / A-04 (result publication)', params: { id: OPAQUE_ID } },
+  { method: 'post', path: '/api/admin/institute-workspace/exams/:id/admit-cards/decision', policy: 'super_admin', ref: 'D-02 / A-06 (admit-card release)', params: { id: OPAQUE_ID } },
   { method: 'post', path: '/api/admin/admit-cards/import', policy: 'super_admin', ref: 'A-06 / P3-D1 (interim)' },
   { method: 'put', path: '/api/admin/applications/:id/admit-card', policy: 'super_admin', ref: 'A-06 / P3-D1 (interim)', params: { id: 'app-1' } },
   { method: 'patch', path: '/api/admin/answer-keys/:examCode', policy: 'super_admin', ref: 'A-05', params: { examCode: 'EXAM1' } },

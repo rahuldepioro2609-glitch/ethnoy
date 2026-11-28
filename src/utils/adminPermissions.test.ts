@@ -56,7 +56,7 @@ test('ordinary Officials never see the helpdesk tab or request helpdesk data (P3
 
 test('only the helpdesk and data-export tabs are hidden from ordinary Officials', () => {
   const hidden = ADMIN_DASHBOARD_TABS.filter((tab) => !canSeeAdminTab(ordinaryOfficial, tab));
-  assert.deepEqual(hidden, ['feedback', 'data-export', 'platform-staff', 'institute-verification']);
+  assert.deepEqual(hidden, ['feedback', 'data-export', 'platform-staff', 'institute-verification', 'institute-reviews']);
   assert.deepEqual(ADMIN_DASHBOARD_TABS.filter((tab) => !canSeeAdminTab(superAdmin, tab)), []);
   for (const section of ['applications', 'attempts', 'results', 'stats', 'institutes', 'institute-management']) {
     assert.equal(canLoadAdminSection(ordinaryOfficial, section), true, section);

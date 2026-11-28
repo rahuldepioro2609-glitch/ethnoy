@@ -135,3 +135,21 @@ test('Attendance register shows the check-in time from the server row (updated_a
   assert.match(time, /23 Nov 2026/);
   assert.match(time, /09:45/, '04:15 UTC is 09:45 in India');
 });
+
+test('no Institute section renders built-in sample data: with no server rows every section is empty or explains what is unavailable', async () => {
+  const React = (await import('react')).default;
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { InstituteAdvancedSection } = await import('../components/InstituteAdvancedSection.tsx');
+  const sections = ['institute-exam-management', 'institute-applications', 'institute-admit-cards', 'institute-question-bank', 'institute-cbt-center',
+    'institute-results', 'institute-reports', 'institute-attendance', 'institute-interviews', 'institute-training'] as const;
+  for (const sectionId of sections) {
+    const html = renderToStaticMarkup(React.createElement(InstituteAdvancedSection, {
+      sectionId, centerCode: 'DEMO-CENTER-01', forms: [], checkins: [], summary: undefined,
+      workspaceState: 'success', checkinsState: 'success', onCreateForm: () => undefined, onOpenCheckins: () => undefined,
+    }));
+    // Values that only built-in sample data could produce (the earlier mock screen showed these).
+    assert.doesNotMatch(html, /Sharma|Sundaram|ELT2026-|T-0\d\d|ELT-UG-2026|₹\s?\d/, `${sectionId} shows sample data`);
+    // With no server rows, no table body row is rendered.
+    assert.equal([...html.matchAll(/<tbody[^>]*>\s*<tr/g)].length, 0, `${sectionId} renders rows without data`);
+  }
+});

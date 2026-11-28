@@ -61,6 +61,7 @@ import { PendingInstitutionSubmission } from './PendingInstitutionSubmission';
 import { PlatformStaffAdminPanel } from './staff/PlatformStaffAdminPanel';
 import { OrganizationStaffOwnerPanel } from './staff/OrganizationStaffOwnerPanel';
 import { InstituteVerificationPanel } from './admin/InstituteVerificationPanel';
+import { InstituteWorkspaceReviewPanel } from './admin/InstituteWorkspaceReviewPanel';
 import { InstituteDashboardOverview } from './InstituteDashboardOverview';
 import { InstituteAdvancedSection, type InstituteAdvancedSectionId } from './InstituteAdvancedSection';
 import { savePortalHintInBrowser } from '../utils/portalHint';
@@ -623,7 +624,7 @@ export const RoleLoginPage: React.FC<RoleLoginPageProps> = ({ role, surfaceHostn
   );
 };
 
-type DashboardTab = 'overview' | 'exams' | 'institutes' | 'institution-documents' | 'applications' | 'feedback' | 'attempts' | 'results' | 'admit-cards' | 'online-exams' | 'answer-keys' | 'notices' | 'data-export' | 'platform-staff' | 'institute-verification';
+type DashboardTab = 'overview' | 'exams' | 'institutes' | 'institution-documents' | 'applications' | 'feedback' | 'attempts' | 'results' | 'admit-cards' | 'online-exams' | 'answer-keys' | 'notices' | 'data-export' | 'platform-staff' | 'institute-verification' | 'institute-reviews';
 
 interface RoleDashboardProps {
   user: PortalUser;
@@ -1285,7 +1286,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
     );
   });
   const navTabs: { id: DashboardTab; label: string }[] = user.role === 'official'
-    ? [{ id: 'overview', label: 'Overview' }, { id: 'institutes', label: 'Institute approvals & wallet' }, { id: 'institution-documents', label: 'Institution documents' }, { id: 'exams', label: 'Exam forms' }, { id: 'notices', label: 'Latest updates' }, { id: 'admit-cards', label: 'Admit cards' }, { id: 'online-exams', label: 'Online exams' }, { id: 'answer-keys', label: 'Answer keys' }, { id: 'applications', label: 'Applications' }, { id: 'feedback', label: 'Helpdesk' }, { id: 'attempts', label: 'Mock tests' }, { id: 'results', label: 'Results' }, { id: 'data-export', label: 'Excel data' }, { id: 'platform-staff', label: 'Staff management' }, { id: 'institute-verification', label: 'Institutional verification' }]
+    ? [{ id: 'overview', label: 'Overview' }, { id: 'institutes', label: 'Institute approvals & wallet' }, { id: 'institution-documents', label: 'Institution documents' }, { id: 'exams', label: 'Exam forms' }, { id: 'notices', label: 'Latest updates' }, { id: 'admit-cards', label: 'Admit cards' }, { id: 'online-exams', label: 'Online exams' }, { id: 'answer-keys', label: 'Answer keys' }, { id: 'applications', label: 'Applications' }, { id: 'feedback', label: 'Helpdesk' }, { id: 'attempts', label: 'Mock tests' }, { id: 'results', label: 'Results' }, { id: 'data-export', label: 'Excel data' }, { id: 'platform-staff', label: 'Staff management' }, { id: 'institute-verification', label: 'Institutional verification' }, { id: 'institute-reviews', label: 'Institute reviews' }]
     : [{ id: 'overview', label: 'Overview' }];
   const permissions = adminPermissions(user);
   const visibleNavTabs = navTabs.filter((item) => canSeeAdminTab(user, item.id));
@@ -1912,6 +1913,7 @@ export const RoleDashboard: React.FC<RoleDashboardProps> = ({ user, onLogout, on
 
             {user.role === 'official' && user.isSuperAdmin && tab === 'platform-staff' && <PlatformStaffAdminPanel />}
             {user.role === 'official' && user.isSuperAdmin && tab === 'institute-verification' && <InstituteVerificationPanel />}
+            {user.role === 'official' && user.isSuperAdmin && tab === 'institute-reviews' && <InstituteWorkspaceReviewPanel />}
 
             {user.role === 'official' && user.isSuperAdmin && tab === 'data-export' && (
               <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
