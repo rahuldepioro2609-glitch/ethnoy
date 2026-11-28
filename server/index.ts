@@ -79,6 +79,9 @@ import { compareAgainstDummyHash } from './staffCommon.js';
 import { beginAdminMfaSignIn, createAdminMfaEnrolConfirmHandler, createAdminMfaEnrolStartHandler, createAdminMfaVerifyHandler, sendAdminMfaError } from './adminMfa.js';
 import { createOrgStaffRouters, createPostgresOrgStaffStore } from './organizationStaff.js';
 import { createInstituteVerificationAdminRouter } from './instituteVerificationAdmin.js';
+import { auditActor, recordAuditEvent, recordRefusedAuditEvent, runAuditedTransaction } from './audit.js';
+import { createAuditRouter } from './auditRoutes.js';
+import { createMeritListRouter } from './meritListRoutes.js';
 import {
   createInstitutionSubmissionRouter,
   createSubmissionCycle,
@@ -136,6 +139,11 @@ function sendValidationError(response: Response, error: z.ZodError): void {
     error: 'Invalid request.',
     details: error.issues.map((issue) => ({ field: issue.path.join('.'), message: issue.message })),
   });
+}
+
+/** A-11: one transaction for an action and its audit event (server/audit.ts). */
+function inAuditedTransaction<T>(work: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
+  return runAuditedTransaction(pool, work);
 }
 
 function getUser(request: Request) {
@@ -213,7 +221,8 @@ app.post('/api/admin/notices', requireAuth, requireRoles('official'), asyncRoute
     return;
   }
   const user = getUser(request);
-  const { rows } = await pool.query(
+  const rows = await inAuditedTransaction(async (client) => {
+    const inserted = await client.query(
     `INSERT INTO portal_notices
      (id, title, category, summary, full_content, reference_number, is_published, created_by, published_at)
      VALUES ($1, $2, $3, $4, $5, $6, false, $7, NULL)
@@ -221,7 +230,13 @@ app.post('/api/admin/notices', requireAuth, requireRoles('official'), asyncRoute
                is_published, created_at, published_at`,
     [randomUUID(), parsed.data.title, parsed.data.category, parsed.data.summary,
       parsed.data.fullContent, parsed.data.referenceNumber.toUpperCase(), user?.id],
-  );
+    );
+    await recordAuditEvent(client, {
+      action: 'notice.created', actor: auditActor(request), resourceId: String(inserted.rows[0].id),
+      metadata: { category: parsed.data.category, reference_number: parsed.data.referenceNumber.toUpperCase(), is_published: false },
+    });
+    return inserted.rows;
+  });
   response.status(201).json({ notice: rows[0] });
 }));
 
@@ -231,14 +246,23 @@ app.patch('/api/admin/notices/:id', requireAuth, requireRoles('official'), requi
     sendValidationError(response, parsed.error);
     return;
   }
-  const { rows } = await pool.query(
+  const rows = await inAuditedTransaction(async (client) => {
+    const updated = await client.query(
     `UPDATE portal_notices
      SET is_published = $2, published_at = CASE WHEN $2 THEN now() ELSE published_at END
      WHERE id = $1
      RETURNING id, title, category, summary, full_content, reference_number,
                is_published, created_at, published_at`,
     [request.params.id, parsed.data.isPublished],
-  );
+    );
+    if (updated.rows[0]) {
+      await recordAuditEvent(client, {
+        action: 'notice.publication_changed', actor: auditActor(request), resourceId: String(updated.rows[0].id),
+        metadata: { is_published: parsed.data.isPublished },
+      });
+    }
+    return updated.rows;
+  });
   if (!rows[0]) {
     response.status(404).json({ error: 'Notice not found.' });
     return;
@@ -375,7 +399,7 @@ app.get('/api/admin/dashboard-stats', requireAuth, requireRoles('official'), asy
   });
 }));
 
-app.get('/api/admin/data-export', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (_request, response) => {
+app.get('/api/admin/data-export', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const workbook = new ExcelJS.Workbook();
   const [
     users, applications, exams, admitCards, checkins, feedback, attempts, results, answerKeys, onlineQuestions, onlineAttempts, notices,
@@ -423,6 +447,11 @@ app.get('/api/admin/data-export', requireAuth, requireRoles('official'), require
     addWorkbookSheet(workbook, name, headers, rows as Array<Record<string, unknown>>);
   }
   const buffer = await workbook.xlsx.writeBuffer();
+  // A-07/A-11: the export is recorded before any data leaves; if the record fails, nothing is sent.
+  await inAuditedTransaction((client) => recordAuditEvent(client, {
+    action: 'data_export.generated', actor: auditActor(request),
+    metadata: { sheet_count: sheets.length, row_count: sheets.reduce((total, [, rows]) => total + rows.length, 0) },
+  }));
   response.type(WORKBOOK_MIME_TYPE);
   response.setHeader('Content-Disposition', 'attachment; filename="eltnoy-admin-data.xlsx"');
   response.send(Buffer.from(buffer));
@@ -486,6 +515,10 @@ app.post('/api/admin/admit-cards/import', requireAuth, requireRoles('official'),
           card.gateClosingTime, card.examTiming, card.centerCode.toUpperCase(), card.centerName, card.centerAddress],
       );
     }
+    await recordAuditEvent(client, {
+      action: 'admit_cards.imported', actor: auditActor(request),
+      metadata: { row_count: parsed.length, exam_codes: [...new Set(parsed.flatMap((item) => item.success ? [item.data.examCode.toUpperCase()] : []))].sort() },
+    });
     await client.query('COMMIT');
     response.status(201).json({ imported: parsed.length });
   } catch (error) {
@@ -560,6 +593,10 @@ app.post('/api/admin/answer-keys/import', requireAuth, requireRoles('official'),
         return;
       }
     }
+    await recordAuditEvent(client, {
+      action: 'answer_keys.imported', actor: auditActor(request),
+      metadata: { row_count: parsed.length, exam_codes: examCodes },
+    });
     await client.query('COMMIT');
     response.status(201).json({ imported: parsed.length });
   } catch (error) {
@@ -652,6 +689,10 @@ app.post('/api/admin/online-exams/import', requireAuth, requireRoles('official')
         return;
       }
     }
+    await recordAuditEvent(client, {
+      action: 'online_exams.imported', actor: auditActor(request),
+      metadata: { row_count: parsed.length, exam_codes: [...exams].sort() },
+    });
     await client.query('COMMIT');
     response.status(201).json({ examCode: [...exams][0], imported: parsed.length, published: false });
   } catch (error) {
@@ -742,6 +783,10 @@ app.post('/api/admin/results/import', requireAuth, requireRoles('official'), wor
         return;
       }
     }
+    await recordAuditEvent(client, {
+      action: 'results.imported', actor: auditActor(request),
+      metadata: { row_count: normalizedRows.length, exam_codes: [...new Set(normalizedRows.map((row) => row.examCode.toUpperCase()))].sort() },
+    });
     await client.query('COMMIT');
     response.status(201).json({ imported: normalizedRows.length, published: false });
   } catch (error) {
@@ -759,10 +804,20 @@ app.patch('/api/admin/answer-keys/:examCode', requireAuth, requireRoles('officia
     sendValidationError(response, parsed.error);
     return;
   }
-  const { rowCount } = await pool.query(
-    'UPDATE answer_key_questions SET is_published = $2 WHERE exam_code = $1',
-    [request.params.examCode.toUpperCase(), parsed.data.isPublished],
-  );
+  const examCode = request.params.examCode.toUpperCase();
+  const rowCount = await inAuditedTransaction(async (client) => {
+    const updated = await client.query(
+      'UPDATE answer_key_questions SET is_published = $2 WHERE exam_code = $1',
+      [examCode, parsed.data.isPublished],
+    );
+    if (updated.rowCount) {
+      await recordAuditEvent(client, {
+        action: 'answer_key.publication_changed', actor: auditActor(request), resourceId: examCode,
+        metadata: { is_published: parsed.data.isPublished, question_count: updated.rowCount },
+      });
+    }
+    return updated.rowCount;
+  });
   if (!rowCount) {
     response.status(404).json({ error: 'No answer key questions found for this exam.' });
     return;
@@ -777,10 +832,20 @@ app.patch('/api/admin/online-exams/:examCode', requireAuth, requireRoles('offici
     sendValidationError(response, parsed.error);
     return;
   }
-  const { rowCount } = await pool.query(
-    'UPDATE online_exam_questions SET is_published = $2 WHERE exam_code = $1',
-    [request.params.examCode.toUpperCase(), parsed.data.isPublished],
-  );
+  const examCode = request.params.examCode.toUpperCase();
+  const rowCount = await inAuditedTransaction(async (client) => {
+    const updated = await client.query(
+      'UPDATE online_exam_questions SET is_published = $2 WHERE exam_code = $1',
+      [examCode, parsed.data.isPublished],
+    );
+    if (updated.rowCount) {
+      await recordAuditEvent(client, {
+        action: 'online_exam.publication_changed', actor: auditActor(request), resourceId: examCode,
+        metadata: { is_published: parsed.data.isPublished, question_count: updated.rowCount },
+      });
+    }
+    return updated.rowCount;
+  });
   if (!rowCount) {
     response.status(404).json({ error: 'No online exam questions found for this exam.' });
     return;
@@ -1293,6 +1358,10 @@ app.patch('/api/admin/institutes/:id', requireAuth, requireRoles('official'), as
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [randomUUID(), current.id, current.account_status, parsed.data.status, reviewer?.id, parsed.data.reason],
     );
+    await recordAuditEvent(client, {
+      action: 'institution.status_changed', actor: auditActor(request), organizationId: String(current.id), resourceId: String(current.id),
+      metadata: { previous_status: String(current.account_status), new_status: parsed.data.status, reason_text: parsed.data.reason },
+    });
     const { rows: submissionSchemaRows } = await client.query(
       `SELECT to_regclass('institution_submission_capabilities') AS capabilities_table,
               to_regclass('institution_submission_cycles') AS cycles_table`,
@@ -1398,7 +1467,8 @@ app.post('/api/center/forms', requireAuth, requireRoles('center'), asyncRoute(as
     return;
   }
   const user = getUser(request);
-  const { rows } = await pool.query(
+  const rows = await inAuditedTransaction(async (client) => {
+    const inserted = await client.query(
     `INSERT INTO institute_forms
      (id, institute_id, form_type, title, description, eligibility, application_deadline, external_url)
      VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::date, NULLIF($8, ''))
@@ -1406,7 +1476,13 @@ app.post('/api/center/forms', requireAuth, requireRoles('center'), asyncRoute(as
                external_url, status, created_at`,
     [randomUUID(), user?.id, parsed.data.formType, parsed.data.title, parsed.data.description,
       parsed.data.eligibility, parsed.data.applicationDeadline || '', parsed.data.externalUrl || ''],
-  );
+    );
+    await recordAuditEvent(client, {
+      action: 'institution.form_submitted', actor: auditActor(request), organizationId: user?.id ?? null,
+      resourceId: String(inserted.rows[0].id), metadata: { form_type: parsed.data.formType },
+    });
+    return inserted.rows;
+  });
   response.status(201).json({ form: rows[0] });
 }));
 
@@ -1427,7 +1503,8 @@ app.post('/api/center/profile-changes', requireAuth, requireRoles('center'), asy
   }
   const user = getUser(request);
   try {
-    const { rows } = await pool.query(
+    const rows = await inAuditedTransaction(async (client) => {
+      const inserted = await client.query(
       `INSERT INTO institute_profile_changes
        (id, institute_id, display_name, contact_email, registration_number, registered_address, website)
        VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
@@ -1435,7 +1512,15 @@ app.post('/api/center/profile-changes', requireAuth, requireRoles('center'), asy
                  website, status, created_at`,
       [randomUUID(), user?.id, parsed.data.displayName, parsed.data.contactEmail.toLowerCase(),
         parsed.data.registrationNumber, parsed.data.registeredAddress, parsed.data.website || ''],
-    );
+      );
+      // Field names only: the requested values stay in institute_profile_changes.
+      await recordAuditEvent(client, {
+        action: 'institution.profile_change_requested', actor: auditActor(request), organizationId: user?.id ?? null,
+        resourceId: String(inserted.rows[0].id),
+        metadata: { changed_fields: ['display_name', 'contact_email', 'registration_number', 'registered_address', 'website'] },
+      });
+      return inserted.rows;
+    });
     response.status(201).json({ profileChange: rows[0] });
   } catch (error) {
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
@@ -1479,6 +1564,10 @@ app.post('/api/center/withdrawals', requireAuth, requireRoles('center'), asyncRo
        RETURNING id, amount_paise, status, transfer_reference, created_at`,
       [randomUUID(), user?.id, parsed.data.amountPaise],
     );
+    await recordAuditEvent(client, {
+      action: 'withdrawal.requested', actor: auditActor(request), organizationId: user?.id ?? null,
+      resourceId: String(rows[0].id), metadata: { amount_paise: parsed.data.amountPaise },
+    });
     await client.query('COMMIT');
     response.status(201).json({ withdrawal: rows[0] });
   } catch (error) {
@@ -1537,12 +1626,21 @@ app.patch('/api/admin/institute-forms/:id', requireAuth, requireRoles('official'
     return;
   }
   const user = getUser(request);
-  const { rows } = await pool.query(
-    `UPDATE institute_forms SET status = $2, reviewed_by = $3, reviewed_at = now()
-     WHERE id = $1 AND status = 'pending'
-     RETURNING id, status`,
-    [request.params.id, parsed.data.status, user?.id],
-  );
+  const rows = await inAuditedTransaction(async (client) => {
+    const updated = await client.query(
+      `UPDATE institute_forms SET status = $2, reviewed_by = $3, reviewed_at = now()
+       WHERE id = $1 AND status = 'pending'
+       RETURNING id, status, institute_id`,
+      [request.params.id, parsed.data.status, user?.id],
+    );
+    if (updated.rows[0]) {
+      await recordAuditEvent(client, {
+        action: 'institution.form_decided', actor: auditActor(request), organizationId: String(updated.rows[0].institute_id),
+        resourceId: String(updated.rows[0].id), metadata: { decision: parsed.data.status },
+      });
+    }
+    return updated.rows.map((row: Record<string, unknown>) => ({ id: row.id, status: row.status }));
+  });
   if (!rows[0]) {
     response.status(404).json({ error: 'Pending institute form not found.' });
     return;
@@ -1584,6 +1682,11 @@ app.patch('/api/admin/institute-profile-changes/:id', requireAuth, requireRoles(
        WHERE id = $1`,
       [change.id, parsed.data.status, user?.id],
     );
+    await recordAuditEvent(client, {
+      action: 'institution.profile_change_decided', actor: auditActor(request), organizationId: String(change.institute_id),
+      resourceId: String(change.id),
+      metadata: { decision: parsed.data.status, changed_fields: ['display_name', 'contact_email', 'registration_number', 'registered_address', 'website'] },
+    });
     await client.query('COMMIT');
     response.json({ profileChange: { id: change.id, status: parsed.data.status } });
   } catch (error) {
@@ -1595,6 +1698,9 @@ app.patch('/api/admin/institute-profile-changes/:id', requireAuth, requireRoles(
 }));
 
 // P0-3 (A-02): wallet credits are Super Admin-only.
+/** Read-only: whether a payment reference is already in the ledger (explains a refused credit). */
+export const CREDIT_REFERENCE_EXISTS_SQL = 'SELECT EXISTS (SELECT 1 FROM institute_wallet_entries WHERE payment_reference = $1) AS exists';
+
 app.post('/api/admin/institutes/:id/credits', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({
     amountPaise: z.number().int().positive().max(1_000_000_000_000),
@@ -1606,7 +1712,9 @@ app.post('/api/admin/institutes/:id/credits', requireAuth, requireRoles('officia
     return;
   }
   const user = getUser(request);
-  const { rows } = await pool.query(
+  let failureReason: 'duplicate_payment_reference' | 'institute_not_eligible' | null = null;
+  const rows = await inAuditedTransaction(async (client) => {
+    const inserted = await client.query(
     `INSERT INTO institute_wallet_entries
      (id, institute_id, entry_type, amount_paise, description, payment_reference, created_by)
      SELECT $1, id, 'credit', $3, $4, $5, $6 FROM users
@@ -1615,8 +1723,27 @@ app.post('/api/admin/institutes/:id/credits', requireAuth, requireRoles('officia
      RETURNING id, institute_id, amount_paise, description, payment_reference, created_at`,
     [randomUUID(), request.params.id, parsed.data.amountPaise, parsed.data.description,
       parsed.data.paymentReference, user?.id],
-  );
+    );
+    const entry = inserted.rows[0];
+    if (entry) {
+      await recordAuditEvent(client, {
+        action: 'wallet.credited', actor: auditActor(request), organizationId: String(entry.institute_id), resourceId: String(entry.id),
+        metadata: { amount_paise: parsed.data.amountPaise, payment_reference: parsed.data.paymentReference },
+      });
+    }
+    else {
+      // Nothing was written: find out why, for the audit record only (the answer stays the same).
+      const duplicate = await client.query(CREDIT_REFERENCE_EXISTS_SQL, [parsed.data.paymentReference]);
+      failureReason = duplicate.rows[0]?.exists === true ? 'duplicate_payment_reference' : 'institute_not_eligible';
+    }
+    return inserted.rows;
+  });
   if (!rows[0]) {
+    // Proposal §7: wallet.credit_failed, recorded after the transaction; never changes the answer.
+    await recordRefusedAuditEvent(pool, {
+      action: 'wallet.credit_failed', outcome: 'failed', reasonCode: failureReason ?? 'institute_not_eligible', actor: auditActor(request),
+      organizationId: request.params.id, metadata: { amount_paise: parsed.data.amountPaise, payment_reference: parsed.data.paymentReference },
+    });
     response.status(409).json({ error: 'Institute was not found or this payment reference has already been credited.' });
     return;
   }
@@ -1662,6 +1789,18 @@ function sendWithdrawalConflict(response: Response, code: string, error: string)
   response.status(409).json({ error, code });
 }
 
+/** AL-4.8: a refused withdrawal payment is recorded after its rollback (never blocks the answer). */
+async function recordPaymentRefusal(request: Request, withdrawal: Record<string, unknown>, reasonCode: string): Promise<void> {
+  await recordRefusedAuditEvent(pool, {
+    action: 'withdrawal.payment_refused', outcome: 'denied', reasonCode, actor: auditActor(request),
+    organizationId: String(withdrawal.institute_id), resourceId: String(withdrawal.id),
+    metadata: {
+      amount_paise: Number(withdrawal.amount_paise),
+      approver_user_id: withdrawal.reviewed_by === null || withdrawal.reviewed_by === undefined ? undefined : String(withdrawal.reviewed_by),
+    },
+  });
+}
+
 app.patch('/api/admin/institute-withdrawals/:id', requireAuth, requireRoles('official'), requireSuperAdmin, asyncRoute(async (request, response) => {
   const parsed = z.object({
     status: z.enum(['approved', 'rejected', 'paid']),
@@ -1697,12 +1836,14 @@ app.patch('/api/admin/institute-withdrawals/:id', requireAuth, requireRoles('off
     if (parsed.data.status === 'paid') {
       if (withdrawal.reviewed_by === null || withdrawal.reviewed_by === undefined) {
         await client.query('ROLLBACK');
+        await recordPaymentRefusal(request, withdrawal, 'approver_unknown');
         sendWithdrawalConflict(response, 'approver_unknown',
           'This withdrawal has no recorded approver, so it cannot be paid. Reject it and ask the institute to request it again.');
         return;
       }
       if (withdrawal.reviewed_by === user.id) {
         await client.query('ROLLBACK');
+        await recordPaymentRefusal(request, withdrawal, 'maker_checker');
         sendWithdrawalConflict(response, 'maker_checker',
           'You approved this withdrawal, so a different Super Admin must mark it paid.');
         return;
@@ -1710,6 +1851,7 @@ app.patch('/api/admin/institute-withdrawals/:id', requireAuth, requireRoles('off
       const { rows: admins } = await client.query(WITHDRAWAL_SQL.activeSuperAdmins);
       if (!(Number(admins[0]?.active_super_admins) >= MIN_ACTIVE_SUPER_ADMINS_FOR_PAYMENT)) {
         await client.query('ROLLBACK');
+        await recordPaymentRefusal(request, withdrawal, 'insufficient_super_admins');
         sendWithdrawalConflict(response, 'insufficient_super_admins',
           'Withdrawal payments need at least two active Super Admin accounts.');
         return;
@@ -1724,11 +1866,26 @@ app.patch('/api/admin/institute-withdrawals/:id', requireAuth, requireRoles('off
         [withdrawal.id, parsed.data.status, user.id, withdrawal.status]));
     }
     if (updated.length !== 1) throw new Error('Withdrawal update did not affect exactly one row.');
+    await recordAuditEvent(client, parsed.data.status === 'paid'
+      ? {
+        action: 'withdrawal.paid', actor: auditActor(request), organizationId: String(withdrawal.institute_id), resourceId: String(withdrawal.id),
+        metadata: { amount_paise: Number(withdrawal.amount_paise), approver_user_id: String(withdrawal.reviewed_by), transfer_reference: parsed.data.transferReference },
+      }
+      : {
+        action: parsed.data.status === 'approved' ? 'withdrawal.approved' : 'withdrawal.rejected', actor: auditActor(request),
+        organizationId: String(withdrawal.institute_id), resourceId: String(withdrawal.id),
+        metadata: { amount_paise: Number(withdrawal.amount_paise), previous_status: String(withdrawal.status) },
+      });
     await client.query('COMMIT');
     response.json({ withdrawal: updated[0] });
   } catch (error) {
     await client.query('ROLLBACK');
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      // Proposal §7: the payment rolled back on a duplicate transfer reference.
+      await recordRefusedAuditEvent(pool, {
+        action: 'withdrawal.payment_failed', outcome: 'failed', reasonCode: 'duplicate_transfer_reference', actor: auditActor(request),
+        resourceId: request.params.id,
+      });
       response.status(409).json({ error: 'This transfer reference has already been recorded.' });
       return;
     }
@@ -1765,7 +1922,8 @@ app.post('/api/admin/exams', requireAuth, requireRoles('official'), asyncRoute(a
     response.status(400).json({ error: 'Registration closing date must be on or after the opening date.' });
     return;
   }
-  const { rows } = await pool.query(
+  const rows = await inAuditedTransaction(async (client) => {
+    const inserted = await client.query(
     `INSERT INTO exams
      (id, code, name, category, target_audience, registration_start, registration_end, exam_date,
       time_zone, fee, duration, mode, shifts)
@@ -1774,7 +1932,13 @@ app.post('/api/admin/exams', requireAuth, requireRoles('official'), asyncRoute(a
                exam_date, time_zone, fee, duration, mode, shifts, is_published`,
     [randomUUID(), exam.code.toUpperCase(), exam.name, exam.category, exam.targetAudience,
       exam.regStart, exam.regEnd, exam.examDate, exam.timeZone, exam.fee, exam.duration, exam.mode, exam.shifts],
-  );
+    );
+    await recordAuditEvent(client, {
+      action: 'exam.created', actor: auditActor(request), resourceId: String(inserted.rows[0].id),
+      metadata: { exam_code: exam.code.toUpperCase(), is_published: Boolean(inserted.rows[0].is_published) },
+    });
+    return inserted.rows;
+  });
   response.status(201).json({ exam: toExam(rows[0]) });
 }));
 
@@ -1784,13 +1948,22 @@ app.patch('/api/admin/exams/:id', requireAuth, requireRoles('official'), asyncRo
     sendValidationError(response, parsed.error);
     return;
   }
-  const { rows } = await pool.query(
+  const rows = await inAuditedTransaction(async (client) => {
+    const updated = await client.query(
     `UPDATE exams SET is_published = $2, updated_at = now()
      WHERE id = $1
      RETURNING id, code, name, category, target_audience, registration_start, registration_end,
                exam_date, time_zone, fee, duration, mode, shifts, is_published`,
     [request.params.id, parsed.data.isPublished],
-  );
+    );
+    if (updated.rows[0]) {
+      await recordAuditEvent(client, {
+        action: 'exam.updated', actor: auditActor(request), resourceId: String(updated.rows[0].id),
+        metadata: { exam_code: String(updated.rows[0].code), is_published: parsed.data.isPublished },
+      });
+    }
+    return updated.rows;
+  });
   if (!rows[0]) {
     response.status(404).json({ error: 'Exam form not found.' });
     return;
@@ -2058,6 +2231,11 @@ app.post('/api/center/resubmit', authLimiter, asyncRoute(async (request, respons
       sourceReference: submissionReference,
     });
     const capabilityIssue = await issueSubmissionCapability(client, String(account.id), cycleId);
+    // The institute proved its password on this request (no session exists for a rejected account).
+    await recordAuditEvent(client, {
+      action: 'institution.resubmitted', actor: { type: 'user', userId: String(account.id), role: 'center' },
+      organizationId: String(account.id), resourceId: String(account.id),
+    });
     await client.query('COMMIT');
     setInstitutionSubmissionCookie(response, capabilityIssue);
     response.status(200).json({
@@ -2328,10 +2506,19 @@ app.get('/api/auth/me', requireAuth, asyncRoute(async (request, response) => {
 
 app.post('/api/auth/logout', requireAuth, asyncRoute(async (request, response) => {
   const authRequest = request as AuthenticatedRequest;
-  await pool.query(
-    'UPDATE auth_sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL',
-    [authRequest.sessionTokenHash],
-  );
+  await inAuditedTransaction(async (client) => {
+    const revoked = await client.query(
+      'UPDATE auth_sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL',
+      [authRequest.sessionTokenHash],
+    );
+    // The session token (or its hash) is never recorded; the actor and time are enough.
+    if (revoked.rowCount) {
+      await recordAuditEvent(client, {
+        action: 'session.logged_out', actor: auditActor(request),
+        organizationId: authRequest.user?.role === 'center' ? authRequest.user.id : null,
+      });
+    }
+  });
   response.clearCookie('elt_session', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
@@ -2390,11 +2577,21 @@ app.patch('/api/admin/feedback/:id', requireAuth, requireRoles('official'), requ
     sendValidationError(response, parsed.error);
     return;
   }
-  const { rows } = await pool.query(
-    `UPDATE feedback SET status = $2, resolution_note = $3
-     WHERE id = $1 RETURNING *`,
-    [request.params.id, parsed.data.status, parsed.data.resolutionNote ?? null],
-  );
+  const rows = await inAuditedTransaction(async (client) => {
+    const updated = await client.query(
+      `UPDATE feedback SET status = $2, resolution_note = $3
+       WHERE id = $1 RETURNING *`,
+      [request.params.id, parsed.data.status, parsed.data.resolutionNote ?? null],
+    );
+    if (updated.rows[0]) {
+      // The ticket text and resolution note stay in `feedback`; only the status is recorded.
+      await recordAuditEvent(client, {
+        action: 'helpdesk.ticket_updated', actor: auditActor(request), resourceId: String(updated.rows[0].id),
+        metadata: { new_status: parsed.data.status },
+      });
+    }
+    return updated.rows;
+  });
   if (!rows[0]) {
     response.status(404).json({ error: 'Feedback ticket not found.' });
     return;
@@ -2548,10 +2745,19 @@ app.patch('/api/admin/applications/:id', requireAuth, requireRoles('official'), 
     sendValidationError(response, parsed.error);
     return;
   }
-  const { rows } = await pool.query(
-    'UPDATE applications SET status = $2 WHERE id = $1 RETURNING id, application_number, status',
-    [request.params.id, parsed.data.status],
-  );
+  const rows = await inAuditedTransaction(async (client) => {
+    const updated = await client.query(
+      'UPDATE applications SET status = $2 WHERE id = $1 RETURNING id, application_number, status',
+      [request.params.id, parsed.data.status],
+    );
+    if (updated.rows[0]) {
+      await recordAuditEvent(client, {
+        action: 'application.status_changed', actor: auditActor(request), resourceId: String(updated.rows[0].id),
+        metadata: { new_status: parsed.data.status },
+      });
+    }
+    return updated.rows;
+  });
   if (!rows[0]) {
     response.status(404).json({ error: 'Application not found.' });
     return;
@@ -2582,7 +2788,17 @@ app.post('/api/admin/applications/:id/verify-ownership', requireAuth, requireRol
     ...parsed.data,
     verifierId: verifier!.id,
   });
-  const { rows } = await pool.query(query.text, query.values);
+  const rows = await inAuditedTransaction(async (client) => {
+    const linked = await client.query(query.text, query.values);
+    if (linked.rows[0]) {
+      // The candidate's login ID and date of birth are never recorded (A-08, E-07).
+      await recordAuditEvent(client, {
+        action: 'application.ownership_linked', actor: auditActor(request), resourceId: request.params.id,
+        metadata: { verification_method: parsed.data.verificationMethod },
+      });
+    }
+    return linked.rows;
+  });
   if (!rows[0]) {
     response.status(404).json({
       error: 'Legacy application was not found, is already linked, or candidate verification did not match.',
@@ -2629,7 +2845,8 @@ app.put('/api/admin/applications/:id/admit-card', requireAuth, requireRoles('off
     response.status(404).json({ error: 'Application not found.' });
     return;
   }
-  const { rows } = await pool.query(
+  const rows = await inAuditedTransaction(async (client) => {
+    const written = await client.query(
     `INSERT INTO admit_cards
      (application_id, roll_number, exam_date, reporting_time, gate_closing_time, exam_timing, center_code, center_name, center_address)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -2642,7 +2859,15 @@ app.put('/api/admin/applications/:id/admit-card', requireAuth, requireRoles('off
      RETURNING *`,
     [request.params.id, data.rollNumber.toUpperCase(), data.examDate, data.reportingTime,
       data.gateClosingTime, data.examTiming, data.centerCode.toUpperCase(), data.centerName, data.centerAddress],
-  );
+    );
+    if (written.rows[0]) {
+      await recordAuditEvent(client, {
+        action: 'admit_card.assigned', actor: auditActor(request), resourceId: request.params.id,
+        metadata: { center_code: data.centerCode.toUpperCase() },
+      });
+    }
+    return written.rows;
+  });
   if (!rows[0]) {
     response.status(404).json({ error: 'Application not found.' });
     return;
@@ -2680,7 +2905,8 @@ app.post('/api/center/checkins', requireAuth, requireRoles('center'), asyncRoute
     response.status(404).json({ error: 'No candidate assigned to this center matches those details.' });
     return;
   }
-  const { rows } = await pool.query(
+  const rows = await inAuditedTransaction(async (client) => {
+    const written = await client.query(
     `INSERT INTO center_checkins (id, application_id, center_code, status, note, updated_by)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (application_id, center_code) DO UPDATE SET
@@ -2688,7 +2914,14 @@ app.post('/api/center/checkins', requireAuth, requireRoles('center'), asyncRoute
      RETURNING id, status, note, updated_at`,
     [randomUUID(), application.rows[0].id, centerCode, parsed.data.status,
       parsed.data.note || null, user?.id],
-  );
+    );
+    // The note and candidate details stay in center_checkins; only the status is recorded.
+    await recordAuditEvent(client, {
+      action: 'checkin.recorded', actor: auditActor(request), organizationId: user?.id ?? null,
+      resourceId: String(written.rows[0].id), metadata: { status: parsed.data.status },
+    });
+    return written.rows;
+  });
   response.status(200).json({ checkin: rows[0] });
 }));
 
@@ -2818,14 +3051,25 @@ app.post('/api/admin/results', requireAuth, requireRoles('official'), asyncRoute
   // replacing a published row (a correction) is Super Admin-only and returns it to draft.
   // Publishing is a separate Super Admin action (PATCH /api/admin/results/:id).
   const superAdmin = getUser(request)?.isSuperAdmin === true;
-  const { rows, rowCount } = await pool.query(
-    superAdmin ? RESULT_UPSERT_SQL.draft : RESULT_UPSERT_SQL.draftOnlyOverDrafts,
-    [randomUUID(), result.applicationNumber.toUpperCase(), result.rollNumber.toUpperCase(),
-      result.examCode.toUpperCase(), result.dateOfBirth, result.scorecard],
-  );
-  if (rowCount !== 1 || !rows[0]) {
-    if (superAdmin) throw new Error('Result write did not affect exactly one row.');
-    // Single statement: a 0-row outcome means nothing was written.
+  const rows = await inAuditedTransaction(async (client) => {
+    const written = await client.query(
+      superAdmin ? RESULT_UPSERT_SQL.draft : RESULT_UPSERT_SQL.draftOnlyOverDrafts,
+      [randomUUID(), result.applicationNumber.toUpperCase(), result.rollNumber.toUpperCase(),
+        result.examCode.toUpperCase(), result.dateOfBirth, result.scorecard],
+    );
+    if (written.rowCount !== 1 || !written.rows[0]) {
+      if (superAdmin) throw new Error('Result write did not affect exactly one row.');
+      // A 0-row outcome means nothing was written; nothing is recorded either.
+      return null;
+    }
+    // Scores and the scorecard are never copied into the audit trail.
+    await recordAuditEvent(client, {
+      action: 'result.written', actor: auditActor(request), resourceId: String(written.rows[0].id),
+      metadata: { exam_code: result.examCode.toUpperCase() },
+    });
+    return written.rows;
+  });
+  if (!rows) {
     sendPublishedContentForbidden(response, 'result');
     return;
   }
@@ -2839,11 +3083,20 @@ app.patch('/api/admin/results/:id', requireAuth, requireRoles('official'), requi
     sendValidationError(response, parsed.error);
     return;
   }
-  const { rows } = await pool.query(
-    `UPDATE published_results SET is_published = $2
-     WHERE id = $1 RETURNING id, application_number, roll_number, exam_code, published_at, is_published`,
-    [request.params.id, parsed.data.isPublished],
-  );
+  const rows = await inAuditedTransaction(async (client) => {
+    const updated = await client.query(
+      `UPDATE published_results SET is_published = $2
+       WHERE id = $1 RETURNING id, application_number, roll_number, exam_code, published_at, is_published`,
+      [request.params.id, parsed.data.isPublished],
+    );
+    if (updated.rows[0]) {
+      await recordAuditEvent(client, {
+        action: 'result.publication_changed', actor: auditActor(request), resourceId: String(updated.rows[0].id),
+        metadata: { is_published: parsed.data.isPublished, exam_code: String(updated.rows[0].exam_code) },
+      });
+    }
+    return updated.rows;
+  });
   if (!rows[0]) {
     response.status(404).json({ error: 'Result record not found.' });
     return;
@@ -2952,6 +3205,10 @@ app.use('/api', platformStaff.adminRouter);
 app.use('/api', createAuthVerificationRouter());
 // AUTH-1 / SM-2: Super Admin institutional verification and suspension (separate from Official approval).
 app.use('/api', createInstituteVerificationAdminRouter());
+// A-12: Super Admin-only audit-log viewer (server/auditRoutes.ts).
+app.use('/api', createAuditRouter());
+// Merit List Engine foundation: Super Admin-only draft merit lists (server/meritListRoutes.ts).
+app.use('/api', createMeritListRouter());
 const organizationStaff = createOrgStaffRouters({ store: createPostgresOrgStaffStore(pool) });
 app.use('/api', organizationStaff.ownerRouter);
 app.use('/api', organizationStaff.staffRouter);

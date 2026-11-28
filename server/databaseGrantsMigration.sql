@@ -145,6 +145,11 @@ BEGIN
     ('account_contacts',                     'SELECT, INSERT',         ARRAY['destination', 'verified_at']),
     ('auth_session_verifications',           'SELECT, INSERT',         NULL),
     ('auth_verification_events',             'SELECT, INSERT',         NULL),
+    -- A-11 platform audit trail (auditEventsMigration.sql): append-only, so INSERT and SELECT only.
+    -- SELECT serves the Super Admin viewer; A-12 (Super Admin only) is enforced by the API routes.
+    ('audit_events',                         'SELECT, INSERT',         NULL),
+    -- Merit List Engine foundation (meritListMigration.sql): append-only draft versions.
+    ('merit_list_snapshots',                 'SELECT, INSERT',         NULL),
     ('google_identities',                    'SELECT, INSERT',         NULL),
     ('institute_verifications',              'SELECT, INSERT',         ARRAY['mobile_destination', 'mobile_verified_at', 'email_destination', 'email_verified_at', 'updated_at', 'institutional_status', 'institutional_decided_at', 'institutional_decided_by', 'suspended_at', 'suspended_by']),
     ('oauth_states',                         'SELECT, INSERT',         ARRAY['consumed_at']),

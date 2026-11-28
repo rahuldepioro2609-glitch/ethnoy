@@ -265,6 +265,11 @@ test('bootstrap + every wired migration (one transaction, as the owner) + idempo
     [{ inherit_option: false, set_option: true, admin_option: false }]);
 });
 
+/** A-11 (auditEventsMigration.sql): append-only, so SELECT and INSERT only, no UPDATE columns. */
+const AUDIT_TABLE = 'audit_events';
+/** Merit List Engine foundation (meritListMigration.sql): append-only draft versions. */
+const MERIT_TABLE = 'merit_list_snapshots';
+
 test('catalog privileges for eltnoy_app equal the manifest exactly', { skip }, async () => {
   const sql = (await readServerFile('databaseGrantsMigration.sql')).replace(/--[^\n]*/g, '');
   const rows = [...sql.matchAll(/\('(\w+)',\s*'([A-Z, ]+)',\s*(NULL(?:::text\[\])?|ARRAY\[([^\]]*)\](?:::text\[\])?)\)/g)];
@@ -272,7 +277,7 @@ test('catalog privileges for eltnoy_app equal the manifest exactly', { skip }, a
   // claims, MFA and Staff tables, and exactly the tables the wired migrations created here.
   const manifestTables = rows.map(([, table]) => table).sort();
   assert.equal(new Set(manifestTables).size, manifestTables.length, 'no table is listed twice');
-  assert.deepEqual(manifestTables, [...PRE_AUTH1_TABLES, ...Object.keys(AUTH1_GRANTS), C1_CLAIMS_TABLE, ...Object.keys(MFA_GRANTS), ...Object.keys(STAFF_GRANTS)].sort(), 'manifest = 24 existing + 7 AUTH-1 + 1 AUTH C1 + 6 MFA + 14 Staff tables');
+  assert.deepEqual(manifestTables, [...PRE_AUTH1_TABLES, ...Object.keys(AUTH1_GRANTS), C1_CLAIMS_TABLE, ...Object.keys(MFA_GRANTS), ...Object.keys(STAFF_GRANTS), AUDIT_TABLE, MERIT_TABLE].sort(), 'manifest = 24 existing + 7 AUTH-1 + 1 AUTH C1 + 6 MFA + 14 Staff tables + audit_events + merit_list_snapshots');
   // Sorted in JS on both sides: the database collation may order underscores differently.
   // Legacy Render tables may be absent from a fresh database; if present, each remains manifest-listed.
   const catalogTables = (await q("SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')")).map((r) => String(r.relname)).sort();
@@ -1262,14 +1267,22 @@ test('AUTH C1.8: factors: one active per user and kind, Officials only, encrypte
     assert.equal((await ok(guard(999))).length, 0, 'an older step');
     assert.equal((await ok(guard(1001))).length, 1, 'a later step');
     await fails(`UPDATE admin_mfa_factors SET last_used_step = 5 WHERE id = 'f-${P}sa1'`, /can only increase/);
-    await fails(`UPDATE admin_mfa_factors SET confirmed_at = now() WHERE id = 'f-${P}sa1'`, /confirmed_at is set once/);
+    // Two layers: the API role has no UPDATE grant on confirmed_at at all (confirmation goes only through
+    // confirm_admin_mfa_enrolment_factor), and even the owner is stopped by the set-once trigger.
+    await fails(`UPDATE admin_mfa_factors SET confirmed_at = now() WHERE id = 'f-${P}sa1'`, /permission denied for table admin_mfa_factors/);
+    // (now() is the transaction start, equal to the stored value inside this one-transaction scenario, so a
+    // genuinely different time is used.)
+    await fails(`UPDATE admin_mfa_factors SET confirmed_at = confirmed_at + interval '1 second' WHERE id = 'f-${P}sa1'`, /confirmed_at is set once/, 'eltnoy_owner');
 
     // Disable (reset): consistent columns, then terminal; a new factor may then be enrolled.
     await fails(`UPDATE admin_mfa_factors SET disabled_at = now() WHERE id = 'f-${P}sa3'`, /admin_mfa_factors_disabled_pair_check/);
     await ok(`UPDATE admin_mfa_factors SET disabled_at = now(), disabled_by = '${P}sa2', disabled_via = 'two_person_reset' WHERE id = 'f-${P}sa3'`);
     await fails(`UPDATE admin_mfa_factors SET last_used_step = 99999 WHERE id = 'f-${P}sa3'`, /disabled admin MFA factor cannot change/);
     await fails(`UPDATE admin_mfa_factors SET disabled_at = NULL, disabled_via = NULL, disabled_by = NULL WHERE id = 'f-${P}sa3'`, /disabled admin MFA factor cannot change/, 'eltnoy_owner');
-    await ok(factor('it-f-new', `${P}sa3`, hex('b')));
+    // O-4-A: a new factor needs ITS OWN live enrolment challenge (sa1's challenge must not be reusable).
+    await fails(factor('it-f-borrowed', `${P}sa3`, hex('b')), /exact live enrolment challenge/);
+    await seedEnrolmentFixture(su, `${P}sa3`, hex('7'), hex('8'));
+    await ok(factor('it-f-new', `${P}sa3`, hex('8')));
     assert.equal((await ok(`UPDATE admin_mfa_factors SET last_used_step = 1 WHERE id = 'f-${P}sa3' AND disabled_at IS NULL AND last_used_step < 1 RETURNING id`)).length, 0, 'the disabled factor no longer verifies');
   });
 });
@@ -2072,5 +2085,111 @@ test('INSTITUTE DASHBOARD: center workspace aggregates stay scoped to the instit
     await q('DELETE FROM applications WHERE id LIKE $1 || \'%\'', [prefix]);
     await q('DELETE FROM institute_forms WHERE id LIKE $1 || \'%\'', [prefix]);
     await q('DELETE FROM users WHERE id = $1', [instituteId]);
+  }
+});
+
+// A-11 / A-13 (auditEventsMigration.sql): the audit trail is append-only for every role, its row hash
+// is set by the database, and its CHECKs refuse secret-looking keys and inconsistent actors. Every
+// probe runs inside one transaction that is rolled back, so nothing is left behind.
+test('audit_events: eltnoy_app can insert and read; nobody can update, delete or truncate; the hash is server-assigned', { skip }, async () => {
+  const { AUDIT_INSERT_SQL } = await import('./audit.js');
+  const values = (metadata: Record<string, unknown>, actor: [string, string | null, string] = ['user', 'it-actor', 'super_admin']) => [
+    'publishing', 'notice.created', 'succeeded', null, actor[0], actor[1], actor[2], null, 'notice', 'it-notice', JSON.stringify(metadata), 'governance',
+  ];
+  const probe = async (role: string, sql: string, params?: unknown[]): Promise<string | null> => {
+    await q('SAVEPOINT audit_probe');
+    try {
+      await q(`SET LOCAL ROLE ${role}`);
+      await q(sql, params);
+      await q('RESET ROLE');
+      await q('RELEASE SAVEPOINT audit_probe');
+      return null;
+    } catch (error) {
+      await q('ROLLBACK TO SAVEPOINT audit_probe');
+      await q('RESET ROLE');
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+  await q('BEGIN');
+  try {
+    assert.equal(await probe('eltnoy_app', AUDIT_INSERT_SQL, values({ is_published: false })), null, 'the API role can insert');
+    const [row] = await q("SELECT id, octet_length(row_hash) AS hash_bytes, metadata FROM audit_events WHERE resource_id = 'it-notice'");
+    assert.equal(row.hash_bytes, 32, 'the database sets a 32-byte SHA-256 row hash');
+    assert.deepEqual(row.metadata, { is_published: false });
+
+    // A client-supplied hash is overwritten by the trigger.
+    await q('SAVEPOINT forged');
+    await q('SET LOCAL ROLE eltnoy_app');
+    await q(`INSERT INTO audit_events (category, action, outcome, actor_type, actor_user_id, actor_role, resource_type, resource_id, metadata, retention_class, row_hash)
+             VALUES ('publishing', 'notice.created', 'succeeded', 'user', 'it-actor', 'official', 'notice', 'it-forged', '{}', 'governance', decode(repeat('00', 32), 'hex'))`);
+    await q('RESET ROLE');
+    assert.notEqual(await one("SELECT encode(row_hash, 'hex') FROM audit_events WHERE resource_id = 'it-forged'"), '0'.repeat(64));
+    await q('RELEASE SAVEPOINT forged');
+
+    for (const [role, sql, expected] of [
+      ['eltnoy_app', "UPDATE audit_events SET action = 'notice.forged' WHERE resource_id = 'it-notice'", /permission denied/],
+      ['eltnoy_app', "DELETE FROM audit_events WHERE resource_id = 'it-notice'", /permission denied/],
+      ['eltnoy_app', 'TRUNCATE audit_events', /permission denied/],
+      // Even the owner is stopped by the append-only triggers.
+      ['eltnoy_owner', "UPDATE audit_events SET action = 'notice.forged' WHERE resource_id = 'it-notice'", /append-only/],
+      ['eltnoy_owner', "DELETE FROM audit_events WHERE resource_id = 'it-notice'", /append-only/],
+      ['eltnoy_owner', 'TRUNCATE audit_events', /append-only/],
+    ] as const) {
+      assert.match(await probe(role, sql) ?? 'succeeded', expected, `${role}: ${sql}`);
+    }
+    assert.equal(await one("SELECT action FROM audit_events WHERE resource_id = 'it-notice'"), 'notice.created', 'the row is unchanged');
+
+    // Defence-in-depth CHECKs.
+    assert.match(await probe('eltnoy_app', AUDIT_INSERT_SQL, values({ password: 'x' })) ?? 'succeeded', /audit_events_no_secret_keys/);
+    assert.match(await probe('eltnoy_app', AUDIT_INSERT_SQL, values({ otp: '123456' })) ?? 'succeeded', /audit_events_no_secret_keys/);
+    assert.match(await probe('eltnoy_app', AUDIT_INSERT_SQL, values({}, ['user', null, 'official'])) ?? 'succeeded', /audit_events_actor_consistency/);
+    assert.match(await probe('eltnoy_app', AUDIT_INSERT_SQL, [...values({}).slice(0, 2), 'denied', ...values({}).slice(3)]) ?? 'succeeded', /audit_events_reason_for_refusals/);
+    assert.equal(await one("SELECT has_table_privilege('eltnoy_app', 'audit_events', 'SELECT')"), true, 'SELECT serves the Super Admin viewer (A-12 is enforced by the API)');
+  } finally {
+    await q('ROLLBACK');
+  }
+});
+
+// Merit List Engine foundation (meritListMigration.sql): draft versions are append-only for every
+// role, draft-only, and the same inputs cannot be saved twice. Rolled back; nothing is left behind.
+test('merit_list_snapshots: eltnoy_app can insert and read; versions are immutable, draft-only and duplicate-proof', { skip }, async () => {
+  const { MERIT_SQL } = await import('./meritListRoutes.js');
+  const values = (id: string, version: number, fingerprint: string) => [
+    id, 'IT-MERIT', version, 'merit-foundation-v1', fingerprint, 2, 2, 0, 0, 0, '[]', '[]', 'it-super-admin',
+  ];
+  const probe = async (role: string, sql: string, params?: unknown[]): Promise<string | null> => {
+    await q('SAVEPOINT merit_probe');
+    try {
+      await q(`SET LOCAL ROLE ${role}`);
+      await q(sql, params);
+      await q('RESET ROLE');
+      await q('RELEASE SAVEPOINT merit_probe');
+      return null;
+    } catch (error) {
+      await q('ROLLBACK TO SAVEPOINT merit_probe');
+      await q('RESET ROLE');
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+  await q('BEGIN');
+  try {
+    assert.equal(await probe('eltnoy_app', MERIT_SQL.insert, values('it-merit-1', 1, 'a'.repeat(64))), null, 'the API role can save a draft version');
+    assert.equal(await probe('eltnoy_app', MERIT_SQL.lockExam, ['IT-MERIT']), null, 'the API role can take the per-exam advisory lock');
+    assert.match(await probe('eltnoy_app', MERIT_SQL.insert, values('it-merit-2', 2, 'a'.repeat(64))) ?? 'succeeded', /merit_list_snapshots_inputs_unique/, 'same inputs twice');
+    assert.match(await probe('eltnoy_app', MERIT_SQL.insert, values('it-merit-3', 1, 'b'.repeat(64))) ?? 'succeeded', /merit_list_snapshots_version_unique/, 'same version twice');
+    assert.match(await probe('eltnoy_app', `INSERT INTO merit_list_snapshots (id, exam_code, version, status, engine_version, input_fingerprint, result_count, entry_count, excluded_count, tie_group_count, issue_count, entries, excluded, created_by)
+      VALUES ('it-merit-4', 'IT-MERIT', 9, 'published', 'v', '${'c'.repeat(64)}', 0, 0, 0, 0, 0, '[]', '[]', 'x')`) ?? 'succeeded', /check constraint/, 'no published state (ML-6)');
+    for (const [role, sql, expected] of [
+      ['eltnoy_app', "UPDATE merit_list_snapshots SET version = 5 WHERE id = 'it-merit-1'", /permission denied/],
+      ['eltnoy_app', "DELETE FROM merit_list_snapshots WHERE id = 'it-merit-1'", /permission denied/],
+      ['eltnoy_owner', "UPDATE merit_list_snapshots SET version = 5 WHERE id = 'it-merit-1'", /append-only/],
+      ['eltnoy_owner', "DELETE FROM merit_list_snapshots WHERE id = 'it-merit-1'", /append-only/],
+      ['eltnoy_owner', 'TRUNCATE merit_list_snapshots', /append-only/],
+    ] as const) {
+      assert.match(await probe(role, sql) ?? 'succeeded', expected, `${role}: ${sql}`);
+    }
+    assert.equal(await one("SELECT version FROM merit_list_snapshots WHERE id = 'it-merit-1'"), 1);
+  } finally {
+    await q('ROLLBACK');
   }
 });

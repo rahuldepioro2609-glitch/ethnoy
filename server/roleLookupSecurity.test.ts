@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { expectedOrigin, type Surface } from './surface.js';
 import { VERIFIED_PORTAL_SESSION } from './authTestSupport.js';
+import { AUDIT_INSERT_SQL } from './audit.js';
 
 process.env.DATABASE_URL ??= 'postgresql://test:test@127.0.0.1:5432/test';
 
@@ -165,9 +166,20 @@ test('sensitive data export enforces authentication and Super Admin permission',
   ]);
   const poolWithMock = pool as unknown as {
     query: (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
+    connect: () => Promise<unknown>;
   };
   const originalQuery = poolWithMock.query.bind(pool);
+  const originalConnect = poolWithMock.connect.bind(pool);
   const exportQueries: string[] = [];
+  // A-11/A-07: the export is recorded on its own transaction before the file is sent.
+  const auditStatements: Array<{ text: string; values: unknown[] }> = [];
+  poolWithMock.connect = async () => ({
+    query: async (text: string, values: unknown[] = []) => {
+      auditStatements.push({ text, values });
+      return { rows: [], rowCount: 1 };
+    },
+    release() {},
+  });
   poolWithMock.query = async (text, values = []) => {
     if (text.includes('FROM auth_sessions s')) {
       const session = sessions.get(String(values[0]));
@@ -185,6 +197,7 @@ test('sensitive data export enforces authentication and Super Admin permission',
 
       assert.equal(response.status, 401);
       assert.equal(exportQueries.length, 0);
+      assert.equal(auditStatements.length, 0);
     });
 
     await t.test('ordinary approved officials return 403 without running export queries', async () => {
@@ -193,6 +206,7 @@ test('sensitive data export enforces authentication and Super Admin permission',
 
       assert.equal(response.status, 403);
       assert.equal(exportQueries.length, 0);
+      assert.equal(auditStatements.length, 0);
     });
 
     await t.test('approved Super Admins receive an XLSX export', async () => {
@@ -207,9 +221,13 @@ test('sensitive data export enforces authentication and Super Admin permission',
       assert.ok(Buffer.isBuffer(response.body));
       assert.equal((response.body as Buffer).subarray(0, 2).toString(), 'PK');
       assert.equal(exportQueries.length, 12);
+      assert.deepEqual(auditStatements.map(({ text }) => (text === AUDIT_INSERT_SQL ? 'INSERT audit' : text)), ['BEGIN', 'INSERT audit', 'COMMIT']);
+      assert.equal(auditStatements[1].values[1], 'data_export.generated');
+      assert.equal(auditStatements[1].values[6], 'super_admin');
     });
   } finally {
     poolWithMock.query = originalQuery;
+    poolWithMock.connect = originalConnect;
   }
 });
 

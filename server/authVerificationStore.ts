@@ -4,6 +4,7 @@
 // VerificationStoreUnavailableError.
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
+import { recordAuditEvent } from './audit.js';
 import { isUndefinedTableError } from './staffCommon.js';
 import type { VerificationPurpose } from './verificationProviders.js';
 
@@ -590,6 +591,12 @@ export function createPostgresAuthVerificationStore(pool: QueryablePool): AuthVe
               actorId: input.actorId, actorKind: 'super_admin', targetInstitutionId: input.institutionId, decision: input.action, reason: input.reason,
               previous: { institutionalStatus: current.institutionalStatus, suspended: current.suspendedAt !== null },
             },
+          });
+          // A-11: the platform audit trail gets the same decision, in the same transaction.
+          await recordAuditEvent(client, {
+            action: 'institution.verification_decided', actor: { type: 'user', userId: input.actorId, role: 'super_admin' },
+            organizationId: input.institutionId, resourceId: input.institutionId,
+            metadata: { decision: input.action, previous_status: current.institutionalStatus, reason_text: input.reason },
           });
           return { status: 'applied' as const, state: next };
         });

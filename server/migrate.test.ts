@@ -62,6 +62,8 @@ test('db:migrate runs core, auth, staff and grants migrations in dependency orde
     'platformStaffMigration.sql',
     'organizationStaffMigration.sql',
     'studentEmailOtpMigration.sql',
+    'auditEventsMigration.sql',
+    'meritListMigration.sql',
     'databaseGrantsMigration.sql',
   ]);
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -267,7 +269,7 @@ test('AUTH_MOBILE_VERIFICATION: the email-OTP migration runs once, after AUTH-1,
   const files = [...MIGRATION_FILES] as string[];
   assert.equal(files.filter((name) => name === 'studentEmailOtpMigration.sql').length, 1);
   assert.ok(files.indexOf('studentEmailOtpMigration.sql') > files.indexOf('authVerificationMigration.sql'), 'needs auth_session_verifications');
-  assert.equal(files.indexOf('studentEmailOtpMigration.sql'), files.indexOf('databaseGrantsMigration.sql') - 1);
+  assert.equal(files.indexOf('studentEmailOtpMigration.sql'), files.indexOf('auditEventsMigration.sql') - 1);
   const sql = withoutComments(await readServerFile('studentEmailOtpMigration.sql'));
   assert.doesNotMatch(sql, /\bBEGIN\s*;|\bCOMMIT\b|\bROLLBACK\b/i, 'the runner owns the transaction');
   assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|TRUNCATE|UPDATE\s+\w+\s+SET|CREATE TABLE|ADD COLUMN|DROP TABLE|DROP COLUMN)\b/i, 'no data, table or column changes');
