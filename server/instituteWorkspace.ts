@@ -482,11 +482,12 @@ export function createInstituteWorkspaceRouter(): Router {
     }
     const instituteId = instituteIdOf(request);
     try {
-      const { rows } = await pool.query(
+      const rows = await auditedQuery(request,
         `INSERT INTO institute_branches (id, institute_id, name, code, city, state, coordinator_name, coordinator_email, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
          RETURNING *`,
         [randomUUID(), instituteId, parsed.data.name, parsed.data.code.toUpperCase(), parsed.data.city, parsed.data.state, parsed.data.coordinatorName, parsed.data.coordinatorEmail],
+        (row) => ({ action: 'workspace_branch.created', resourceId: String(row.id), metadata: { branch_code: String(row.code) } }),
       );
       response.status(201).json({ branch: rows[0] });
     } catch (error) {
@@ -509,7 +510,7 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const instituteId = instituteIdOf(request);
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `UPDATE institute_branches
        SET status = COALESCE($3, status),
            coordinator_name = COALESCE($4, coordinator_name),
@@ -518,6 +519,7 @@ export function createInstituteWorkspaceRouter(): Router {
        WHERE id = $1 AND institute_id = $2
        RETURNING *`,
       [request.params.id, instituteId, parsed.data.status ?? null, parsed.data.coordinatorName ?? null, parsed.data.coordinatorEmail ?? null],
+      (row) => ({ action: 'workspace_branch.updated', resourceId: String(row.id), metadata: { branch_code: String(row.code), changed_fields: Object.keys(parsed.data).filter((key) => parsed.data[key as keyof typeof parsed.data] !== undefined), new_status: parsed.data.status } }),
     );
     if (!rows[0]) {
       response.status(404).json({ error: 'Branch not found.' });
@@ -733,10 +735,11 @@ export function createInstituteWorkspaceRouter(): Router {
       'SELECT COALESCE(MAX(version), 0)::int + 1 AS next_version FROM institute_app_forms WHERE institute_id = $1 AND title = $2',
       [instituteId, parsed.data.title],
     );
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_app_forms (id, institute_id, exam_id, title, version, status, fields_json, document_rules_json)
        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb) RETURNING *`,
       [randomUUID(), instituteId, parsed.data.examId ?? null, parsed.data.title, verRes.rows[0].next_version, parsed.data.status, JSON.stringify(parsed.data.fields), JSON.stringify(parsed.data.documentRules)],
+      (row) => ({ action: 'workspace_app_form.created', resourceId: String(row.id), metadata: { version: intOrNone(row.version), new_status: String(row.status), field_count: parsed.data.fields.length } }),
     );
     response.status(201).json({ form: rows[0] });
   }));
@@ -748,9 +751,10 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const instituteId = instituteIdOf(request);
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       'UPDATE institute_app_forms SET status = $3, updated_at = now() WHERE id = $1 AND institute_id = $2 RETURNING *',
       [request.params.id, instituteId, parsed.data.status],
+      (row) => ({ action: 'workspace_app_form.status_changed', resourceId: String(row.id), metadata: { version: intOrNone(row.version), new_status: String(row.status) } }),
     );
     if (!rows[0]) {
       response.status(404).json({ error: 'Application form not found.' });
@@ -934,10 +938,11 @@ export function createInstituteWorkspaceRouter(): Router {
       response.status(400).json({ error: 'Refund amount cannot exceed the original transaction amount.' });
       return;
     }
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_fee_refunds (id, institute_id, transaction_id, amount_paise, reason, status, requested_by)
        VALUES ($1,$2,$3,$4,$5,'requested',$2) RETURNING *`,
       [randomUUID(), instituteId, parsed.data.transactionId, parsed.data.amountPaise, parsed.data.reason],
+      (row) => ({ action: 'workspace_refund.requested', resourceId: String(row.id), metadata: { amount_paise: parsed.data.amountPaise } }),
     );
     response.status(201).json({ refund: rows[0] });
   }));
@@ -1009,10 +1014,11 @@ export function createInstituteWorkspaceRouter(): Router {
     }
     const instituteId = instituteIdOf(request);
     if (!(await ownsRow('exam', parsed.data.examId, instituteId))) { sendNotFound(response, 'Examination'); return; }
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_admit_card_templates (id, institute_id, exam_id, template_name, header_title, instructions, show_photo, show_qr)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [randomUUID(), instituteId, parsed.data.examId ?? null, parsed.data.templateName, parsed.data.headerTitle, parsed.data.instructions, parsed.data.showPhoto, parsed.data.showQr],
+      (row) => ({ action: 'workspace_admit_card_template.created', resourceId: String(row.id), metadata: { show_photo: row.show_photo === true, show_qr: row.show_qr === true } }),
     );
     response.status(201).json({ template: rows[0] });
   }));
@@ -1189,10 +1195,11 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const totalMarks = qRes.rows.reduce((sum, row) => sum + Number(row.marks), 0);
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_paper_blueprints (id, institute_id, exam_id, title, total_marks, duration_minutes, question_ids_json)
        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb) RETURNING *`,
       [randomUUID(), instituteId, parsed.data.examId ?? null, parsed.data.title, totalMarks, parsed.data.durationMinutes, JSON.stringify(parsed.data.questionIds)],
+      (row) => ({ action: 'workspace_paper.created', resourceId: String(row.id), metadata: { question_count: parsed.data.questionIds.length, duration_minutes: intOrNone(row.duration_minutes) } }),
     );
     response.status(201).json({ blueprint: rows[0] });
   }));
@@ -1409,10 +1416,11 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const instituteId = instituteIdOf(request);
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_saved_reports (id, institute_id, name, dataset, output_format, created_by)
        VALUES ($1,$2,$3,$4,$5,$2) RETURNING *`,
       [randomUUID(), instituteId, parsed.data.name, parsed.data.dataset, parsed.data.outputFormat],
+      (row) => ({ action: 'workspace_report.saved', resourceId: String(row.id), metadata: { dataset: String(row.dataset), output_format: String(row.output_format) } }),
     );
     response.status(201).json({ report: rows[0] });
   }));

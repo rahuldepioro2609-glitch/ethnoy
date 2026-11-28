@@ -1,6 +1,6 @@
 # Institute Workspace: development status
 
-**Updated:** 2026-11-28 (Workspace audit events wired on `eltnoy-integration`, approved as proposed; not yet committed).
+**Updated:** 2026-11-28 (every Workspace write route audited; the last 8 added, not yet committed).
 
 - **Location:** committed on `institute-workspace` (`b7efeda`, on `1dd6145`) and integrated with `audit-log` on the local branch `eltnoy-integration` (merge commits `72e0db9` and `7b14e50`). Nothing is pushed, merged into `vps-deploy`/`main`, or deployed.
 - **D-01 Option B:** the Workspace stays held until it is complete and isolated on its own branch. Nothing has been committed, branched, merged, pushed or deployed.
@@ -15,7 +15,7 @@
 | Super Admin review (D-02): exam approve, request changes, publish; results approve (reviewed versions), publish, return; admit cards release, revoke | **Done** |
 | CBT centre | **Honest notice only**: no online delivery exists |
 | Candidate-visible effect of publication, online CBT, training progress and certificates, payments, report export, paper tender, notifications | **Deferred or awaiting a decision** (below) |
-| Audit events for Workspace actions (A-11) | **Done** on `eltnoy-integration` (see "Workspace audit events"); 8 write routes outside the approved table are not audited yet |
+| Audit events for Workspace actions (A-11) | **Done** on `eltnoy-integration` for **every** Institute and Super Admin write route (see "Workspace audit events") |
 
 **Routes reachable through the API that have no screen** (each is either honest, refused, or waiting for a decision; none is used by a screen):
 - `GET /api/center/overview`, `GET/POST/PATCH /api/center/branches`: real records;
@@ -195,14 +195,15 @@ Built on `audit-log`'s writer (`server/audit.ts`): each action gets an `AUDIT_CO
 | Refusals worth recording (D-02 403s, `EXAM_NOT_APPROVED`, `RESULTS_CHANGED`) | as above, outcome `denied` | `reason_code`, via `recordRefusedAuditEvent` |
 
 **Implementation:**
-- 31 contracts added to `AUDIT_CONTRACTS` in `server/audit.ts` (prefix `workspace_`); `audit-log`'s registry tests check every one (name format, category and retention against the database CHECKs, no secret-looking keys).
+- 39 contracts added to `AUDIT_CONTRACTS` in `server/audit.ts` (prefix `workspace_`); `audit-log`'s registry tests check every one (name format, category and retention against the database CHECKs, no secret-looking keys).
 - Super Admin (`server/instituteWorkspaceAdmin.ts`): exam decisions, result decisions and admit-card decisions each record their event in the decision's transaction, only when something changed; `EXAM_NOT_APPROVED` and `RESULTS_CHANGED` are recorded as `denied` through `recordRefusedAuditEvent` (own transaction; never changes the response).
 - Institute (`server/instituteWorkspace.ts`): single-statement writes run through `auditedQuery` (one transaction, event only when a row was written); routes already in a transaction call `auditWorkspace`. D-02 refusals (exam approval or publication, result approval or publication, admit-card release) are recorded as `workspace_publication.refused`, `denied`, reason `publication_requires_super_admin`.
 - Metadata keeps codes, counts, statuses, dates and reasons only: never candidate, learner or panelist names, contact details, scores or question content. Integer fields are included only when they really are integers.
 - Training uses the `operational` retention class; refunds use `financial`; everything else `governance`.
-- **Not audited yet** (outside the approved table): `POST/PATCH /api/center/branches`, `POST/PATCH /api/center/app-forms`, `POST /api/center/admit-cards/templates`, `POST /api/center/paper-blueprints`, `POST /api/center/reports/saved`, `POST /api/center/payments/refunds`.
+- **Added afterwards (2026-11-28):** the 8 write routes outside the first table: `workspace_branch.created`/`.updated` (branch code and changed field names; never the coordinator's name or email), `workspace_app_form.created`/`.status_changed` (version, status, field count; never the form content), `workspace_admit_card_template.created` (photo and QR flags only), `workspace_paper.created` (question count, duration), `workspace_report.saved` (dataset, format), `workspace_refund.requested` (amount in paise, from the validated request; financial retention).
+- **Coverage guard:** a test lists every Institute write route as audited or refused, so a new write route fails the suite until it is classified.
 
-**Tests:** `server/instituteWorkspaceAdmin.test.ts` (every decision's event, no event when nothing changed, `EXAM_NOT_APPROVED` and `RESULTS_CHANGED` recorded as denied, a failing audit insert rolls the decision back); `server/instituteWorkspace.test.ts` (12 Institute actions write exactly one event for the Institute with the expected metadata and no names or contacts; D-02 refusals recorded as denied; nothing recorded when nothing changed; a failing audit insert rolls an attendance mark back; interview, scorecard and application-review events); disposable PostgreSQL (the real interview routes write `audit_events` rows as `eltnoy_app` for the Institute, with no names; the other Institute's refused attempts record nothing).
+**Tests:** `server/instituteWorkspaceAdmin.test.ts` (every decision's event, no event when nothing changed, `EXAM_NOT_APPROVED` and `RESULTS_CHANGED` recorded as denied, a failing audit insert rolls the decision back); `server/instituteWorkspace.test.ts` (20 Institute actions write exactly one event for the Institute with the expected metadata and no names or contacts; D-02 refusals recorded as denied; nothing recorded when nothing changed; a failing audit insert rolls an attendance mark back; interview, scorecard and application-review events); disposable PostgreSQL (the real interview routes write `audit_events` rows as `eltnoy_app` for the Institute, with no names; the other Institute's refused attempts record nothing).
 
 ## Tests (2026-11-28, main checkout, dummy `DATABASE_URL`)
 

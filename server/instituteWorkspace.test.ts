@@ -964,3 +964,47 @@ test('A-11: an application review records the statuses and reason in the same tr
     [['workspace_application.reviewed', INSTITUTE, 'a1', { application_number: 'APP-2099-XY', previous_status: 'pending', new_status: 'flagged', reason_text: 'Synthetic mismatch' }]]);
   assert.equal(reviewed.log.at(-1)!.text, 'COMMIT');
 });
+
+test('A-11: the remaining Institute writes are audited too, without names, contacts or content', async () => {
+  const ID = '00000000-0000-4000-8000-0000000000ac';
+  const owns: Handler = (text) => (/^SELECT 1 FROM institute_(exams|app_forms|training_courses) WHERE id = \$1 AND institute_id = \$2$/.test(text) ? { rows: [{ '?column?': 1 }] } : undefined);
+  const returning = (row: Record<string, unknown>, extra?: Handler): Handler => (text, values) => owns(text, values) ?? extra?.(text, values) ?? (/^\s*(INSERT|UPDATE)/.test(text) ? { rows: [{ id: ID, ...row }] } : undefined);
+  const cases: Array<[string, 'post' | 'patch', string, Record<string, string>, unknown, Handler, string, Record<string, unknown>]> = [
+    ['branch created', 'post', '/center/branches', {}, { name: 'Synthetic Branch', code: 'syn-1', city: 'Synthetic City', coordinatorName: 'Synthetic Coordinator', coordinatorEmail: 'coord@example.test' }, returning({ code: 'SYN-1' }), 'workspace_branch.created', { branch_code: 'SYN-1' }],
+    ['branch updated', 'patch', '/center/branches/:id', { id: ID }, { status: 'inactive', coordinatorEmail: 'new@example.test' }, returning({ code: 'SYN-1' }), 'workspace_branch.updated', { branch_code: 'SYN-1', changed_fields: ['status', 'coordinatorEmail'], new_status: 'inactive' }],
+    ['form created', 'post', '/center/app-forms', {}, { title: 'Synthetic Form', fields: [{ id: 'name', label: 'Name', type: 'text' }, { id: 'city', label: 'City', type: 'text' }] }, returning({ version: 1, status: 'draft' }, (text) => (/COALESCE\(MAX\(version\)/.test(text) ? { rows: [{ next_version: 1 }] } : undefined)), 'workspace_app_form.created', { version: 1, new_status: 'draft', field_count: 2 }],
+    ['form status changed', 'patch', '/center/app-forms/:id', { id: ID }, { status: 'archived' }, returning({ version: 2, status: 'archived' }), 'workspace_app_form.status_changed', { version: 2, new_status: 'archived' }],
+    ['admit-card template created', 'post', '/center/admit-cards/templates', {}, { templateName: 'Synthetic Template', instructions: 'Synthetic instructions' }, returning({ show_photo: true, show_qr: false }), 'workspace_admit_card_template.created', { show_photo: true, show_qr: false }],
+    ['paper created', 'post', '/center/paper-blueprints', {}, { title: 'Synthetic Paper', durationMinutes: 90, questionIds: [ID] }, returning({ duration_minutes: 90 }, (text) => (/FROM institute_questions/.test(text) ? { rows: [{ id: ID, marks: '2' }] } : undefined)), 'workspace_paper.created', { question_count: 1, duration_minutes: 90 }],
+    ['report saved', 'post', '/center/reports/saved', {}, { name: 'Synthetic Report', dataset: 'results' }, returning({ dataset: 'results', output_format: 'csv' }), 'workspace_report.saved', { dataset: 'results', output_format: 'csv' }],
+    ['refund requested', 'post', '/center/payments/refunds', {}, { transactionId: ID, amountPaise: 1500, reason: 'Synthetic duplicate fee' }, returning({}, (text) => (/FROM institute_fee_transactions WHERE id/.test(text) ? { rows: [{ id: ID, amount_paise: '5000', status: 'successful' }] } : undefined)), 'workspace_refund.requested', { amount_paise: 1500 }],
+  ];
+  for (const [label, method, path, params, body, handler, action, metadata] of cases) {
+    const result = await call(method, path, { params, body, handler });
+    assert.ok(result.status === 200 || result.status === 201, `${label}: ${result.status} ${JSON.stringify(result.body)}`);
+    assert.deepEqual(result.audits.map((a) => [a.action, a.outcome, a.actorRole, a.organizationId, a.resourceId]), [[action, 'succeeded', 'center', INSTITUTE, ID]], label);
+    assert.deepEqual(result.audits[0].metadata, metadata, `${label}: metadata`);
+    assert.doesNotMatch(JSON.stringify(result.audits[0].metadata), /Synthetic (Coordinator|Branch|Form|Template|Paper|Report)|example\.test|Synthetic (instructions|duplicate)/, `${label}: no names, contacts or content`);
+  }
+  const missing = await call('patch', '/center/branches/:id', { params: { id: ID }, body: { status: 'inactive' } });
+  assert.deepEqual([missing.status, missing.audits.length], [404, 0], 'no branch changed, no event');
+});
+
+test('A-11 coverage: every Institute write route is either audited or refused outright', () => {
+  const writes = (createInstituteWorkspaceRouter().stack as Array<{ route?: { path: string; methods: Record<string, boolean> } }>)
+    .filter((layer) => layer.route && (layer.route.methods.post || layer.route.methods.patch || layer.route.methods.put || layer.route.methods.delete))
+    .map((layer) => `${Object.keys(layer.route!.methods).find((m) => m !== '_all')!.toUpperCase()} ${layer.route!.path}`).sort();
+  // Refused before any write (nothing to record, or recorded as a D-02 refusal).
+  const REFUSED = ['PATCH /center/admit-cards/:id/release', 'POST /center/exams/:id/broadcasts', 'POST /center/tickets', 'PATCH /center/tickets/:id', 'POST /center/training/enrollments/:id/certificate'];
+  const AUDITED = [
+    'POST /center/branches', 'PATCH /center/branches/:id', 'POST /center/exams', 'POST /center/exams/:id/transition', 'POST /center/app-forms', 'PATCH /center/app-forms/:id',
+    'POST /center/applications', 'POST /center/applications/:id/review', 'POST /center/payments/refunds', 'PATCH /center/payments/refunds/:id',
+    'POST /center/admit-cards/templates', 'POST /center/admit-cards/generate', 'POST /center/questions', 'PATCH /center/questions/:id/moderate',
+    'POST /center/paper-blueprints', 'POST /center/paper-blueprints/:id/lock', 'POST /center/cbt-incidents/:id/review', 'POST /center/results',
+    'PATCH /center/results/:id/status', 'POST /center/reports/saved', 'POST /center/attendance/mark', 'POST /center/interviews',
+    'POST /center/interviews/:id/scorecards', 'POST /center/interviews/:id/cancel', 'POST /center/interviews/:id/reschedule',
+    'POST /center/training/courses', 'POST /center/training/sessions', 'POST /center/training/enrollments',
+  ];
+  // POST /center/reports/preview only reads; it is listed so a new write route cannot slip past this check.
+  assert.deepEqual(writes, [...REFUSED, ...AUDITED, 'POST /center/reports/preview'].sort(), 'a new write route must be audited (or refused) and listed here');
+});

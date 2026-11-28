@@ -119,6 +119,15 @@ export const AUDIT_CONTRACTS = Object.freeze({
   'workspace_training.session_scheduled': { category: 'operations', resourceType: 'institute_training_session', retention: 'operational', metadata: { scheduled_date: 'string' }, required: ['scheduled_date'] },
   'workspace_cbt_incident.reviewed': { category: 'review', resourceType: 'institute_cbt_incident', retention: 'governance', metadata: { review_status: 'string', reason_text: 'string' }, required: ['review_status'] },
   'workspace_refund.withdrawn': { category: 'finance', resourceType: 'institute_refund', retention: 'financial', metadata: {} },
+  'workspace_refund.requested': { category: 'finance', resourceType: 'institute_refund', retention: 'financial', metadata: { amount_paise: 'integer' }, required: ['amount_paise'] },
+  // Coordinator names and contact details stay in the branch row; the event records the code and what changed.
+  'workspace_branch.created': { category: 'organization', resourceType: 'institute_branch', retention: 'governance', metadata: { branch_code: 'string' }, required: ['branch_code'] },
+  'workspace_branch.updated': { category: 'organization', resourceType: 'institute_branch', retention: 'governance', metadata: { branch_code: 'string', changed_fields: 'string[]', new_status: 'string' }, required: ['changed_fields'] },
+  'workspace_app_form.created': { category: 'application', resourceType: 'institute_app_form', retention: 'governance', metadata: { version: 'integer', new_status: 'string', field_count: 'integer' }, required: ['new_status'] },
+  'workspace_app_form.status_changed': { category: 'application', resourceType: 'institute_app_form', retention: 'governance', metadata: { version: 'integer', new_status: 'string' }, required: ['new_status'] },
+  'workspace_admit_card_template.created': { category: 'exam', resourceType: 'institute_admit_card_template', retention: 'governance', metadata: { show_photo: 'boolean', show_qr: 'boolean' } },
+  'workspace_paper.created': { category: 'exam', resourceType: 'institute_paper', retention: 'governance', metadata: { question_count: 'integer', duration_minutes: 'integer' }, required: ['question_count'] },
+  'workspace_report.saved': { category: 'operations', resourceType: 'institute_saved_report', retention: 'operational', metadata: { dataset: 'string', output_format: 'string' }, required: ['dataset'] },
 } satisfies Record<string, AuditContract>);
 
 export type AuditAction = keyof typeof AUDIT_CONTRACTS;
