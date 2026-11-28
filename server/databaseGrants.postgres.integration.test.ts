@@ -2361,6 +2361,19 @@ test('INSTITUTE WORKSPACE: interview cancel and reschedule through the real rout
     assert.equal((await invoke('post', '/center/interviews/:id/cancel', institute, { id: heldId }, { reason: 'IT late cancel' })).body.code, 'INTERVIEW_HELD');
     assert.equal((await invoke('post', '/center/interviews/:id/reschedule', institute, { id: heldId }, { scheduledDate: day, startTime: '18:00', endTime: '18:30', reason: 'IT late move' })).body.code, 'INTERVIEW_HELD');
     assert.ok(INTERVIEW_SQL.current.includes('FOR UPDATE'));
+
+    // A-11: every change above wrote its audit event, as eltnoy_app, in the same transaction; refusals wrote none.
+    const events = await q("SELECT action, outcome, actor_role, resource_id, metadata FROM audit_events WHERE organization_id = $1 ORDER BY occurred_at, action", [institute]);
+    const count = (action: string) => events.filter((row) => row.action === action).length;
+    assert.ok(count('workspace_interview.scheduled') >= 5, 'each booking that succeeded is recorded');
+    assert.equal(count('workspace_interview.cancelled'), 1);
+    assert.ok(count('workspace_interview.rescheduled') >= 1);
+    assert.ok(events.every((row) => row.outcome === 'succeeded' && row.actor_role === 'center'));
+    const cancelEvent = events.find((row) => row.action === 'workspace_interview.cancelled')!;
+    assert.deepEqual([cancelEvent.resource_id, cancelEvent.metadata], [aId, { previous_date: day, reason_text: 'IT candidate withdrew' }]);
+    assert.doesNotMatch(JSON.stringify(events.map((row) => row.metadata)), /IT Candidate|IT Asha|IT Bala/, 'no candidate or panelist names in the audit trail');
+    const [{ n: otherEvents }] = await q('SELECT count(*)::int AS n FROM audit_events WHERE organization_id = $1', [other]);
+    assert.equal(otherEvents, 0, "the other Institute's refused attempts changed nothing and recorded nothing");
   } finally {
     shared.connect = original.connect;
     shared.query = original.query;

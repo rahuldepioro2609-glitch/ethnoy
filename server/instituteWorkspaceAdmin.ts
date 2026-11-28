@@ -8,12 +8,13 @@
 //   second Super Admin decision is reported (409) instead of overwritten;
 // - never creates content: it only moves Institute-prepared records between review states.
 //
-// AUDIT INTEGRATION (A-11): every decision below must write an audit event in the same transaction
-// once the audit-log branch is integrated. The exact events are listed in WORKSPACE_AUDIT_POINTS and in
-// documentation/WORKSPACE_STATUS.md. This file deliberately does not implement a second audit system.
+// AUDIT (A-11): every decision below writes its audit event (WORKSPACE_AUDIT_POINTS) through
+// server/audit.ts in the same transaction; refusals (EXAM_NOT_APPROVED, RESULTS_CHANGED) are recorded as
+// denied on their own transaction. There is no second audit system here.
 import express, { type NextFunction, type Request, type Response, type Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRoles, requireSuperAdmin, type AuthenticatedRequest } from './auth.js';
+import { auditActor, recordAuditEvent, recordRefusedAuditEvent, type AuditAction } from './audit.js';
 import { pool } from './db.js';
 import { isValidExamTransition } from './instituteWorkspace.js';
 import { OFFICIAL_EXAM_STATES, isOfficialExamState } from '../src/utils/workspaceExams.js';
@@ -149,9 +150,27 @@ async function findExam(request: Request, response: Response) {
   return rows[0] as { id: string; institute_id: string; exam_code: string; lifecycle_status: string };
 }
 
-/** 409 unless the exam was approved by ELTNOY; the SQL repeats the check atomically. Returns true when allowed. */
-function refuseUnlessOfficial(exam: { lifecycle_status: string }, response: Response, what: string): boolean {
+/** Audit events for each Super Admin decision (A-11), written in the decision's transaction. */
+const EXAM_DECISION_EVENT: Readonly<Record<keyof typeof EXAM_DECISIONS, AuditAction>> = Object.freeze({
+  approve: 'workspace_exam.approved', request_changes: 'workspace_exam.changes_requested', publish: 'workspace_exam.published',
+});
+const RESULT_DECISION_EVENT: Readonly<Record<keyof typeof RESULT_DECISIONS, AuditAction>> = Object.freeze({
+  approve: 'workspace_results.approved', publish: 'workspace_results.published', return: 'workspace_results.returned',
+});
+const ADMIT_CARD_DECISION_EVENT: Readonly<Record<keyof typeof ADMIT_CARD_DECISIONS, AuditAction>> = Object.freeze({
+  release: 'workspace_admit_cards.released', revoke: 'workspace_admit_cards.revoked',
+});
+
+/**
+ * 409 unless the exam was approved by ELTNOY; the SQL repeats the check atomically. Returns true when allowed.
+ * A refusal is recorded as a denied event on its own transaction (never changes the response).
+ */
+async function refuseUnlessOfficial(request: Request, exam: { id: string; institute_id: string; exam_code: string; lifecycle_status: string }, response: Response, what: string, action: AuditAction): Promise<boolean> {
   if (isOfficialExamState(exam.lifecycle_status)) return true;
+  await recordRefusedAuditEvent(pool, {
+    action, actor: auditActor(request), outcome: 'denied', reasonCode: 'exam_not_approved',
+    organizationId: exam.institute_id, resourceId: exam.id, metadata: { exam_code: exam.exam_code },
+  });
   response.status(409).json({
     error: `This examination is ${exam.lifecycle_status.replace(/_/g, ' ')}. Its ${what} can only be released or published after ELTNOY approves the examination, and never once it is cancelled or archived.`,
     code: 'EXAM_NOT_APPROVED',
@@ -209,8 +228,17 @@ export function createInstituteWorkspaceAdminRouter(): Router {
       response.status(409).json({ error: `This examination is ${exam.lifecycle_status.replace(/_/g, ' ')}; it cannot be ${parsed.data.decision.replace(/_/g, ' ')}d now.`, code: 'INVALID_TRANSITION' });
       return;
     }
-    // AUDIT INTEGRATION (A-11): workspace_exam.<approved|changes_requested|published>, same transaction.
-    const { rows } = await pool.query(WORKSPACE_ADMIN_SQL.decideExam, [exam.id, from, to, parsed.data.reason, superAdminId(request)]);
+    // A-11: the decision and its audit event commit together.
+    const rows = await withTransaction(async (client) => {
+      const result = await client.query(WORKSPACE_ADMIN_SQL.decideExam, [exam.id, from, to, parsed.data.reason, superAdminId(request)]);
+      if (result.rows[0]) {
+        await recordAuditEvent(client, {
+          action: EXAM_DECISION_EVENT[parsed.data.decision], actor: auditActor(request), organizationId: exam.institute_id, resourceId: exam.id,
+          metadata: { exam_code: exam.exam_code, previous_status: from, new_status: to, ...(parsed.data.decision === 'request_changes' ? { reason_text: parsed.data.reason } : {}) },
+        });
+      }
+      return result.rows;
+    });
     if (!rows[0]) {
       response.status(409).json({ error: 'The examination changed while your request was processed. Reload and try again.', code: 'EXAM_CHANGED' });
       return;
@@ -242,21 +270,32 @@ export function createInstituteWorkspaceAdminRouter(): Router {
     }
     const exam = await findExam(request, response);
     if (!exam) return;
-    if (parsed.data.decision !== 'return' && !refuseUnlessOfficial(exam, response, 'results')) return;
+    const event = RESULT_DECISION_EVENT[parsed.data.decision];
+    if (parsed.data.decision !== 'return' && !(await refuseUnlessOfficial(request, exam, response, 'results', event))) return;
     const [from, to] = RESULT_DECISIONS[parsed.data.decision];
-    // AUDIT INTEGRATION (A-11): workspace_results.<approved|published|returned> with the row count.
     let updated: number;
     try {
       updated = await withTransaction(async (client) => {
-        if (parsed.data.decision === 'return') return (await client.query(WORKSPACE_ADMIN_SQL.returnResults, [exam.id, from, to])).rowCount ?? 0;
-        if (parsed.data.decision === 'publish') return (await client.query(WORKSPACE_ADMIN_SQL.publishResults, [exam.id, from, to, superAdminId(request)])).rowCount ?? 0;
-        const { rowCount } = await client.query(WORKSPACE_ADMIN_SQL.approveResults, [exam.id, from, to, superAdminId(request), reviewed.map((row) => `${row.id}:${row.version}`)]);
-        // All or nothing: one reviewed result that changed (new version), moved on, or is missing rolls back the rest.
-        if (rowCount !== reviewed.length) throw new ResultsChangedError();
+        let rowCount: number;
+        if (parsed.data.decision === 'return') rowCount = (await client.query(WORKSPACE_ADMIN_SQL.returnResults, [exam.id, from, to])).rowCount ?? 0;
+        else if (parsed.data.decision === 'publish') rowCount = (await client.query(WORKSPACE_ADMIN_SQL.publishResults, [exam.id, from, to, superAdminId(request)])).rowCount ?? 0;
+        else {
+          rowCount = (await client.query(WORKSPACE_ADMIN_SQL.approveResults, [exam.id, from, to, superAdminId(request), reviewed.map((row) => `${row.id}:${row.version}`)])).rowCount ?? 0;
+          // All or nothing: one reviewed result that changed (new version), moved on, or is missing rolls back the rest.
+          if (rowCount !== reviewed.length) throw new ResultsChangedError();
+        }
+        // A-11: recorded in the same transaction, only when something changed.
+        if (rowCount > 0) {
+          await recordAuditEvent(client, { action: event, actor: auditActor(request), organizationId: exam.institute_id, resourceId: exam.id, metadata: { exam_code: exam.exam_code, row_count: rowCount } });
+        }
         return rowCount;
       });
     } catch (error) {
       if (!(error instanceof ResultsChangedError)) throw error;
+      await recordRefusedAuditEvent(pool, {
+        action: event, actor: auditActor(request), outcome: 'denied', reasonCode: 'results_changed',
+        organizationId: exam.institute_id, resourceId: exam.id, metadata: { exam_code: exam.exam_code },
+      });
       response.status(409).json({ error: 'Some of these results changed after you reviewed them, or are no longer ready. Nothing was approved; open the results again.', code: 'RESULTS_CHANGED' });
       return;
     }
@@ -275,11 +314,16 @@ export function createInstituteWorkspaceAdminRouter(): Router {
     }
     const exam = await findExam(request, response);
     if (!exam) return;
-    if (parsed.data.decision === 'release' && !refuseUnlessOfficial(exam, response, 'admit cards')) return;
+    const event = ADMIT_CARD_DECISION_EVENT[parsed.data.decision];
+    if (parsed.data.decision === 'release' && !(await refuseUnlessOfficial(request, exam, response, 'admit cards', event))) return;
     const [from, to] = ADMIT_CARD_DECISIONS[parsed.data.decision];
-    // AUDIT INTEGRATION (A-11): workspace_admit_cards.<released|revoked> with the row count.
     const sql = parsed.data.decision === 'release' ? WORKSPACE_ADMIN_SQL.releaseAdmitCards : WORKSPACE_ADMIN_SQL.revokeAdmitCards;
-    const { rowCount } = await pool.query(sql, [exam.id, from, to]);
+    // A-11: the release or revocation and its audit event commit together.
+    const rowCount = await withTransaction(async (client) => {
+      const count = (await client.query(sql, [exam.id, from, to])).rowCount ?? 0;
+      if (count > 0) await recordAuditEvent(client, { action: event, actor: auditActor(request), organizationId: exam.institute_id, resourceId: exam.id, metadata: { exam_code: exam.exam_code, row_count: count } });
+      return count;
+    });
     if (!rowCount) {
       response.status(409).json({ error: `No admit cards of this examination can be ${parsed.data.decision === 'release' ? 'released (drafts of verified applications)' : 'revoked'}.`, code: 'NOTHING_TO_DECIDE' });
       return;

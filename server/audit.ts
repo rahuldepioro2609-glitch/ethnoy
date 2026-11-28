@@ -86,6 +86,39 @@ export const AUDIT_CONTRACTS = Object.freeze({
   'session.logged_out': { category: 'auth', resourceType: 'session', retention: 'security', metadata: {} },
   // The viewer records its own use (no recursion: reads never trigger reads)
   'audit.searched': { category: 'audit', resourceType: 'audit_log', retention: 'access', metadata: { result_count: 'integer', filter_keys: 'string[]' }, required: ['result_count'] },
+  // Institute Workspace (D-02; documentation/WORKSPACE_STATUS.md). organizationId is the Institute. Codes,
+  // counts, statuses and reasons only: never candidate names, contact details, scores with names, or
+  // question content.
+  'workspace_exam.created': { category: 'exam', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', new_status: 'string' }, required: ['exam_code'] },
+  'workspace_exam.status_changed': { category: 'exam', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', previous_status: 'string', new_status: 'string', reason_text: 'string' }, required: ['new_status'] },
+  'workspace_exam.approved': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', previous_status: 'string', new_status: 'string' }, required: ['exam_code'] },
+  'workspace_exam.changes_requested': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', previous_status: 'string', new_status: 'string', reason_text: 'string' }, required: ['exam_code'] },
+  'workspace_exam.published': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', previous_status: 'string', new_status: 'string' }, required: ['exam_code'] },
+  'workspace_results.written': { category: 'exam', resourceType: 'institute_result', retention: 'governance', metadata: { exam_code: 'string', roll_number: 'string', version: 'integer', corrected: 'boolean' }, required: ['roll_number'] },
+  'workspace_results.marked_ready': { category: 'exam', resourceType: 'institute_result', retention: 'governance', metadata: { roll_number: 'string', previous_status: 'string', new_status: 'string' }, required: ['new_status'] },
+  'workspace_results.approved': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', row_count: 'integer' }, required: ['exam_code'] },
+  'workspace_results.published': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', row_count: 'integer' }, required: ['exam_code'] },
+  'workspace_results.returned': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', row_count: 'integer' }, required: ['exam_code'] },
+  'workspace_admit_cards.generated': { category: 'exam', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', row_count: 'integer' }, required: ['row_count'] },
+  'workspace_admit_cards.released': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', row_count: 'integer' }, required: ['exam_code'] },
+  'workspace_admit_cards.revoked': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { exam_code: 'string', row_count: 'integer' }, required: ['exam_code'] },
+  // D-02 refusals of an Institute's attempt to approve, publish or release (recorded with outcome 'denied').
+  'workspace_publication.refused': { category: 'publishing', resourceType: 'institute_exam', retention: 'governance', metadata: { target: 'string', requested_status: 'string' }, required: ['target'] },
+  'workspace_application.created': { category: 'application', resourceType: 'institute_application', retention: 'governance', metadata: { application_number: 'string', new_status: 'string' }, required: ['application_number'] },
+  'workspace_application.reviewed': { category: 'review', resourceType: 'institute_application', retention: 'governance', metadata: { application_number: 'string', previous_status: 'string', new_status: 'string', reason_text: 'string' }, required: ['new_status'] },
+  'workspace_question.created': { category: 'exam', resourceType: 'institute_question', retention: 'governance', metadata: { question_type: 'string', new_status: 'string' }, required: ['new_status'] },
+  'workspace_question.moderated': { category: 'review', resourceType: 'institute_question', retention: 'governance', metadata: { previous_status: 'string', new_status: 'string' }, required: ['new_status'] },
+  'workspace_paper.locked': { category: 'exam', resourceType: 'institute_paper', retention: 'governance', metadata: { question_count: 'integer' } },
+  'workspace_attendance.marked': { category: 'exam', resourceType: 'institute_attendance_mark', retention: 'governance', metadata: { exam_code: 'string', status: 'string', reason_text: 'string' }, required: ['status'] },
+  'workspace_interview.scheduled': { category: 'review', resourceType: 'institute_interview', retention: 'governance', metadata: { scheduled_date: 'string' }, required: ['scheduled_date'] },
+  'workspace_interview.cancelled': { category: 'review', resourceType: 'institute_interview', retention: 'governance', metadata: { previous_date: 'string', reason_text: 'string' }, required: ['reason_text'] },
+  'workspace_interview.rescheduled': { category: 'review', resourceType: 'institute_interview', retention: 'governance', metadata: { previous_date: 'string', new_date: 'string', reason_text: 'string' }, required: ['new_date', 'reason_text'] },
+  'workspace_scorecard.submitted': { category: 'review', resourceType: 'institute_interview', retention: 'governance', metadata: {} },
+  'workspace_training.course_created': { category: 'operations', resourceType: 'institute_training_course', retention: 'operational', metadata: { module_count: 'integer' } },
+  'workspace_training.learner_enrolled': { category: 'operations', resourceType: 'institute_training_course', retention: 'operational', metadata: {} },
+  'workspace_training.session_scheduled': { category: 'operations', resourceType: 'institute_training_session', retention: 'operational', metadata: { scheduled_date: 'string' }, required: ['scheduled_date'] },
+  'workspace_cbt_incident.reviewed': { category: 'review', resourceType: 'institute_cbt_incident', retention: 'governance', metadata: { review_status: 'string', reason_text: 'string' }, required: ['review_status'] },
+  'workspace_refund.withdrawn': { category: 'finance', resourceType: 'institute_refund', retention: 'financial', metadata: {} },
 } satisfies Record<string, AuditContract>);
 
 export type AuditAction = keyof typeof AUDIT_CONTRACTS;

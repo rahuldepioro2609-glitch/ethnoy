@@ -3,6 +3,7 @@ import express, { type NextFunction, type Request, type Response, type Router } 
 import { z } from 'zod';
 import { requireAuth, requireRoles, type AuthenticatedRequest } from './auth.js';
 import { pool } from './db.js';
+import { auditActor, recordAuditEvent, recordRefusedAuditEvent, type AuditAction } from './audit.js';
 import { providerStatus } from './verificationProviders.js';
 import { questionShapeError } from '../src/utils/workspaceQuestions.js';
 import { isValidTimeZone } from '../src/utils/examSchedule.js';
@@ -251,6 +252,33 @@ function sendInterviewOutcome(response: Response, outcome: { status: 404 } | { s
   if (outcome.status === 404) { response.status(404).json({ error: 'Interview not found.' }); return; }
   if (outcome.status === 409) { response.status(409).json({ error: outcome.error, code: outcome.code }); return; }
   response.json({ interview: outcome.interview, change: outcome.change });
+}
+
+type Row = Record<string, unknown>;
+/** An integer column for audit metadata, or nothing (the audit contract refuses anything else). */
+const intOrNone = (value: unknown): number | undefined => (Number.isSafeInteger(Number(value)) && value !== null && value !== '' ? Number(value) : undefined);
+type WorkspaceEvent = { action: AuditAction; resourceId: string | null; metadata?: Record<string, unknown> };
+
+/** A-11: records a Workspace action on its own transaction client (server/audit.ts). The Institute is the organisation. */
+async function auditWorkspace(client: import('pg').PoolClient, request: Request, event: WorkspaceEvent): Promise<void> {
+  await recordAuditEvent(client, { action: event.action, actor: auditActor(request), organizationId: instituteIdOf(request), resourceId: event.resourceId, metadata: event.metadata ?? {} });
+}
+
+/** One write and its audit event in one transaction: the event is recorded only when the write returned a row. */
+async function auditedQuery(request: Request, sql: string, values: unknown[], describe: (row: Row) => WorkspaceEvent): Promise<Row[]> {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(sql, values);
+    if (rows[0]) await auditWorkspace(client, request, describe(rows[0] as Row));
+    return rows as Row[];
+  });
+}
+
+/** D-02: an Institute's attempt to approve, publish or release, recorded as denied on its own transaction. */
+async function auditPublicationRefused(request: Request, target: 'exam' | 'result' | 'admit_card', requestedStatus: string, resourceId: string | null): Promise<void> {
+  await recordRefusedAuditEvent(pool, {
+    action: 'workspace_publication.refused', actor: auditActor(request), outcome: 'denied', reasonCode: 'publication_requires_super_admin',
+    organizationId: instituteIdOf(request), resourceId, metadata: { target, requested_status: requestedStatus },
+  });
 }
 
 /** Runs `work` in one transaction on its own connection; rolls back on any error. */
@@ -576,7 +604,7 @@ export function createInstituteWorkspaceRouter(): Router {
     const instituteId = instituteIdOf(request);
     const initialStatus = d.submitForApproval ? 'pending_approval' : 'draft';
     try {
-      const { rows } = await pool.query(
+      const rows = await auditedQuery(request,
         `INSERT INTO institute_exams
          (id, institute_id, exam_code, title, category, mode, eligibility, academic_year,
           app_open_date, app_close_date, exam_date, exam_time, duration_minutes, timezone,
@@ -586,6 +614,7 @@ export function createInstituteWorkspaceRouter(): Router {
         [randomUUID(), instituteId, d.examCode.toUpperCase(), d.title, d.category, d.mode, d.eligibility,
           d.academicYear, d.appOpenDate, d.appCloseDate, d.examDate, d.examTime, d.durationMinutes,
           d.timezone, d.sessionsInfo, d.feePaise, d.refundPolicy, d.instructions, d.approvalMode, initialStatus],
+        (row) => ({ action: 'workspace_exam.created', resourceId: String(row.id), metadata: { exam_code: String(row.exam_code), new_status: initialStatus } }),
       );
       response.status(201).json({ exam: rows[0] });
     } catch (error) {
@@ -619,6 +648,7 @@ export function createInstituteWorkspaceRouter(): Router {
     }
     // D-02: approval, review outcomes and publication belong to the Super Admin.
     if (!isInstituteExamTransition(String(exam.lifecycle_status), parsed.data.status)) {
+      await auditPublicationRefused(request, 'exam', parsed.data.status, String(exam.id));
       sendPublicationForbidden(response, 'examination approval and');
       return;
     }
@@ -626,7 +656,7 @@ export function createInstituteWorkspaceRouter(): Router {
       response.status(400).json({ error: 'A reason of at least 5 characters is required for this transition.' });
       return;
     }
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `UPDATE institute_exams
        SET lifecycle_status = $3,
            status_reason = CASE WHEN $4 <> '' THEN $4 ELSE status_reason END,
@@ -634,6 +664,7 @@ export function createInstituteWorkspaceRouter(): Router {
        WHERE id = $1 AND institute_id = $2 AND lifecycle_status = $5
        RETURNING *`,
       [exam.id, instituteId, parsed.data.status, parsed.data.reason, String(exam.lifecycle_status)],
+      () => ({ action: 'workspace_exam.status_changed', resourceId: String(exam.id), metadata: { exam_code: String(exam.exam_code), previous_status: String(exam.lifecycle_status), new_status: parsed.data.status, reason_text: parsed.data.reason || undefined } }),
     );
     // Compare-and-set: a concurrent change (for example a Super Admin decision) wins; nothing is overwritten.
     if (!rows[0]) {
@@ -782,12 +813,14 @@ export function createInstituteWorkspaceRouter(): Router {
     if (!(await ownsRow('exam', parsed.data.examId, instituteId))) { sendNotFound(response, 'Examination'); return; }
     if (!(await ownsRow('form', parsed.data.formId, instituteId))) { sendNotFound(response, 'Application form'); return; }
     const appNo = `APP-${new Date().getFullYear()}-${randomUUID().slice(0, 6).toUpperCase()}`;
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_candidate_applications
        (id, institute_id, exam_id, form_id, application_number, candidate_name, candidate_email, candidate_mobile, stage, payment_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [randomUUID(), instituteId, parsed.data.examId ?? null, parsed.data.formId ?? null, appNo,
         parsed.data.candidateName, parsed.data.candidateEmail, parsed.data.candidateMobile, parsed.data.stage, parsed.data.paymentStatus],
+      // A-08: the application number and status only; never the candidate's name or contact details.
+      (row) => ({ action: 'workspace_application.created', resourceId: String(row.id), metadata: { application_number: String(row.application_number), new_status: String(row.review_status) } }),
     );
     response.status(201).json({ application: rows[0] });
   }));
@@ -821,6 +854,10 @@ export function createInstituteWorkspaceRouter(): Router {
       }
       const { rows } = await client.query(APPLICATION_SQL.review, [request.params.id, instituteId, parsed.data.action, parsed.data.reason, from]);
       await client.query(APPLICATION_SQL.log, [randomUUID(), instituteId, request.params.id, parsed.data.action, parsed.data.targetField, parsed.data.reason]);
+      await auditWorkspace(client, request, {
+        action: 'workspace_application.reviewed', resourceId: request.params.id,
+        metadata: { application_number: rows[0]?.application_number ? String(rows[0].application_number) : undefined, previous_status: from, new_status: parsed.data.action, reason_text: parsed.data.reason || undefined },
+      });
       return { status: 200 as const, application: rows[0] };
     });
     if (outcome.status === 404) { sendNotFound(response, 'Application'); return; }
@@ -919,12 +956,13 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const instituteId = instituteIdOf(request);
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `UPDATE institute_fee_refunds
        SET status = $3, approved_by = $2, updated_at = now()
        WHERE id = $1 AND institute_id = $2 AND status IN ('requested', 'approved')
        RETURNING *`,
       [request.params.id, instituteId, parsed.data.status],
+      (row) => ({ action: 'workspace_refund.withdrawn', resourceId: String(row.id) }),
     );
     if (!rows[0]) {
       response.status(404).json({ error: 'Refund request not found or already finalized.' });
@@ -1031,6 +1069,7 @@ export function createInstituteWorkspaceRouter(): Router {
           inserted += 1;
         }
       }
+      if (inserted > 0) await auditWorkspace(client, request, { action: 'workspace_admit_cards.generated', resourceId: String(exam.id), metadata: { exam_code: String(exam.exam_code), row_count: inserted } });
       return inserted;
     });
     response.status(201).json({ generated });
@@ -1039,7 +1078,8 @@ export function createInstituteWorkspaceRouter(): Router {
   // D-02 / A-06: releasing or revoking an admit card is an official publication decision. Institutes
   // generate drafts (release_status 'generated'); the Super Admin releases. Kept as a route so the
   // existing route policy stays valid; it always refuses and changes nothing.
-  router.patch('/center/admit-cards/:id/release', ...guards, asyncRoute(async (_request, response) => {
+  router.patch('/center/admit-cards/:id/release', ...guards, asyncRoute(async (request, response) => {
+    await auditPublicationRefused(request, 'admit_card', 'released', z.string().uuid().safeParse(request.params.id).success ? request.params.id : null);
     sendPublicationForbidden(response, 'admit card');
   }));
 
@@ -1085,11 +1125,12 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const instituteId = instituteIdOf(request);
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_questions
        (id, institute_id, subject, topic, difficulty, question_type, question_text, options_json, correct_answer, explanation, marks, negative_marks, tags, moderation_status, authored_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$2) RETURNING *`,
       [randomUUID(), instituteId, d.subject, d.topic, d.difficulty, d.questionType, d.questionText, JSON.stringify(d.options), d.correctAnswer, d.explanation, d.marks, d.negativeMarks, d.tags, d.submitForReview ? 'in_review' : 'draft'],
+      (row) => ({ action: 'workspace_question.created', resourceId: String(row.id), metadata: { question_type: String(row.question_type), new_status: String(row.moderation_status) } }),
     );
     response.status(201).json({ question: rows[0] });
   }));
@@ -1111,11 +1152,12 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     // Compare-and-set: a concurrent change between the read and this write is reported, not overwritten.
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `UPDATE institute_questions
        SET moderation_status = $3, reviewed_by = $2, updated_at = now()
        WHERE id = $1 AND institute_id = $2 AND moderation_status = $4 RETURNING *`,
       [id.data, instituteId, parsed.data.status, from],
+      (row) => ({ action: 'workspace_question.moderated', resourceId: String(row.id), metadata: { previous_status: from, new_status: parsed.data.status } }),
     );
     if (!rows[0]) {
       response.status(409).json({ error: 'This question changed while you were working. Reload and try again.', code: 'QUESTION_CHANGED' });
@@ -1161,11 +1203,12 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const instituteId = instituteIdOf(request);
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `UPDATE institute_paper_blueprints
        SET is_locked = true, locked_by = $2, locked_at = now()
        WHERE id = $1 AND institute_id = $2 AND is_locked = false RETURNING *`,
       [request.params.id, instituteId],
+      (row) => ({ action: 'workspace_paper.locked', resourceId: String(row.id), metadata: { question_count: Array.isArray(row.question_ids_json) ? row.question_ids_json.length : undefined } }),
     );
     if (!rows[0]) {
       response.status(404).json({ error: 'Unlocked blueprint not found.' });
@@ -1211,11 +1254,12 @@ export function createInstituteWorkspaceRouter(): Router {
     }
     const instituteId = instituteIdOf(request);
     // Only an open incident is decided, once: a later review cannot overwrite the earlier decision and reason.
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `UPDATE institute_cbt_incidents
        SET review_status = $3, review_reason = $4, reviewed_by = $2
        WHERE id = $1 AND institute_id = $2 AND review_status = 'open' RETURNING *`,
       [request.params.id, instituteId, parsed.data.reviewStatus, parsed.data.reviewReason],
+      (row) => ({ action: 'workspace_cbt_incident.reviewed', resourceId: String(row.id), metadata: { review_status: parsed.data.reviewStatus, reason_text: parsed.data.reviewReason } }),
     );
     if (!rows[0]) {
       response.status(404).json({ error: 'Open incident not found. It may already have been reviewed.' });
@@ -1264,7 +1308,7 @@ export function createInstituteWorkspaceRouter(): Router {
     const pct = Math.round((d.rawScore / d.maxScore) * 10000) / 100;
     // Tenant isolation: the exam must belong to this Institute (the INSERT ... SELECT writes nothing otherwise).
     // D-02 / A-16: a result already approved or published is never overwritten from here.
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_exam_results (id, institute_id, exam_id, roll_number, candidate_name, raw_score, max_score, percentage, qualifying_status, evaluation_status)
        SELECT $1, e.institute_id, e.id, $4, $5, $6, $7, $8, $9, 'evaluated'
          FROM institute_exams e WHERE e.id = $3 AND e.institute_id = $2 AND e.lifecycle_status NOT IN ('cancelled', 'archived')
@@ -1275,6 +1319,7 @@ export function createInstituteWorkspaceRouter(): Router {
          WHERE institute_exam_results.evaluation_status NOT IN ('approved', 'published')
        RETURNING *, (xmax = 0) AS inserted`,
       [randomUUID(), instituteId, d.examId, d.rollNumber.toUpperCase(), d.candidateName, d.rawScore, d.maxScore, pct, d.qualifyingStatus],
+      (row) => ({ action: 'workspace_results.written', resourceId: String(row.id), metadata: { roll_number: String(row.roll_number), version: intOrNone(row.version), corrected: row.inserted === false } }),
     );
     if (!rows[0]) {
       const { rows: exists } = await pool.query('SELECT lifecycle_status FROM institute_exams WHERE id = $1 AND institute_id = $2', [d.examId, instituteId]);
@@ -1303,17 +1348,19 @@ export function createInstituteWorkspaceRouter(): Router {
     }
     // D-02 / A-04: approval and publication are Super Admin decisions.
     if (OFFICIAL_RESULT_STATUSES.has(parsed.data.evaluationStatus)) {
+      await auditPublicationRefused(request, 'result', parsed.data.evaluationStatus, z.string().uuid().safeParse(request.params.id).success ? request.params.id : null);
       sendPublicationForbidden(response, 'result');
       return;
     }
     const instituteId = instituteIdOf(request);
     // An Institute may mark its own evaluated result as moderated (ready for review), never touch an
     // approved or published one.
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `UPDATE institute_exam_results
        SET evaluation_status = $3, updated_at = now()
        WHERE id = $1 AND institute_id = $2 AND evaluation_status IN ('pending', 'evaluated', 'moderated') RETURNING *`,
       [request.params.id, instituteId, parsed.data.evaluationStatus],
+      (row) => ({ action: 'workspace_results.marked_ready', resourceId: String(row.id), metadata: { roll_number: String(row.roll_number), new_status: parsed.data.evaluationStatus } }),
     );
     if (!rows[0]) {
       response.status(404).json({ error: 'Result record not found, or it is already approved or published.' });
@@ -1408,10 +1455,11 @@ export function createInstituteWorkspaceRouter(): Router {
     }
     const instituteId = instituteIdOf(request);
     if (!(await ownsRow('exam', parsed.data.examId, instituteId))) { sendNotFound(response, 'Examination'); return; }
-    const { rows } = await pool.query(
+    const rows = await auditedQuery(request,
       `INSERT INTO institute_attendance_logs (id, institute_id, exam_id, roll_number, candidate_name, center_name, session_name, status, source, reason, actor_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$2) RETURNING *`,
       [randomUUID(), instituteId, parsed.data.examId ?? null, parsed.data.rollNumber.toUpperCase(), parsed.data.candidateName, parsed.data.centerName, parsed.data.sessionName, parsed.data.status, parsed.data.source, parsed.data.reason],
+      (row) => ({ action: 'workspace_attendance.marked', resourceId: String(row.id), metadata: { status: String(row.status), reason_text: String(row.reason) } }),
     );
     response.status(201).json({ record: rows[0] });
   }));
@@ -1461,6 +1509,7 @@ export function createInstituteWorkspaceRouter(): Router {
       if (conflict) return { kind: 'conflict' as const, conflict };
       // No meeting link or reference is generated: ELTNOY hosts no video and records nothing (R-11).
       const { rows } = await client.query(INTERVIEW_SQL.insert, [randomUUID(), instituteId, d.candidateName, d.applicationNumber, d.panelName, d.panelistNames, d.scheduledDate, d.startTime, d.endTime, d.mode]);
+      await auditWorkspace(client, request, { action: 'workspace_interview.scheduled', resourceId: String(rows[0].id), metadata: { scheduled_date: d.scheduledDate } });
       return { kind: 'created' as const, interview: rows[0] };
     });
     if (outcome.kind === 'conflict') {
@@ -1501,6 +1550,8 @@ export function createInstituteWorkspaceRouter(): Router {
       const duplicate = await client.query(INTERVIEW_SQL.panelistScorecard, [id.data, instituteId, d.panelistName]);
       if (duplicate.rows[0]) return { status: 409 as const, code: 'SCORECARD_EXISTS', error: 'This panelist already has a scorecard for this interview.' };
       const { rows } = await client.query(INTERVIEW_SQL.insertScorecard, [randomUUID(), instituteId, id.data, d.panelistName, d.subjectScore, d.communicationScore, d.pedagogyScore, d.problemSolvingScore, d.remarks]);
+      // Scores and the panelist's name stay in the scorecard table; the audit event records that one was submitted.
+      await auditWorkspace(client, request, { action: 'workspace_scorecard.submitted', resourceId: id.data });
       return { status: 201 as const, scorecard: rows[0] };
     });
     if (outcome.status === 404) { sendNotFound(response, 'Interview'); return; }
@@ -1526,6 +1577,7 @@ export function createInstituteWorkspaceRouter(): Router {
       if ('status' in current) return current;
       const { rows } = await client.query(INTERVIEW_SQL.cancel, [id.data, instituteId]);
       const change = await client.query(INTERVIEW_SQL.insertChange, [randomUUID(), instituteId, id.data, 'cancelled', parsed.data.reason, JSON.stringify(interviewSnapshot(current.interview)), null]);
+      await auditWorkspace(client, request, { action: 'workspace_interview.cancelled', resourceId: id.data, metadata: { previous_date: current.interview.scheduled_date, reason_text: parsed.data.reason } });
       return { status: 200 as const, interview: rows[0], change: change.rows[0] };
     });
     sendInterviewOutcome(response, outcome);
@@ -1575,6 +1627,7 @@ export function createInstituteWorkspaceRouter(): Router {
       if (conflict) return { status: 'conflict' as const, conflict };
       const { rows } = await client.query(INTERVIEW_SQL.reschedule, [id.data, instituteId, after.scheduledDate, after.startTime, after.endTime, after.panelName, after.panelistNames]);
       const change = await client.query(INTERVIEW_SQL.insertChange, [randomUUID(), instituteId, id.data, 'rescheduled', d.reason, JSON.stringify(before), JSON.stringify(after)]);
+      await auditWorkspace(client, request, { action: 'workspace_interview.rescheduled', resourceId: id.data, metadata: { previous_date: before.scheduledDate, new_date: after.scheduledDate, reason_text: d.reason } });
       return { status: 200 as const, interview: rows[0], change: change.rows[0] };
     });
     if (outcome.status === 'conflict') {
@@ -1612,7 +1665,8 @@ export function createInstituteWorkspaceRouter(): Router {
       return;
     }
     const instituteId = instituteIdOf(request);
-    const { rows } = await pool.query(TRAINING_SQL.insertCourse, [randomUUID(), instituteId, parsed.data.title, parsed.data.category, parsed.data.moduleCount]);
+    const rows = await auditedQuery(request, TRAINING_SQL.insertCourse, [randomUUID(), instituteId, parsed.data.title, parsed.data.category, parsed.data.moduleCount],
+      (row) => ({ action: 'workspace_training.course_created', resourceId: String(row.id), metadata: { module_count: intOrNone(row.module_count) } }));
     response.status(201).json({ course: rows[0] });
   }));
   router.post('/center/training/sessions', ...guards, asyncRoute(async (request, response) => {
@@ -1632,7 +1686,8 @@ export function createInstituteWorkspaceRouter(): Router {
     }
     const instituteId = instituteIdOf(request);
     if (!(await ownsRow('course', parsed.data.courseId, instituteId))) { sendNotFound(response, 'Course'); return; }
-    const { rows } = await pool.query(TRAINING_SQL.insertSession, [randomUUID(), instituteId, parsed.data.courseId ?? null, parsed.data.title, parsed.data.sessionDate, parsed.data.sessionTime]);
+    const rows = await auditedQuery(request, TRAINING_SQL.insertSession, [randomUUID(), instituteId, parsed.data.courseId ?? null, parsed.data.title, parsed.data.sessionDate, parsed.data.sessionTime],
+      (row) => ({ action: 'workspace_training.session_scheduled', resourceId: String(row.id), metadata: { scheduled_date: String(row.session_date) } }));
     response.status(201).json({ session: rows[0] });
   }));
   router.post('/center/training/enrollments', ...guards, asyncRoute(async (request, response) => {
@@ -1647,7 +1702,9 @@ export function createInstituteWorkspaceRouter(): Router {
     }
     const instituteId = instituteIdOf(request);
     if (!(await ownsRow('course', parsed.data.courseId, instituteId))) { sendNotFound(response, 'Course'); return; }
-    const { rows } = await pool.query(TRAINING_SQL.insertEnrollment, [randomUUID(), instituteId, parsed.data.courseId, parsed.data.learnerName, parsed.data.learnerEmail.toLowerCase()]);
+    // The learner's name and email stay in the enrolment; the audit event records the course only.
+    const rows = await auditedQuery(request, TRAINING_SQL.insertEnrollment, [randomUUID(), instituteId, parsed.data.courseId, parsed.data.learnerName, parsed.data.learnerEmail.toLowerCase()],
+      () => ({ action: 'workspace_training.learner_enrolled', resourceId: parsed.data.courseId }));
     if (!rows[0]) {
       response.status(409).json({
         error: parsed.data.learnerEmail

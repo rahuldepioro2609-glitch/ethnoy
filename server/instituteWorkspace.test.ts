@@ -6,24 +6,53 @@ import type { NextFunction, Request, Response } from 'express';
 
 process.env.DATABASE_URL ??= 'postgresql://127.0.0.1:9/workspace_unit_tests';
 
-const [{ createInstituteWorkspaceRouter, isInstituteExamTransition, isValidExamTransition, EXAM_LIFECYCLE_TRANSITIONS, QUESTION_MODERATION_TRANSITIONS, questionShapeError }, { pool }, { requireAuth }] = await Promise.all([
-  import('./instituteWorkspace.js'), import('./db.js'), import('./auth.js'),
+const [{ createInstituteWorkspaceRouter, isInstituteExamTransition, isValidExamTransition, EXAM_LIFECYCLE_TRANSITIONS, QUESTION_MODERATION_TRANSITIONS, questionShapeError }, { pool }, { requireAuth }, { AUDIT_INSERT_SQL }] = await Promise.all([
+  import('./instituteWorkspace.js'), import('./db.js'), import('./auth.js'), import('./audit.js'),
 ]);
+
+/** An audit_events row as written by server/audit.ts (AUDIT_INSERT_SQL parameter order). */
+interface AuditRow { action: string; outcome: string; reasonCode: string | null; actorRole: string; organizationId: string | null; resourceId: string | null; metadata: Record<string, unknown> }
+const auditRow = (values: unknown[]): AuditRow => ({
+  action: String(values[1]), outcome: String(values[2]), reasonCode: values[3] as string | null, actorRole: String(values[6]),
+  organizationId: values[7] as string | null, resourceId: values[9] as string | null, metadata: JSON.parse(String(values[10])),
+});
 
 const INSTITUTE = 'synthetic-institute-a';
 const EXAM = '00000000-0000-4000-8000-0000000000e1';
 const FOREIGN = '00000000-0000-4000-8000-0000000000f9';
 
 type Handler = (text: string, values: unknown[]) => { rows: Record<string, unknown>[]; rowCount?: number } | undefined;
-const mutable = pool as unknown as { query: (text: string, values?: unknown[]) => Promise<unknown> };
+const mutable = pool as unknown as { query: (text: string, values?: unknown[]) => Promise<unknown>; connect: () => Promise<unknown> };
 const original = mutable.query;
+const originalConnect = mutable.connect;
 
 async function call(method: 'get' | 'post' | 'patch' | 'put', path: string, options: { params?: Record<string, string>; body?: unknown; handler?: Handler } = {}) {
   const queries: Array<{ text: string; values: unknown[] }> = [];
+  // Audit rows count only once their transaction commits; a ROLLBACK discards them, as PostgreSQL would.
+  const audits: AuditRow[] = [];
   mutable.query = async (text: string, values: unknown[] = []) => {
     queries.push({ text, values });
     return options.handler?.(text, values) ?? { rows: [], rowCount: 0 };
   };
+  // Transaction clients answer like the pool; BEGIN/COMMIT/ROLLBACK and audit inserts stay out of `queries`
+  // so business-statement assertions stay exact. A test that installs its own client keeps it.
+  const ownConnect = mutable.connect === originalConnect;
+  if (ownConnect) {
+    mutable.connect = async () => {
+      const pending: AuditRow[] = [];
+      return {
+        query: async (text: string, values: unknown[] = []) => {
+          if (text === AUDIT_INSERT_SQL) { pending.push(auditRow(values)); return { rows: [], rowCount: 1 }; }
+          if (text === 'COMMIT') audits.push(...pending.splice(0));
+          if (text === 'ROLLBACK') pending.length = 0;
+          if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(text)) return { rows: [], rowCount: 0 };
+          queries.push({ text, values });
+          return options.handler?.(text, values) ?? { rows: [], rowCount: 0 };
+        },
+        release() {},
+      };
+    };
+  }
   try {
     const router = createInstituteWorkspaceRouter();
     const layer = (router.stack as Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (req: Request, res: Response, next: NextFunction) => unknown }> } }>)
@@ -40,9 +69,10 @@ async function call(method: 'get' | 'post' | 'patch' | 'put', path: string, opti
       const req = { params: options.params ?? {}, body: options.body ?? {}, query: {}, user: { id: INSTITUTE, role: 'center', isSuperAdmin: false } } as unknown as Request;
       Promise.resolve(handler(req, res, (error?: unknown) => (error ? reject(error) : resolve()))).catch(reject);
     });
-    return { ...result, queries };
+    return { ...result, queries, audits };
   } finally {
     mutable.query = original;
+    if (ownConnect) mutable.connect = originalConnect;
   }
 }
 
@@ -230,8 +260,10 @@ test('admit cards: generated in one locked transaction; only inserted rows count
   const mutableConnect = pool as unknown as { connect: () => Promise<unknown> };
   const originalConnect = mutableConnect.connect;
   let insertCalls = 0;
+  const cardAudits: AuditRow[] = [];
   mutableConnect.connect = async () => ({
     query: async (text: string, values: unknown[] = []) => {
+      if (text === AUDIT_INSERT_SQL) { cardAudits.push(auditRow(values)); log.push('AUDIT'); return { rows: [], rowCount: 1 }; }
       log.push(text.startsWith('INSERT INTO institute_hall_tickets') ? `INSERT seat=${String(values[8])}` : text.replace(/\s+/g, ' ').slice(0, 40));
       if (text.includes('FROM institute_candidate_applications a')) return { rows: [{ id: 'app-1', candidate_name: 'Synthetic One' }, { id: 'app-2', candidate_name: 'Synthetic Two' }] };
       if (text.includes('AS existing')) return { rows: [{ existing: 3 }] };
@@ -249,7 +281,8 @@ test('admit cards: generated in one locked transaction; only inserted rows count
     assert.equal(log[0], 'BEGIN');
     assert.match(log[1], /pg_advisory_xact_lock/);
     assert.deepEqual(log.filter((line) => line.startsWith('INSERT')), ['INSERT seat=S-4', 'INSERT seat=S-5'], 'seats continue after the 3 existing cards');
-    assert.equal(log.at(-1), 'COMMIT');
+    assert.deepEqual(log.slice(-2), ['AUDIT', 'COMMIT'], 'the generation and its audit event commit together');
+    assert.deepEqual(cardAudits.map((a) => [a.action, a.organizationId, a.resourceId, a.metadata.row_count, a.metadata.exam_code]), [['workspace_admit_cards.generated', INSTITUTE, EXAM, 1, 'DEMO-1']]);
     assert.ok(!log.some((line) => /release_status/.test(line)), 'never released here');
   } finally {
     mutableConnect.connect = originalConnect;
@@ -541,16 +574,21 @@ test('the Reports screen offers exactly the datasets the server serves', async (
 // ---------------------------------------------------------------------------
 
 /** Runs `work` with pool.connect replaced by a scripted transaction client; returns the client's statements. */
-async function withFakeClient<T>(reply: (text: string, values: unknown[]) => { rows?: Record<string, unknown>[]; rowCount?: number } | undefined, work: () => Promise<T>): Promise<{ result: T; log: Array<{ text: string; values: unknown[] }> }> {
+async function withFakeClient<T>(reply: (text: string, values: unknown[]) => { rows?: Record<string, unknown>[]; rowCount?: number } | undefined, work: () => Promise<T>): Promise<{ result: T; log: Array<{ text: string; values: unknown[] }>; audits: AuditRow[] }> {
+  // `log` keeps every business statement and BEGIN/COMMIT/ROLLBACK; audit inserts go to `audits` instead.
   const log: Array<{ text: string; values: unknown[] }> = [];
+  const audits: AuditRow[] = [];
   const mutableConnect = pool as unknown as { connect: () => Promise<unknown> };
   const originalConnect = mutableConnect.connect;
   mutableConnect.connect = async () => ({
-    query: async (text: string, values: unknown[] = []) => { log.push({ text, values }); const r = reply(text, values); return { rows: r?.rows ?? [], rowCount: r?.rowCount ?? r?.rows?.length ?? 0 }; },
+    query: async (text: string, values: unknown[] = []) => {
+      if (text === AUDIT_INSERT_SQL) { audits.push(auditRow(values)); return { rows: [], rowCount: 1 }; }
+      log.push({ text, values }); const r = reply(text, values); return { rows: r?.rows ?? [], rowCount: r?.rowCount ?? r?.rows?.length ?? 0 };
+    },
     release() {},
   });
   try {
-    return { result: await work(), log };
+    return { result: await work(), log, audits };
   } finally {
     mutableConnect.connect = originalConnect;
   }
@@ -828,4 +866,101 @@ test('interviews: booking checks shared panelists across panels, not only the pa
   assert.match(String(clash.result.body?.error), /Panelist demo x/);
   assert.deepEqual(clash.log.find((q) => q.text === INTERVIEW_SQL.conflict)!.values.slice(5), [['demo x'], ''], 'a new booking excludes nothing');
   assert.match(INTERVIEW_SQL.conflict, /unnest\(string_to_array\(panelist_names, ','\)\)/);
+});
+
+// ---------------------------------------------------------------------------
+// A-11: Workspace actions write audit events in the same transaction (server/audit.ts)
+// ---------------------------------------------------------------------------
+
+test('A-11: each audited Institute action writes one event, for this Institute, with no personal data', async () => {
+  const ID = '00000000-0000-4000-8000-0000000000aa';
+  const owns: Handler = (text) => (/^SELECT 1 FROM institute_(exams|app_forms|training_courses) WHERE id = \$1 AND institute_id = \$2$/.test(text) ? { rows: [{ '?column?': 1 }] } : undefined);
+  const returning = (row: Record<string, unknown>): Handler => (text, values) => owns(text, values) ?? (/^\s*(INSERT|UPDATE)/.test(text) ? { rows: [{ id: ID, ...row }] } : undefined);
+  const cases: Array<[string, 'post' | 'patch', string, Record<string, string>, unknown, Handler, string, Record<string, unknown>]> = [
+    ['exam created', 'post', '/center/exams', {}, { examCode: 'DEMO-A1', title: 'Synthetic Exam', category: 'Mock', mode: 'Offline', eligibility: 'Synthetic', appOpenDate: '2099-01-01', appCloseDate: '2099-01-10', examDate: '2099-01-20', durationMinutes: 60 }, returning({ exam_code: 'DEMO-A1' }), 'workspace_exam.created', { exam_code: 'DEMO-A1', new_status: 'draft' }],
+    ['application created', 'post', '/center/applications', {}, { candidateName: 'Synthetic Person', candidateEmail: 'person@example.test', candidateMobile: '+910000000000' }, returning({ application_number: 'APP-2099-AB12CD', review_status: 'pending' }), 'workspace_application.created', { application_number: 'APP-2099-AB12CD', new_status: 'pending' }],
+    ['question created', 'post', '/center/questions', {}, { subject: 'Synthetic', questionText: 'Synthetic question?', questionType: 'true_false', correctAnswer: 'true' }, returning({ question_type: 'true_false', moderation_status: 'draft' }), 'workspace_question.created', { question_type: 'true_false', new_status: 'draft' }],
+    ['paper locked', 'post', '/center/paper-blueprints/:id/lock', { id: ID }, {}, returning({ question_ids_json: ['a', 'b', 'c'] }), 'workspace_paper.locked', { question_count: 3 }],
+    ['CBT incident reviewed', 'post', '/center/cbt-incidents/:id/review', { id: ID }, { reviewStatus: 'dismissed', reviewReason: 'Synthetic blip' }, returning({}), 'workspace_cbt_incident.reviewed', { review_status: 'dismissed', reason_text: 'Synthetic blip' }],
+    ['result written', 'post', '/center/results', {}, { examId: EXAM, rollNumber: 'r-9', candidateName: 'Synthetic Person', rawScore: 40, maxScore: 100 }, returning({ roll_number: 'R-9', version: 1, inserted: true }), 'workspace_results.written', { roll_number: 'R-9', version: 1, corrected: false }],
+    ['result marked ready', 'patch', '/center/results/:id/status', { id: ID }, { evaluationStatus: 'moderated' }, returning({ roll_number: 'R-9' }), 'workspace_results.marked_ready', { roll_number: 'R-9', new_status: 'moderated' }],
+    ['attendance marked', 'post', '/center/attendance/mark', {}, { rollNumber: 'R-9', candidateName: 'Synthetic Person', status: 'absent', reason: 'Synthetic absence' }, returning({ status: 'absent', reason: 'Synthetic absence' }), 'workspace_attendance.marked', { status: 'absent', reason_text: 'Synthetic absence' }],
+    ['course created', 'post', '/center/training/courses', {}, { title: 'Synthetic Course', moduleCount: 4 }, returning({ module_count: 4 }), 'workspace_training.course_created', { module_count: 4 }],
+    ['session scheduled', 'post', '/center/training/sessions', {}, { title: 'Synthetic Session', sessionDate: '2099-02-01', sessionTime: '10:00' }, returning({ session_date: '2099-02-01' }), 'workspace_training.session_scheduled', { scheduled_date: '2099-02-01' }],
+    ['learner enrolled', 'post', '/center/training/enrollments', {}, { courseId: ID, learnerName: 'Synthetic Learner', learnerEmail: 'learner@example.test' }, returning({}), 'workspace_training.learner_enrolled', {}],
+    ['refund withdrawn', 'patch', '/center/payments/refunds/:id', { id: ID }, { status: 'rejected' }, returning({}), 'workspace_refund.withdrawn', {}],
+  ];
+  for (const [label, method, path, params, body, handler, action, metadata] of cases) {
+    const result = await call(method, path, { params, body, handler });
+    assert.ok(result.status === 200 || result.status === 201, `${label}: ${result.status} ${JSON.stringify(result.body)}`);
+    assert.equal(result.audits.length, 1, `${label}: one event`);
+    const [event] = result.audits;
+    assert.deepEqual([event.action, event.outcome, event.actorRole, event.organizationId], [action, 'succeeded', 'center', INSTITUTE], label);
+    assert.deepEqual(event.metadata, metadata, `${label}: metadata`);
+    assert.doesNotMatch(JSON.stringify(event.metadata), /Synthetic Person|Synthetic Learner|example\.test|\+91/, `${label}: no names or contact details`);
+  }
+});
+
+test('A-11: D-02 refusals are recorded as denied; nothing changed is recorded as nothing; a failed audit insert rolls the action back', async () => {
+  const ID = '00000000-0000-4000-8000-0000000000ab';
+  const exam: Handler = (text) => (text.startsWith('SELECT * FROM institute_exams') ? { rows: [{ id: EXAM, exam_code: 'DEMO-1', lifecycle_status: 'pending_approval' }] } : undefined);
+  for (const [path, method, params, body, handler, target, requested] of [
+    ['/center/exams/:id/transition', 'post', { id: EXAM }, { status: 'approved' }, exam, 'exam', 'approved'],
+    ['/center/results/:id/status', 'patch', { id: ID }, { evaluationStatus: 'published' }, undefined, 'result', 'published'],
+    ['/center/admit-cards/:id/release', 'patch', { id: ID }, {}, undefined, 'admit_card', 'released'],
+  ] as const) {
+    const refused = await call(method, path, { params, body, handler });
+    assert.deepEqual([refused.status, refused.body?.code], [403, 'PUBLICATION_REQUIRES_SUPER_ADMIN'], path);
+    assert.deepEqual(refused.audits.map((a) => [a.action, a.outcome, a.reasonCode, a.organizationId, a.metadata.target, a.metadata.requested_status]),
+      [['workspace_publication.refused', 'denied', 'publication_requires_super_admin', INSTITUTE, target, requested]], path);
+  }
+
+  const lostRace = await call('post', '/center/paper-blueprints/:id/lock', { params: { id: ID } });
+  assert.deepEqual([lostRace.status, lostRace.audits.length], [404, 0], 'no row changed, no event');
+
+  const statements: string[] = [];
+  await assert.rejects(withFakeClient(() => undefined, async () => {
+    const mutableConnect = pool as unknown as { connect: () => Promise<unknown> };
+    mutableConnect.connect = async () => ({
+      query: async (text: string) => {
+        statements.push(text === AUDIT_INSERT_SQL ? 'AUDIT' : /^\s*INSERT INTO institute_attendance_logs/.test(text) ? 'MARK' : text);
+        if (text === AUDIT_INSERT_SQL) throw new Error('synthetic audit failure');
+        return { rows: /INSERT INTO institute_attendance_logs/.test(text) ? [{ id: ID, status: 'present', reason: 'Synthetic' }] : [], rowCount: 1 };
+      },
+      release() {},
+    });
+    return call('post', '/center/attendance/mark', { body: { rollNumber: 'R-1', candidateName: 'Synthetic Person', status: 'present', reason: 'Synthetic' } });
+  }), /synthetic audit failure/);
+  assert.deepEqual(statements, ['BEGIN', 'MARK', 'AUDIT', 'ROLLBACK'], 'no attendance mark without its audit event');
+});
+
+test('A-11: interview scheduling, cancelling and rescheduling, and scorecards are audited with dates and reasons only', async () => {
+  const { INTERVIEW_SQL } = await import('./instituteWorkspace.js');
+  const IV2 = '00000000-0000-4000-8000-0000000000ba';
+  const booked = await withFakeClient((text) => (text === INTERVIEW_SQL.insert ? { rows: [{ id: IV2 }] } : undefined),
+    () => call('post', '/center/interviews', { body: { candidateName: 'Synthetic Person', panelName: 'Panel A', scheduledDate: '2099-03-05', startTime: '10:00', endTime: '10:30' } }));
+  assert.deepEqual(booked.audits.map((a) => [a.action, a.resourceId, a.metadata]), [['workspace_interview.scheduled', IV2, { scheduled_date: '2099-03-05' }]]);
+
+  const row = { id: IV2, status: 'scheduled', scheduled_date: '2099-03-05', start_time: '10:00', end_time: '10:30', panel_name: 'Panel A', panelist_names: '', candidate_name: 'Synthetic Person' };
+  const state = (text: string) => (text === INTERVIEW_SQL.current ? { rows: [row] } : text === INTERVIEW_SQL.cancel || text === INTERVIEW_SQL.reschedule ? { rows: [{ id: IV2 }] } : text === INTERVIEW_SQL.insertChange ? { rows: [{ id: 'c1' }] } : undefined);
+  const cancelled = await withFakeClient(state, () => call('post', '/center/interviews/:id/cancel', { params: { id: IV2 }, body: { reason: 'Synthetic withdrawal' } }));
+  assert.deepEqual(cancelled.audits.map((a) => [a.action, a.metadata]), [['workspace_interview.cancelled', { previous_date: '2099-03-05', reason_text: 'Synthetic withdrawal' }]]);
+  const moved = await withFakeClient(state, () => call('post', '/center/interviews/:id/reschedule', { params: { id: IV2 }, body: { scheduledDate: '2099-03-06', startTime: '11:00', endTime: '11:30', reason: 'Synthetic move' } }));
+  assert.deepEqual(moved.audits.map((a) => [a.action, a.metadata]), [['workspace_interview.rescheduled', { previous_date: '2099-03-05', new_date: '2099-03-06', reason_text: 'Synthetic move' }]]);
+
+  const scored = await withFakeClient((text) => (text === INTERVIEW_SQL.forScorecard ? { rows: [{ status: 'scheduled', scheduled_date: '2020-01-01' }] } : text === INTERVIEW_SQL.insertScorecard ? { rows: [{ id: 's1' }] } : undefined),
+    () => call('post', '/center/interviews/:id/scorecards', { params: { id: IV2 }, body: { panelistName: 'Synthetic Panelist', subjectScore: 7, communicationScore: 7, pedagogyScore: 7, problemSolvingScore: 7 } }));
+  assert.deepEqual(scored.audits.map((a) => [a.action, a.resourceId, a.metadata]), [['workspace_scorecard.submitted', IV2, {}]], 'no scores or panelist names in the event');
+});
+
+test('A-11: an application review records the statuses and reason in the same transaction, never the candidate', async () => {
+  const { APPLICATION_SQL } = await import('./instituteWorkspace.js');
+  const reviewed = await withFakeClient((text) => (
+    text === APPLICATION_SQL.current ? { rows: [{ review_status: 'pending' }] }
+      : text === APPLICATION_SQL.review ? { rows: [{ id: 'a1', application_number: 'APP-2099-XY', candidate_name: 'Synthetic Person' }] } : undefined
+  ), () => call('post', '/center/applications/:id/review', { params: { id: 'a1' }, body: { action: 'flagged', reason: 'Synthetic mismatch' } }));
+  assert.equal(reviewed.result.status, 200);
+  assert.deepEqual(reviewed.audits.map((a) => [a.action, a.organizationId, a.resourceId, a.metadata]),
+    [['workspace_application.reviewed', INSTITUTE, 'a1', { application_number: 'APP-2099-XY', previous_status: 'pending', new_status: 'flagged', reason_text: 'Synthetic mismatch' }]]);
+  assert.equal(reviewed.log.at(-1)!.text, 'COMMIT');
 });
